@@ -7,6 +7,12 @@
 
 ## Milestone 1: Single-View DP Baseline + Novel-View Eval Harness
 
+**✅ DONE (2026-09-12).** Single-view DP baselines trained on can/lift/square
+(robomimic PH, agentview only, 201 epochs, 1 seed each) and swept at az
+0°/±15°/±30° with the novel-view harness. Headline: success collapses to ≈0
+at ±15° on all three tasks (square 0.82→0.02, can 0.98→0.08, lift 0.76→0.08
+at az_0→az_m15). Full tables, runbook, and artifacts in `PROGRESS.md`.
+
 Platform: robomimic + robosuite. Tasks: Square primary + Lift smoke, PH split, 3 seeds. Single-view DP (agentview only, wrist dropped). No ACT. No 2-view contrast.
 
 Deliverables:

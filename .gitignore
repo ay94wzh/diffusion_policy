@@ -2,7 +2,14 @@ bin
 logs
 wandb
 outputs
-data
+data/*
+!data/eval_az5_*_ep200/
+!data/eval_az5_*_ep200/**
+!data/outputs/
+data/outputs/*
+!data/outputs/run_*_abs_single_s42_200ep/
+data/outputs/run_*_abs_single_s42_200ep/*
+!data/outputs/run_*_abs_single_s42_200ep/logs.json.txt
 data_local
 .vscode
 _wandb

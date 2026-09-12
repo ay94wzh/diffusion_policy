@@ -22,6 +22,17 @@
 <img src="media/teaser.png" alt="drawing" width="100%"/>
 <img src="media/multimodal_sim.png" alt="drawing" width="100%"/>
 
+## 🔬 Fork-specific research (view-aware policies)
+
+This fork hosts research on **view-aware temporal encoders**: policies that
+generalize across camera viewpoints, deployable with a single camera at a
+novel pose. See [`PROPOSAL.md`](PROPOSAL.md) for the method,
+[`PLAN.md`](PLAN.md) for milestones, and [`PROGRESS.md`](PROGRESS.md) for
+results. Status: **Milestone 1 is complete** — single-view Diffusion Policy
+baselines (robomimic can/lift/square PH, agentview only) trained and evaluated
+at azimuth 0°/±15°/±30°; success collapses to ≈0 at ±15°, the reference curve
+the proposed method must beat.
+
 ## 🛝 Try it out!
 Our self-contained Google Colab notebooks is the easiest way to play with Diffusion Policy. We provide separate notebooks for  [state-based environment](https://colab.research.google.com/drive/1gxdkgRVfM55zihY9TFLja97cSVZOZq2B?usp=sharing) and [vision-based environment](https://colab.research.google.com/drive/18GIHeOQ5DyjMN8iIRZL2EKZ0745NLIpg?usp=sharing).
 

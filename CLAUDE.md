@@ -11,7 +11,7 @@ Fork of the Columbia/Stanford [Diffusion Policy](https://diffusion-policy.cs.col
 All commands run from the repo root. The package is **not pip-installed and needs no build step** — every script self-bootstraps `sys.path`, and tests `os.chdir` to the repo root.
 
 ```console
-# Environment (conda env name: robodiff, python 3.9, torch 1.12.1)
+# Environment (conda env name: robodiff, python 3.9, torch 2.8.0+cu128 — the 1.12.1 pin in conda_environment.yaml is stale; the live env was upgraded for the RTX 5090s and must not be recreated from the yaml)
 sudo apt install -y libosmesa6-dev libgl1-mesa-glx libglfw3 patchelf
 mamba env create -f conda_environment.yaml   # or: conda env create -f conda_environment.yaml
 
@@ -33,7 +33,7 @@ python eval_novel_view.py -c data/outputs/<ts>_train_diffusion_unet_image_<task>
 
 **Tests**: no pytest — each `tests/test_*.py` is a standalone script with its own `test()` function. Run individually, e.g. `python tests/test_replay_buffer.py`. Some contain hardcoded personal paths and are best-effort dev checks, not CI.
 
-**Data**: `data/` is gitignored and currently empty; datasets are downloaded from the project website (see README) or generated locally. Expected paths are `data/pusht/pusht_cchi_v7_replay.zarr`, `data/robomimic/datasets/<task>/<type>/image_abs.hdf5`, etc. Hydra outputs go to `data/outputs/<date>/<time>_<name>_<task_name>/`.
+**Data**: `data/` is gitignored except narrow tracked exceptions (see `.gitignore`): the M1 sweep results `data/eval_az5_*_ep200/` (eval_log.json + videos) and the per-run training logs `data/outputs/run_*_abs_single_s42_200ep/logs.json.txt` are **committed**. Robomimic PH datasets (square/lift/can, both `image.hdf5` and `image_abs.hdf5`) are present locally at `data/robomimic/datasets/<task>/ph/`, plus the full 84.75 GB archive `data/robomimic_image.zip` (holds transport/tool_hang/all MH splits; not extracted). Trained checkpoints (NOT in git; 4.6 GB each) live under `data/outputs/run_*_abs_single_s42_200ep/checkpoints/`, novel-view sweeps under `data/eval_az5_*_ep200/`. Hydra outputs otherwise go to `data/outputs/<date>/<time>_<name>_<task_name>/`.
 
 ## Architecture
 
@@ -67,4 +67,4 @@ Organized for O(N+M) cost to add N tasks and M methods: tasks and methods intera
 - `conda_environment.yaml` has an uncommitted one-line change: `free-mujoco-py==2.1.6` → `mujoco==2.3.7`.
 - Compared to newer upstream versions, this checkout has **no** `diffusion_policy_3d/`, no DINOv2 encoders, no `@register_environment`/`make_policy` helpers, no `_TASK_CONFIG_PATH`, and no `train_benchmark.py`. Available vision encoders: torchvision ResNet / R3M (`model/vision/model_getter.py`, `MultiImageObsEncoder`) and robomimic `bc_rnn`.
 - `Proposal.md` (untracked) describes the research direction: a view-aware temporal encoder over multi-view images conditioned on camera Plücker maps + camera-frame action history, with per-view auxiliary action heads and a fused latent feeding a base-frame diffusion policy. `PLAN.md` (untracked) turns it into milestones: M1 = single-view DP baseline + novel-view eval harness (robomimic Square/Lift PH); M2-M5 = multi-view re-render data → conditioned encoder + fusion → aux heads → single-novel-view inference.
-- Milestone 1 additions (all new files, no package changes): `config/task/{square,lift}_image_single.yaml` (agentview-only, wrist dropped) and `eval_novel_view.py` — standalone harness that perturbs a fixed camera (`agentview`) at the mujoco_py model level (`sim.model.cam_pos/cam_quat` + `sim.forward()`) per viewpoint, sweeps azimuth presets with paired seeds, and logs per-viewpoint `success_rate` via `EnvRobosuite.is_success()`.
+- Milestone 1 additions (all new files, no package changes): `config/task/{square,lift,can}_image_abs_single.yaml` (agentview-only, wrist dropped; the earlier `{square,lift}_image_single.yaml` relative-action variants are unused), `eval_novel_view.py` — standalone harness that perturbs a fixed camera (`agentview`) at the mujoco_py model level (`sim.model.cam_pos/cam_quat` + `sim.forward()`) per viewpoint, sweeps azimuth presets with paired seeds, and logs per-viewpoint `success_rate` via `EnvRobosuite.is_success()` — and `summarize_novel_view.py` (aggregates `eval_log.json` files into a degradation table). M1 is complete: baselines trained 201 epochs on can/lift/square and swept at az 0°/±15°/±30°; results in `PROGRESS.md` (success collapses to ≈0 at ±15° on all three tasks).

@@ -105,8 +105,10 @@ without re-collecting demonstrations for that camera.
 See `PLAN.md` for the concrete milestone plan and `PROGRESS.md` for the current
 state of the work. In short:
 
-- **M1 (current)** — single-view DP baseline + novel-view evaluation harness on
-  robomimic (Square/Lift PH).
+- **M1 (done)** — single-view DP baseline + novel-view evaluation harness on
+  robomimic (Square/Lift/Can PH). Baselines trained and swept: success
+  collapses to ≈0 at ±15° azimuth on all tasks — the reference curve M3–M5
+  must beat. Results in `PROGRESS.md`.
 - **M2** — multi-view data: re-render demonstrations from many camera poses,
   storing per-view images, camera parameters, and camera-frame actions.
 - **M3** — view-conditioned encoder + fusion (Plücker + action-history
