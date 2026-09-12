@@ -1,4 +1,4 @@
-# PROGRESS — Milestone 1: single-view DP baseline + novel-view eval harness
+# PROGRESS
 
 Last updated: 2026-09-12. See `PROPOSAL.md` (research direction) and `PLAN.md`
 (milestones M1–M5).
@@ -8,6 +8,9 @@ square (robomimic PH, agentview only, 201 epochs each) on the 2× RTX 5090
 machine, and the novel-view degradation curves were measured at azimuth
 0°, ±15°, ±30°. The headline result: success collapses essentially to zero at
 ±15° on all three tasks.
+
+**M2 (multi-view data): code written and CPU-verified; rendering not yet run.**
+See §7 for what to run on the render machine and what must be on it.
 
 ---
 
@@ -169,10 +172,113 @@ Timings on this box (idle; fp32, no AMP — the workspace has none):
 
 ## 6. Not yet done / next
 
-- **M2** — multi-view data with camera poses: re-render each demo at N camera
-  poses via the stored `states` + `env.reset_to` + camera move (the harness's
-  camera machinery in `eval_novel_view.py` is the starting point), store
-  per-view images/params/camera-frame actions in a new zarr.
+- **M2 rendering** — see §7. Code is ready; the render itself has not been run.
 - Open design questions to settle before M3: fusion module choice, and
   whether aux heads condition on camera-frame action history, Plücker map, or
   both (PROPOSAL.md §7).
+
+## 7. M2 — multi-view data (code ready, rendering pending)
+
+Goal: for every demo timestep, N simultaneous renders of the same scene state
+from N fixed camera poses, plus camera parameters, so M3 (Plücker conditioning),
+M4 (camera-frame aux heads) and M5 (single-novel-view inference) have training
+data. Decisions: all three tasks; azimuth ring every 15° to ±90° (13 views);
+full data (every demo, every step).
+
+### Files added (all new; no upstream package file modified)
+
+| File | Purpose |
+|---|---|
+| `generate_multiview_dataset.py` | offline re-renderer → ReplayBuffer-compatible zarr |
+| `diffusion_policy/dataset/multiview_image_dataset.py` | `MultiViewImageDataset` + camera-math helpers |
+| `tests/test_multiview_dataset.py` | CPU-only checks on a synthetic zarr (no simulator) |
+| `config/task/{square,can,lift}_image_abs_multiview.yaml` | 13-view task configs |
+
+### Verified locally (no rendering)
+
+- `python tests/test_multiview_dataset.py` → **ALL MULTIVIEW DATASET CHECKS PASSED**:
+  camera math (quaternion convention, intrinsics from fovy, projection sign and
+  depth), zarr schema round-trip through `ReplayBuffer`/`SequenceSampler`,
+  `__getitem__` shapes/dtypes/range, per-view content mapping, normalizer rules
+  (image [0,1]→[-1,1], lowdim, invertible 10-dim abs action), `camera_params`
+  round-trip, validation split, `get_all_actions`.
+- `generate_multiview_dataset.py` imports cleanly and its pure helpers
+  (`view_key`, `make_compressor`, `resolve_render_size`, `_draw_cross`) pass
+  checks; the three task configs compose and resolve under Hydra with 13 rgb
+  views, the right zarr/hdf5 paths and 10-dim abs actions.
+- The render loop itself (`reset_to` + camera move + `sim.render`) **cannot be
+  exercised here** — no robosuite env data on the dev laptop, and rendering is
+  deliberately reserved for the GPU box.
+
+### What must be on the render machine
+
+Nothing new to download — the generator reads the hdf5 M1 already trained on:
+
+| Needed | Status |
+|---|---|
+| `data/robomimic/datasets/{square,can,lift}/ph/image_abs.hdf5` | already there (M1) |
+| `robodiff` env (robosuite 1.2.0, robomimic 0.2.0, torch 2.8) | already there |
+| this code (`git pull`) | — |
+| **≥ 20 GB free disk** | needs cleanup; see the warning below |
+
+The hdf5 supplies everything the renderer consumes: `data/demo_*/states`
+(replayed with `reset_to`), `data/demo_*/actions` (copied, converted to 10-dim
+abs), `data/demo_*/obs/robot0_eef_{pos,quat}` + `robot0_gripper_qpos` (copied),
+and the `env_args` used to build the env. No calibration files, depth or meshes
+are needed — intrinsics come from `sim.model.cam_fovy`, extrinsics from the sim.
+
+⚠️ **Disk cleanup is your call (destructive):** `data/robomimic_image.zip` is
+84.75 GB and holds only transport/tool_hang/all-MH splits, which square/can/lift
+PH do not use. Confirm it is re-downloadable before removing it. Stale topk
+checkpoints are ~4.6 GB each.
+
+### Runbook
+
+```bash
+cd <repo root> && git pull
+python tests/test_multiview_dataset.py          # CPU-only sanity, no render
+df -h .                                         # need ~20 GB
+
+# pilot: 5 demos of one task + montage, inspect before committing hours
+python generate_multiview_dataset.py \
+  --dataset data/robomimic/datasets/square/ph/image_abs.hdf5 \
+  --output data/multiview/square_ph_ring13.zarr \
+  --limit-demos 5 --montage /tmp/ring5.png
+
+# full run, disowned so it survives the session ending
+for t in square can lift; do
+  setsid bash -c "python generate_multiview_dataset.py \
+    --dataset data/robomimic/datasets/$t/ph/image_abs.hdf5 \
+    --output data/multiview/${t}_ph_ring13.zarr \
+    > data/gen_$t.log 2>&1" &
+done
+```
+
+The script prints three gates at the end of every run:
+
+1. **az_0 re-render vs the hdf5's stored agentview image** — `mean|diff|` should
+   be ≲ 3/255. A mean of ~40+ means the `[::-1]` flip is missing or doubled
+   (mujoco's readPixels is bottom-up; robomimic flips it once, and the hdf5
+   stores the flipped form). This is the check that catches an upside-down
+   dataset, which otherwise looks plausible in a montage.
+2. **projected gripper site** — how many (view, step) pairs the derived
+   intrinsics/extrinsics put inside the frame. This validates the camera-parameter
+   chain M3's Plücker maps depend on.
+3. **ring montage PNG** — eyeball that the scene is visible at every angle and
+   decide whether ±75°/±90° are worth keeping.
+
+Expected cost: ~400k images total (31k square / 23.5k can / 12k lift steps × 13
+views); ~18 GB raw, ~6–9 GB at Jpeg2k(level=50); ≈4 h render on an idle machine,
+~2× under load. The jpeg2k encode is threaded over `--workers`.
+
+### Deliberately out of scope for M2
+
+Elevation views, the wrist camera as an extra view, and a live multi-view
+env_runner (the stock runner builds obs from `shape_meta`, so it cannot serve
+`view_XX_image` keys; M3's encoder will accept a *subset* of view slots so the
+existing single-camera novel-view harness can evaluate it). Plücker maps and
+camera-frame actions are not stored — both are deterministic functions of the
+stored camera params (+ base actions), so M3/M4 compute them at train time.
+
+Sizing note for M3: 13 views ⇒ ~13× encoder FLOPs per sample; per-sample view
+subsampling will likely be needed to keep epoch time near M1's.
