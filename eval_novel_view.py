@@ -25,6 +25,7 @@ python eval_novel_view.py -c <ckpt> -o <out> --preset azimuth_sweep3 --n-test 4 
 import os
 import sys
 import math
+import copy
 import pathlib
 import collections
 import json
@@ -165,10 +166,24 @@ def _compute_perturbed_pose(base_pos, base_quat_wxyz, spec):
 class ViewpointImageWrapper(RobomimicImageWrapper):
     """Script-local wrapper: applies a camera viewpoint at every reset."""
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, serve_obs_key=None, **kwargs):
         super().__init__(*args, **kwargs)
         self.viewpoint = None
+        self.serve_obs_key = serve_obs_key
         self._base_camera_poses = dict()
+
+    def get_observation(self, raw_obs=None):
+        # A policy trained on a multi-view dataset expects a `view_XX_image`
+        # key, but the live env only ever produces its camera-derived key
+        # (`agentview_image`). Alias it here rather than at the policy call
+        # site: the base class builds obs by indexing raw_obs with the
+        # shape_meta keys, so the alias has to exist before that loop runs.
+        if raw_obs is None:
+            raw_obs = self.env.get_observation()
+        if self.serve_obs_key is not None and self.serve_obs_key not in raw_obs:
+            raw_obs = dict(raw_obs)
+            raw_obs[self.serve_obs_key] = raw_obs[self.render_obs_key]
+        return super().get_observation(raw_obs)
 
     def set_viewpoint(self, viewpoint):
         self.viewpoint = viewpoint
@@ -243,6 +258,7 @@ def run_novel_view_eval(policy,
         n_action_steps=8,
         max_steps=400,
         render_obs_key='agentview_image',
+        serve_obs_key=None,
         past_action=False,
         abs_action=False,
         fps=10,
@@ -285,7 +301,8 @@ def run_novel_view_eval(policy,
                     env=robomimic_env,
                     shape_meta=shape_meta,
                     init_state=None,
-                    render_obs_key=render_obs_key
+                    render_obs_key=render_obs_key,
+                    serve_obs_key=serve_obs_key
                 ),
                 video_recoder=VideoRecorder.create_h264(
                     fps=fps,
@@ -318,7 +335,8 @@ def run_novel_view_eval(policy,
                     env=robomimic_env,
                     shape_meta=shape_meta,
                     init_state=None,
-                    render_obs_key=render_obs_key
+                    render_obs_key=render_obs_key,
+                    serve_obs_key=serve_obs_key
                 ),
                 video_recoder=VideoRecorder.create_h264(
                     fps=fps,
@@ -514,7 +532,11 @@ def to_json_log(log_data):
     help='videos per viewpoint (default: checkpoint config value)')
 @click.option('--n-envs', type=int, default=None,
     help='parallel envs (default: checkpoint config value)')
-def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs):
+@click.option('--serve-obs-key', default=None,
+    help='also serve the rendered camera image under this obs key, for '
+         'policies trained on a multi-view dataset (e.g. view_06_image)')
+def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs,
+        serve_obs_key):
     if os.path.exists(output_dir):
         click.confirm(f"Output path {output_dir} already exists! Overwrite?", abort=True)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -537,10 +559,24 @@ def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs
 
     # env runner settings from the checkpoint config (resolved at save time)
     er = cfg.task.env_runner
+
+    # The live env can only produce image keys robosuite actually renders (the
+    # camera-derived name, e.g. agentview_image), and robomimic additionally
+    # drops any rgb key missing from the obs-modality mapping built from
+    # shape_meta. A policy trained on a multi-view dataset names its view
+    # itself (e.g. view_06_image), so the env's shape_meta must carry the
+    # rendered key as well; --serve-obs-key aliases one to the other in
+    # ViewpointImageWrapper.get_observation.
+    env_shape_meta = er.shape_meta
+    if serve_obs_key is not None and er.render_obs_key not in env_shape_meta['obs']:
+        env_shape_meta = copy.deepcopy(env_shape_meta)
+        env_shape_meta['obs'][er.render_obs_key] = dict(
+            shape=env_shape_meta['obs'][serve_obs_key]['shape'], type='rgb')
+
     log_data = run_novel_view_eval(
         policy=policy,
         output_dir=output_dir,
-        shape_meta=er.shape_meta,
+        shape_meta=env_shape_meta,
         dataset_path=er.dataset_path,
         preset=PRESETS[preset_name],
         n_test=er.n_test if n_test is None else n_test,
@@ -550,6 +586,7 @@ def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs
         n_action_steps=er.n_action_steps,
         max_steps=er.max_steps,
         render_obs_key=er.render_obs_key,
+        serve_obs_key=serve_obs_key,
         past_action=er.past_action,
         abs_action=er.abs_action,
         fps=er.fps,

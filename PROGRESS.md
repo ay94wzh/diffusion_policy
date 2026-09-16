@@ -9,8 +9,8 @@ machine, and the novel-view degradation curves were measured at azimuth
 0°, ±15°, ±30°. The headline result: success collapses essentially to zero at
 ±15° on all three tasks.
 
-**M2 (multi-view data): code written and CPU-verified; rendering not yet run.**
-See §7 for what to run on the render machine and what must be on it.
+**M2 (multi-view data) is COMPLETE.** All three multi-view zarrs were rendered
+and verified on 2026-09-15 (§7). Next: the N=1 training gate, then M3.
 
 ---
 
@@ -172,18 +172,110 @@ Timings on this box (idle; fp32, no AMP — the workspace has none):
 
 ## 6. Not yet done / next
 
-- **M2 rendering** — see §7. Code is ready; the render itself has not been run.
+- **N=1 training gate** (PLAN's stated M2 gate): train on a generated zarr with
+  a single view and confirm it reproduces the M1 baseline at az_0. Prerequisites
+  are now in place (§7.4). Not yet run.
 - Open design questions to settle before M3: fusion module choice, and
   whether aux heads condition on camera-frame action history, Plücker map, or
   both (PROPOSAL.md §7).
 
-## 7. M2 — multi-view data (code ready, rendering pending)
+## 7. M2 — multi-view data (DONE 2026-09-15)
 
 Goal: for every demo timestep, N simultaneous renders of the same scene state
 from N fixed camera poses, plus camera parameters, so M3 (Plücker conditioning),
 M4 (camera-frame aux heads) and M5 (single-novel-view inference) have training
 data. Decisions: all three tasks; azimuth ring every 15° to ±90° (13 views);
 full data (every demo, every step).
+
+### 7.1 Results — rendered 2026-09-15 (all three tasks)
+
+Ran sequentially on this box with `--workers 4`, `setsid`-detached, one task at a
+time. **Total 8h00m** at ~2.2 steps/s (square 3h50m, can 2h59m, lift 1h11m).
+
+| task | steps | images (×13) | gate 1 mean\|diff\| | gate 2 in-frame | on disk |
+|---|---|---|---|---|---|
+| square | 30154 | 392k | 1.454/255 PASS | 33/39 | 1.6 GB |
+| can | 23207 | 302k | 2.801/255 PASS | 39/39 | 2.4 GB |
+| lift | 9666 | 126k | 1.502/255 PASS | 39/39 | 496 MB |
+
+Total **819k images, 4.5 GB on disk** (square+can+lift).
+
+Two PROGRESS estimates were wrong and are corrected here:
+- **Image count is 819k, not ~400k** (the step counts were right; the ×13 was
+  undercounted).
+- **Size is 4.5 GB, not 6–9 GB** — but for a different reason than expected:
+  Jpeg2k(50) measured **3365 B/img (6.3×)** on real frames, yet `du` is ~1.3–2×
+  the compressed bytes because the zarr `DirectoryStore` writes **one file per
+  (timestep, view) chunk** (chunks are `(1,84,84,3)`; **392k files** for square),
+  and each ~3–8 KB file occupies a 4 KB-granularity block. Can is the worst case
+  (2.4 GB) because its busier, darker scene compresses worse.
+- ⇒ **The 84.75 GB `robomimic_image.zip` was NOT deleted and does not need to be.**
+
+### 7.2 Verification actually performed (not assumed)
+
+- **az_0 provenance** — the generated `view_06` (azimuth 0) vs the hdf5's stored
+  `agentview_image`, at demos 0/100/199: square **1.28–1.30**, can **2.78–2.80**,
+  lift **1.24–1.35** per 255. The generated az_0 view is provably the original
+  dataset camera.
+- The per-task spread is **scene-dependent re-render fidelity** (`reset_to` state
+  replay), not compression: the zarr-side numbers (which *include* jpeg2k loss)
+  match the in-RAM gate-1 numbers almost exactly. Can's cluttered dark shelf is
+  simply more sensitive than square's white table. All are ~15× below the ~40
+  signature of a flip bug (the thing gate 1 exists to catch), so all are sound.
+- **No truncation** — a killed run is *silent* here (zarr returns fill-value 0 for
+  unwritten chunks, and the gates never read the zarr back, so they still PASS).
+  Checked explicitly: zero all-zero frames in the tail and mid-corpus of every
+  view array. (Note the correct criterion is "no all-zero *frames*", not "no zero
+  pixels" — square/can legitimately contain 3 and 1 pure-black pixels per 84,672.)
+- Both montages (`data/multiview/{square,can,lift}_ring13.png`) inspected: the
+  scene is visible at every azimuth and the gripper crosshair lands correctly.
+- The three zarrs load through `MultiViewImageDataset` with the real task
+  configs (13 views, 17 normalizer params, `(2,3,84,84)` obs / `(16,10)` action).
+
+### 7.3 Fixes and facts from the first real execution
+
+- **Bug fixed** (`generate_multiview_dataset.py`): the script ended with
+  `env.close()`, but robomimic's `EnvRobosuite` has no `close()` — the robosuite
+  env at `env.env` does. It crashed *after* the data and gates were written, so
+  **every run exited non-zero**, making a crashed run indistinguishable from a
+  clean one. Now `env.env.close()`, exit 0.
+- Gates are computed only at the **very end** of a run, so a broken render loop
+  surfaces after hours. The `--limit-demos 5` pilot (≈5 min) is the mitigation and
+  is now proven: it reproduced the full run's gate values exactly (1.454, 33/39).
+- The generator has **no resume**; `--overwrite` is the only recovery, and it
+  wipes the store. Hence the driver wipes each output before starting.
+
+### 7.4 Prerequisites for the N=1 gate (built, verified, not yet run)
+
+- `diffusion_policy/config/task/single_view_image_abs_multiview.yaml` — one view
+  (`view_06_image`) of the multi-view zarr. Because the multiview configs route
+  `task_name` through `${task.task_name}`, **one file serves all three tasks**:
+  `task=single_view_image_abs_multiview task.task_name=lift`.
+- `eval_novel_view.py --serve-obs-key view_06_image` — needed because the live env
+  emits `agentview_image` while a multi-view-trained policy expects
+  `view_06_image`. **This is not a simple rename:** robomimic's
+  `EnvRobosuite.get_observation` only emits rgb keys that are in the obs-modality
+  mapping *and* present in robosuite's raw obs, so a multiview `shape_meta`
+  produces **no image key at all**, and renaming at the `predict_action` call site
+  is far too late. The fix is two-part: `main()` augments the env-side
+  `shape_meta` with `render_obs_key`, and `ViewpointImageWrapper.get_observation`
+  aliases the rendered frame to the policy's key. Verified: with the bridge
+  `view_06_image` is pixel-identical to the rendered agentview frame; without it,
+  KeyError. Defaults to a no-op, so M1's sweeps are unaffected. **M5 needs this
+  same mechanism.**
+
+### 7.5 Findings that change M3's design
+
+- **Per-sample view subsampling saves encoder FLOPs but NOT IO.**
+  `SequenceSampler` reads *every* zarr key regardless of `shape_meta`;
+  `key_first_k` is built only from shape_meta keys
+  (`multiview_image_dataset.py:125-126`). So a 1-view config still reads the other
+  12 views — at full 26-frame length, making it **~6× slower per sample than the
+  13-view config** (156 ms vs 24 ms, reproducible and order-independent). M3 must
+  restrict the sampler's `keys`, not just `shape_meta`, if it subsamples views.
+- 13 views costs ~24 ms/sample of IO (26 frame reads at ~0.9 ms). The whole square
+  store is only 1.6 GB, so it fits in page cache — warm training IO will be much
+  cheaper than these cold numbers suggest.
 
 ### Files added (all new; no upstream package file modified)
 
@@ -194,7 +286,7 @@ full data (every demo, every step).
 | `tests/test_multiview_dataset.py` | CPU-only checks on a synthetic zarr (no simulator) |
 | `config/task/{square,can,lift}_image_abs_multiview.yaml` | 13-view task configs |
 
-### Verified locally (no rendering)
+### What was verified BEFORE rendering (CPU-only, synthetic data)
 
 - `python tests/test_multiview_dataset.py` → **ALL MULTIVIEW DATASET CHECKS PASSED**:
   camera math (quaternion convention, intrinsics from fovy, projection sign and
@@ -219,7 +311,7 @@ Nothing new to download — the generator reads the hdf5 M1 already trained on:
 | `data/robomimic/datasets/{square,can,lift}/ph/image_abs.hdf5` | already there (M1) |
 | `robodiff` env (robosuite 1.2.0, robomimic 0.2.0, torch 2.8) | already there |
 | this code (`git pull`) | — |
-| **≥ 20 GB free disk** | needs cleanup; see the warning below |
+| **~5 GB free disk** | it needed no cleanup at all — see below |
 
 The hdf5 supplies everything the renderer consumes: `data/demo_*/states`
 (replayed with `reset_to`), `data/demo_*/actions` (copied, converted to 10-dim
@@ -227,10 +319,10 @@ abs), `data/demo_*/obs/robot0_eef_{pos,quat}` + `robot0_gripper_qpos` (copied),
 and the `env_args` used to build the env. No calibration files, depth or meshes
 are needed — intrinsics come from `sim.model.cam_fovy`, extrinsics from the sim.
 
-⚠️ **Disk cleanup is your call (destructive):** `data/robomimic_image.zip` is
-84.75 GB and holds only transport/tool_hang/all-MH splits, which square/can/lift
-PH do not use. Confirm it is re-downloadable before removing it. Stale topk
-checkpoints are ~4.6 GB each.
+✅ **Resolved — no cleanup was needed.** The whole run consumed 4.5 GB and left
+23 GB free. `data/robomimic_image.zip` (84.75 GB) is untouched; the earlier
+"≥ 20 GB free, consider deleting the zip" concern came from an estimate that was
+~2× too high on image count and ~1.5× too high on bytes (§7.1).
 
 ### Runbook
 
@@ -245,14 +337,24 @@ python generate_multiview_dataset.py \
   --output data/multiview/square_ph_ring13.zarr \
   --limit-demos 5 --montage /tmp/ring5.png
 
-# full run, disowned so it survives the session ending
-for t in square can lift; do
-  setsid bash -c "python generate_multiview_dataset.py \
+# full run: SEQUENTIAL (not the concurrent loop originally sketched here --
+# one task at a time contains a failure and avoids GL contention), disowned so it
+# survives the session ending, with a self-gating driver that aborts before the
+# next task if gate 1 is not PASS and wipes each output first (no resume; a
+# partial store is otherwise silently served as black frames).
+setsid bash -c 'for t in square can lift; do
+  rm -rf data/multiview/${t}_ph_ring13.zarr
+  python generate_multiview_dataset.py \
     --dataset data/robomimic/datasets/$t/ph/image_abs.hdf5 \
     --output data/multiview/${t}_ph_ring13.zarr \
-    > data/gen_$t.log 2>&1" &
-done
+    --workers 4 --montage data/multiview/${t}_ring13.png \
+    > data/gen_$t.log 2>&1 || break
+  grep -aq "gate 1.*PASS" data/gen_$t.log || break
+done' > data/gen_all.log 2>&1 &
 ```
+
+`--workers 4`, not the default 24: `max_inflight = workers*5` and each in-flight
+future pins a whole `(T,13,84,84,3)` buffer, so the default can reach ~8 GB of RAM.
 
 The script prints three gates at the end of every run:
 
@@ -267,9 +369,16 @@ The script prints three gates at the end of every run:
 3. **ring montage PNG** — eyeball that the scene is visible at every angle and
    decide whether ±75°/±90° are worth keeping.
 
-Expected cost: ~400k images total (31k square / 23.5k can / 12k lift steps × 13
-views); ~18 GB raw, ~6–9 GB at Jpeg2k(level=50); ≈4 h render on an idle machine,
-~2× under load. The jpeg2k encode is threaded over `--workers`.
+Measured cost (2026-09-15, shared box with other users active): **819k images
+total** (30154 + 23207 + 9666 steps × 13 views), **8h00m** at ~2.2 steps/s,
+**4.5 GB** on disk. Per-task: square 3h50m/1.6 GB, can 2h59m/2.4 GB,
+lift 1h11m/496 MB. The jpeg2k encode is threaded over `--workers` and is not the
+bottleneck (rendering is single-threaded and serial).
+
+On gate 3: the montages confirm the scene is visible at every azimuth, but
+**±75°/±90° are low-value** — dominated by the table edge, with the object small
+or partly out of frame. They were kept (2/13 of the bytes) since M3 can accept a
+subset of view slots, so no re-render is needed.
 
 ### Deliberately out of scope for M2
 

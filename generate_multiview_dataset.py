@@ -425,7 +425,10 @@ def main(dataset, output, camera, views, lowdim_keys, limit_demos, workers, code
     write_gates(env, sim, cid, camera, view_poses, azimuths, gate_states,
         dataset, gate_demo, gate_steps, render_h, render_w, fovy, montage)
 
-    env.close()
+    # robomimic's EnvRobosuite wrapper has no close(); the robosuite env it
+    # holds does. Calling this matters because a clean exit status is how the
+    # full-run driver distinguishes a finished run from a crashed one.
+    env.env.close()
 
 
 if __name__ == '__main__':
