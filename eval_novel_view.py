@@ -82,6 +82,27 @@ PRESETS = {
             {'name': 'az_m30', 'azimuth_deg': -30},
         ]
     },
+    # Interpolation protocol for the multi-view baselines: the ring is generated
+    # every 15deg, so even indices (az 0, +-30, +-60, +-90) are the training
+    # views and odd indices (az +-15, +-45, +-75) are held out. This sweep spans
+    # both, so a single run shows in-distribution and held-out performance.
+    # az_0/+-30 also match azimuth_sweep5, keeping the M1 comparison exact.
+    'azimuth_interp': {
+        'camera': 'agentview',
+        'viewpoints': [
+            {'name': 'az_m75', 'azimuth_deg': -75},   # held out
+            {'name': 'az_m60', 'azimuth_deg': -60},
+            {'name': 'az_m45', 'azimuth_deg': -45},   # held out
+            {'name': 'az_m30', 'azimuth_deg': -30},
+            {'name': 'az_m15', 'azimuth_deg': -15},   # held out
+            {'name': 'az_0'},
+            {'name': 'az_p15', 'azimuth_deg': 15},    # held out
+            {'name': 'az_p30', 'azimuth_deg': 30},
+            {'name': 'az_p45', 'azimuth_deg': 45},    # held out
+            {'name': 'az_p60', 'azimuth_deg': 60},
+            {'name': 'az_p75', 'azimuth_deg': 75},    # held out
+        ]
+    },
 }
 
 # ---------------------------------------------------------------------------

@@ -1,0 +1,88 @@
+name: randview_image_abs_multiview
+
+# L1, the "view diversity only" baseline: the M1 single-view architecture, but
+# each sample's one camera slot is filled from a randomly drawn TRAINING view.
+# Isolates one variable -- viewpoint diversity -- with the architecture held
+# fixed, so it is the reference the M3 view-conditioned encoder must beat.
+#
+# Train views are the every-30deg ring (az -90,-60,-30,0,30,60,90) = even ring
+# indices; the odd indices (az +-15,+-45,+-75) are NEVER trained on, so
+# evaluating there is a genuine held-out-viewpoint measurement. The ring is
+# generated every 15deg, so even/odd indices are exactly the train/test split.
+# Override for a single fixed view, e.g. the N=1 gate on the az_0 view:
+#     task.dataset.view_subset=[6]
+#
+# The rgb key is named `agentview_image` on purpose. In view_subset mode the key
+# is only a LABEL -- MultiViewImageDataset reads the chosen view via
+# view_key(idx) -- so the name is free, and naming it after the live camera keeps
+# the whole pipeline stock: the rollout env and eval_novel_view.py both render
+# `agentview_image`, so training rollouts fire normally (in-distribution az_0
+# metrics, and the topk monitor has its key) and evaluation needs no
+# --serve-obs-key. The policy just consumes "the camera image"; where that camera
+# is mounted is the nuisance factor being randomized over in training.
+#
+# `task_name` feeds ${task.task_name} in every path, so one file serves all
+# three tasks:  ... task=randview_image_abs_multiview task.task_name=lift
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    agentview_image:
+      shape: [3, 84, 84]
+      type: rgb
+    robot0_eef_pos:
+      shape: [3]
+      # type default: low_dim
+    robot0_eef_quat:
+      shape: [4]
+    robot0_gripper_qpos:
+      shape: [2]
+  action:
+    shape: [10]
+
+task_name: &task_name square
+dataset_type: &dataset_type ph
+# source hdf5 (used only to build the evaluation env) and the generated multi-view zarr
+hdf5_path: &hdf5_path data/robomimic/datasets/${task.task_name}/${task.dataset_type}/image_abs.hdf5
+zarr_path: &zarr_path data/multiview/${task.task_name}_${task.dataset_type}_ring13.zarr
+abs_action: &abs_action True
+# even ring indices == the every-30deg training views; odd indices are held out
+train_view_subset: &train_view_subset [0, 2, 4, 6, 8, 10, 12]
+
+env_runner:
+  _target_: diffusion_policy.env_runner.robomimic_image_runner.RobomimicImageRunner
+  dataset_path: *hdf5_path
+  shape_meta: *shape_meta
+  # rollouts work: the live env renders `agentview_image`, which is exactly the
+  # key the policy reads, so these are in-distribution (az_0) metrics.
+  n_train: 6
+  n_train_vis: 2
+  train_start_idx: 0
+  n_test: 50
+  n_test_vis: 4
+  test_start_seed: 100000
+  # use python's eval function as resolver, single-quoted string as argument
+  max_steps: ${eval:'500 if "${task.dataset_type}" == "mh" else 400'}
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  render_obs_key: 'agentview_image'
+  fps: 10
+  crf: 22
+  past_action: ${past_action_visible}
+  abs_action: *abs_action
+  tqdm_interval_sec: 1.0
+  # the runner builds its envs eagerly at __init__ (robomimic_image_runner.py:156,218)
+  # at ~1 GB each, and two of these runs share the box.
+  n_envs: 14
+
+dataset:
+  _target_: diffusion_policy.dataset.multiview_image_dataset.MultiViewImageDataset
+  shape_meta: *shape_meta
+  dataset_path: *zarr_path
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  abs_action: *abs_action
+  view_subset: *train_view_subset
+  seed: 42
+  val_ratio: 0.02

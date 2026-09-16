@@ -104,6 +104,7 @@ class MultiViewImageDataset(BaseImageDataset):
             n_obs_steps=None,
             abs_action=True,
             use_legacy_normalizer=False,
+            view_subset=None,
             seed=42,
             val_ratio=0.0):
         replay_buffer = ReplayBuffer.create_from_path(
@@ -119,11 +120,37 @@ class MultiViewImageDataset(BaseImageDataset):
             elif type == 'low_dim':
                 lowdim_keys.append(key)
 
+        n_views = len(np.asarray(replay_buffer.meta[VIEW_AZIMUTH_KEY][:]))
+        if view_subset is not None:
+            # Random-view mode: one rgb slot, filled per sample with a view drawn
+            # from `view_subset`. The shape_meta rgb key is then a slot label,
+            # not a zarr array name -- the array is read via view_key(idx) in
+            # __getitem__. Views outside the subset are never trained on, which
+            # is what makes held-out-viewpoint evaluation honest.
+            assert len(rgb_keys) == 1, (
+                f'view_subset needs exactly 1 rgb key, got {rgb_keys}')
+            view_subset = [int(v) for v in view_subset]
+            assert len(view_subset) > 0, 'view_subset is empty'
+            assert min(view_subset) >= 0 and max(view_subset) < n_views, (
+                f'view_subset {view_subset} out of range for {n_views} views')
+        self.view_subset = view_subset
+        self.n_views = n_views
+
         key_first_k = dict()
         if n_obs_steps is not None:
             # only take first k obs from images
             for key in rgb_keys + lowdim_keys:
                 key_first_k[key] = n_obs_steps
+
+        # Restrict the sampler to the keys this dataset actually consumes: its
+        # default is every array in the buffer, which decodes all 13 views per
+        # sample (~22 ms/sample) even when the config uses one. In random-view
+        # mode no view is read here at all -- the view is drawn per sample, so
+        # __getitem__ reads just the chosen one (~1.7 ms/sample).
+        if view_subset is None:
+            sampler_keys = list(rgb_keys) + list(lowdim_keys) + ['action']
+        else:
+            sampler_keys = list(lowdim_keys) + ['action']
 
         val_mask = get_val_mask(
             n_episodes=replay_buffer.n_episodes,
@@ -136,10 +163,12 @@ class MultiViewImageDataset(BaseImageDataset):
             pad_before=pad_before,
             pad_after=pad_after,
             episode_mask=train_mask,
+            keys=sampler_keys,
             key_first_k=key_first_k)
 
         self.replay_buffer = replay_buffer
         self.sampler = sampler
+        self.sampler_keys = sampler_keys
         self.shape_meta = shape_meta
         self.rgb_keys = rgb_keys
         self.lowdim_keys = lowdim_keys
@@ -194,7 +223,11 @@ class MultiViewImageDataset(BaseImageDataset):
             sequence_length=self.horizon,
             pad_before=self.pad_before,
             pad_after=self.pad_after,
-            episode_mask=~self.train_mask
+            episode_mask=~self.train_mask,
+            keys=self.sampler_keys,
+            # without this the val sampler decodes the full `horizon` of every
+            # view instead of only n_obs_steps (~8x the images per sample)
+            key_first_k=self.sampler.key_first_k
             )
         val_set.train_mask = ~self.train_mask
         return val_set
@@ -243,6 +276,22 @@ class MultiViewImageDataset(BaseImageDataset):
     def __len__(self):
         return len(self.sampler)
 
+    def _view_obs_frames(self, idx: int, view_idx: int) -> np.ndarray:
+        """First n_obs_steps frames of one view for sample `idx` (T,H,W,C).
+
+        Mirrors SequenceSampler.sample_sequence's pad/repeat semantics exactly:
+        obs step j takes sample[j - sample_start_idx] inside the window,
+        sample[0] before it and sample[-1] past its end, so episode-edge samples
+        repeat a frame instead of reading out of range. Reading only this view
+        is the point -- the generic sampler would decode all 13.
+        """
+        buffer_start, _, sample_start, sample_end = self.sampler.indices[idx]
+        n_obs = self.n_obs_steps if self.n_obs_steps is not None else self.horizon
+        n_sample = sample_end - sample_start
+        rel = np.clip(np.arange(n_obs) - sample_start, 0, n_sample - 1)
+        arr = self.replay_buffer[self.view_key(view_idx)]
+        return np.asarray(arr.oindex[buffer_start + rel])
+
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         data = self.sampler.sample_sequence(idx)
 
@@ -254,13 +303,23 @@ class MultiViewImageDataset(BaseImageDataset):
 
         obs_dict = dict()
         for key in self.rgb_keys:
-            # move channel last to channel first
-            # T,H,W,C
-            # convert uint8 image to float32
-            obs_dict[key] = np.moveaxis(data[key][T_slice], -1, 1
-                ).astype(np.float32) / 255.
-            # T,C,H,W
-            del data[key]
+            if self.view_subset is None:
+                # move channel last to channel first
+                # T,H,W,C
+                # convert uint8 image to float32
+                obs_dict[key] = np.moveaxis(data[key][T_slice], -1, 1
+                    ).astype(np.float32) / 255.
+                # T,C,H,W
+                del data[key]
+            else:
+                # random-view mode: fill this sample's slot from one view drawn
+                # uniformly over the training subset (never a held-out view).
+                # This view is not one of the sampler's keys, so read it here.
+                view_idx = self.view_subset[
+                    np.random.randint(len(self.view_subset))]
+                obs_dict[key] = np.moveaxis(
+                    self._view_obs_frames(idx, view_idx), -1, 1
+                    ).astype(np.float32) / 255.
         for key in self.lowdim_keys:
             obs_dict[key] = data[key][T_slice].astype(np.float32)
             del data[key]

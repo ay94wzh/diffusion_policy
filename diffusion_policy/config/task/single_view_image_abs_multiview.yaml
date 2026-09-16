@@ -59,7 +59,10 @@ env_runner:
   past_action: ${past_action_visible}
   abs_action: *abs_action
   tqdm_interval_sec: 1.0
-  n_envs: 28
+  # the runner is constructed eagerly at __init__ (robomimic_image_runner.py:156,218),
+  # so n_envs: 28 would build 28 unused robosuite envs (~1 GB each) for a run that
+  # never rolls out.
+  n_envs: 1
 
 dataset:
   _target_: diffusion_policy.dataset.multiview_image_dataset.MultiViewImageDataset
