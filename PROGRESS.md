@@ -172,9 +172,16 @@ Timings on this box (idle; fp32, no AMP — the workspace has none):
 
 ## 6. Not yet done / next
 
-- **N=1 training gate** (PLAN's stated M2 gate): train on a generated zarr with
-  a single view and confirm it reproduces the M1 baseline at az_0. Prerequisites
-  are now in place (§7.4). Not yet run.
+- **L1 replication** (§8.6): square/seed 43 and lift/seed 42 are training, to test
+  whether the §8.3 result is seed- or task-specific. Results to be recorded in §8.6.
+- **The ablation that separates two explanations of L1's failure** — no pose
+  information vs only one slot to represent seven views. M3's Plücker
+  conditioning tests the first; a K-slot *unconditioned* variant would test the
+  second. Without it the M3 gain is not cleanly attributable to conditioning
+  rather than to capacity.
+- **Mechanism probe** (optional but cheap): view classification from L1's frozen
+  encoder, to test the "viewpoint confusion" story directly rather than inferring
+  it from the rollout numbers (§8.4).
 - Open design questions to settle before M3: fusion module choice, and
   whether aux heads condition on camera-frame action history, Plücker map, or
   both (PROPOSAL.md §7).
@@ -391,3 +398,160 @@ stored camera params (+ base actions), so M3/M4 compute them at train time.
 
 Sizing note for M3: 13 views ⇒ ~13× encoder FLOPs per sample; per-sample view
 subsampling will likely be needed to keep epoch time near M1's.
+
+---
+
+## 8. L1 — the view-randomized baseline (square/seed 42 complete; replication in flight)
+
+**Naming.** "L1" is this fork's label, not a milestone and not an upstream term.
+It names the second rung of the experiment ladder:
+
+| rung | what it is |
+|---|---|
+| L0 | = M1. One camera, one pose (az_0). Collapses off-axis. |
+| **L1** | **"View diversity only": M1's *exact* architecture, with its single camera slot filled per sample from a randomly drawn *training* view. No pose information anywhere.** |
+| L2–L4 | = M3 (Plücker-conditioned encoder), M4 (aux heads), M5 (single-novel-view inference) |
+
+L1 answers the question M3's design rests on: does merely *showing* a policy many
+viewpoints buy view invariance, without telling it which viewpoint it is looking
+from?
+
+### 8.1 Training method
+
+Config `diffusion_policy/config/task/randview_image_abs_multiview.yaml`; dataset
+`MultiViewImageDataset` over `data/multiview/square_ph_ring13.zarr`.
+
+- **Views.** The 15° ring's **even indices** are the training views:
+  `view_subset = [0,2,4,6,8,10,12]` = az −90/−60/−30/0/+30/+60/+90 (every 30°).
+  The **odd** indices (az ±15/±45/±75) are *never sampled*; holding them out by
+  construction is what makes the "held out" column in §8.3 honest.
+- **Sampling.** `__getitem__` draws one view uniformly from the subset. Both
+  `n_obs_steps=2` frames come from *that same* view, so no viewpoint change
+  occurs within a sample.
+- **Slot naming — deliberate, not cosmetic.** The single rgb key is named
+  `agentview_image`. In `view_subset` mode the shape_meta key is a *slot label*,
+  not a zarr array name (`__getitem__` reads the array via `view_key(idx)`), so
+  the name is free — and choosing the live camera's name keeps the pipeline
+  stock: the rollout environment and `eval_novel_view.py` both render
+  `agentview_image`, so training rollouts fire normally (in-distribution az_0
+  metrics, and the topk monitor gets its key) and evaluation needs **no**
+  `--serve-obs-key`.
+- **Architecture: identical to M1** (`DiffusionUnetImagePolicy` +
+  `MultiImageObsEncoder`, resnet18, one rgb key). L1 changes only the *training
+  distribution of the image*, never the model.
+- **Optimisation** (workspace defaults): horizon 16, `n_obs_steps=2`,
+  `n_action_steps=8`, batch 64, 201 epochs, seed 42, AdamW + cosine LR + EMA.
+- **In-training rollouts** every 50 epochs at the fixed default camera (az_0),
+  `n_envs=14`, `n_test=50`. These give the az_0 curve in §8.3 for free.
+- Exact CLI, per `data/outputs/run_square_randview_s42_200ep/.hydra/overrides.yaml`:
+  `task=randview_image_abs_multiview training.seed=42 training.num_epochs=201
+  training.rollout_every=50 dataloader.num_workers=10 checkpoint.topk.k=1
+  logging.project=diffusion_policy_view`.
+
+### 8.2 Evaluation method
+
+```bash
+python eval_novel_view.py -c <run>/checkpoints/latest.ckpt -o <out> \
+  -d cuda:0 --preset azimuth_interp --n-envs 14
+```
+
+- Perturbs `agentview` at the mujoco_py level (`sim.model.cam_pos/cam_quat` +
+  `sim.forward()`), azimuth about the base pose, recomputed from the base pose
+  captured on first use at *every* reset so repeated resets never compound.
+- **11 viewpoints**: az 0, ±15, ±30, ±45, ±60, ±75. **50 episodes each, with
+  paired seeds** (`test_start_seed=100000`) — identical episode seeds across
+  viewpoints, so a difference is attributable to the camera, not the episodes.
+- Metrics: strict `EnvRobosuite.is_success()` (`success_rate`) and max-reward
+  (`mean_score`). `success_rate` is the stricter of the two (M1 lift at az_0:
+  0.76 vs 1.00).
+- `az_0/±30` coincide with M1's `azimuth_sweep5`, so those columns are exact
+  comparisons. `--preset azimuth_interp` was **added in this phase**
+  (`eval_novel_view.py:66`); the earlier presets stopped at ±30.
+- `eval_log.json` is a flat dict keyed `test/<viewpoint>/{mean_score,
+  success_rate, sim_max_reward_<seed>}` — any number can be re-derived without
+  re-running. `python summarize_novel_view.py <file>` prints the tables.
+
+### 8.3 Results
+
+**L1 square seed 42, final sweep** (`success_rate`; `mean_score` is identical to
+3 dp at every viewpoint here):
+
+| viewpoint | trained on? | L1 | M1 (comparison) |
+|---|---|---|---|
+| az_0 | **yes** | **0.020** | **0.820** |
+| az_p15 | no | 0.020 | 0.000 |
+| az_m15 | no | 0.000 | 0.020 |
+| az_p30 | **yes** | 0.000 | 0.000 |
+| az_m30 | **yes** | 0.000 | 0.000 |
+| az_p45 | no | 0.020 | — |
+| az_m45 | no | 0.000 | — |
+| az_p60 | **yes** | 0.060 | — |
+| az_m60 | **yes** | 0.020 | — |
+| az_p75 | no | 0.040 | — |
+| az_m75 | no | 0.020 | — |
+
+**In-training rollouts at az_0** (a pose L1 trained on):
+
+| epoch | 0 | 50 | 100 | 150 | 200 |
+|---|---|---|---|---|---|
+| M1 | 0.000 | 0.840 | 0.880 | 0.860 | **0.880** |
+| L1 | 0.000 | 0.020 | 0.040 | 0.000 | **0.020** |
+
+Final val_loss: M1 0.0285, L1 0.0599.
+
+### 8.4 Interpretation, and its limits
+
+L1 is flat at ~0.00–0.06 **everywhere** — trained and held-out poses alike, with
+no systematic difference between them. It is therefore **not** a failure to
+generalize to novel viewpoints. Adding six extra training poses to M1's recipe
+did not make the policy view-invariant; it removed the ability to act from *any*
+pose, **including az_0, which it trained on and where M1 scores 0.82**.
+
+Limits, stated plainly:
+- L1's final val_loss is **2× M1's** (0.0599 vs 0.0285), so it does fit the
+  demonstrations somewhat worse — a 7-pose problem is genuinely harder to fit.
+  But a 2× loss gap does not explain a 44× rollout gap, and the failure is at a
+  *trained* pose. Call this **well-supported, not proven**.
+- **One seed, one task** (§8.6).
+- **The mechanism is inferred, not measured.** The plausible story is that a
+  shared encoder receiving seven mutually-inconsistent views of the same scene
+  state, with no signal indicating which camera it is behind, converges to a
+  representation confused at every pose. A targeted probe (e.g. view
+  classification from the frozen encoder) would test this and has not been run.
+
+### 8.5 The N=1 gate — why everything above is measured on the generated zarr
+
+`run_lift_n1gate_s42_200ep` trains on the generated zarr using **only** its az_0
+view (`task.dataset.view_subset=[6]`) — same single-camera-pose setup as M1, but
+a different data source. It is a *fidelity control* on M2, not a new method.
+Note it shares a task and seed with the §8.6 lift replication but is a different
+experiment (`_n1gate_` = 1 view, `_randview_` = 7 views).
+
+| viewpoint | M1 success | N=1 success | M1 mean | N=1 mean |
+|---|---|---|---|---|
+| az_0 | 0.760 | **0.840** | 1.000 | 1.000 |
+| az_m15 | 0.080 | 0.040 | 0.460 | 0.280 |
+| az_p15 | 0.080 | 0.160 | 0.500 | 0.620 |
+| az_m30 | 0.000 | 0.000 | 0.000 | 0.000 |
+| az_p30 | 0.000 | 0.000 | 0.220 | 0.240 |
+
+Trained on the generated zarr, the model reproduces M1's **whole degradation
+curve** — high at az_0, collapse at ±15°, zero at ±30° — not merely its az_0
+score. Residual differences sit inside the ±0.05 rollout noise documented in §1.
+This is the result that licenses measuring every later milestone on the
+multi-view zarr instead of the hdf5.
+
+### 8.6 Replication in flight
+
+The §8.3/§8.4 claim currently rests on one seed of one task — too thin to carry
+M3's motivation. Two runs were launched to test it from both directions:
+
+| run | question |
+|---|---|
+| `run_square_randview_s43_200ep` | is the effect **seed**-specific? |
+| `run_lift_randview_s42_200ep` | is it **task**-specific? |
+
+Both use the config default 7-view subset (no `view_subset` override), then the
+§8.2 sweep. **If either behaves differently, that is a finding to report, not a
+failure to re-run** — it would mean the effect is task- or seed-dependent.
+Results to be recorded here.
