@@ -476,8 +476,30 @@ python eval_novel_view.py -c <run>/checkpoints/latest.ckpt -o <out> \
 
 ### 8.3 Results — all three tasks
 
-**In-training rollouts at az_0** (`mean_score`; a pose L1 trained on, and M1's
-only pose):
+**Final sweeps**, `azimuth_interp`, strict `success_rate`, 50 paired episodes per
+viewpoint. All five runs, side by side:
+
+| viewpoint | M1 lift | **L1 lift** | M1 can | L1 can | M1 square | L1 square (s42 / s43) |
+|---|---|---|---|---|---|---|
+| az_0 | 0.760 | **0.960** | 0.980 | 0.020 | 0.820 | 0.020 / 0.040 |
+| az_p15 | 0.080 | **0.920** | 0.000 | 0.020 | 0.000 | 0.020 / 0.020 |
+| az_m15 | 0.080 | **0.900** | 0.080 | 0.020 | 0.020 | 0.000 / 0.020 |
+| az_p30 | 0.000 | **0.940** | 0.000 | 0.020 | 0.000 | 0.000 / 0.080 |
+| az_m30 | 0.000 | **0.880** | 0.000 | 0.020 | 0.000 | 0.000 / 0.040 |
+| az_p45 | — | 0.960 | — | 0.020 | — | 0.020 / 0.040 |
+| az_m45 | — | 0.860 | — | 0.060 | — | 0.000 / 0.040 |
+| az_p60 | — | 0.900 | — | 0.040 | — | 0.060 / 0.040 |
+| az_m60 | — | 0.840 | — | 0.000 | — | 0.020 / 0.000 |
+| az_p75 | — | 0.840 | — | 0.000 | — | 0.040 / 0.000 |
+| az_m75 | — | 0.760 | — | 0.020 | — | 0.020 / 0.020 |
+
+**Read the failing columns as a noise floor, not as low success.** With 50
+episodes, L1's 0.000–0.080 on can and square is 0–4 episodes: it is not "weakly
+succeeding", it is not solving the task at az_0 — the one pose it definitely
+trained on, where M1 scores 0.98 and 0.82.
+
+**In-training rollouts at az_0** (`mean_score`, for the record — note `mean_score`
+saturates on lift and hides the sweep's result):
 
 | task | M1 (1 pose) | L1 (7 poses) | L1 seeds |
 |---|---|---|---|
@@ -485,26 +507,8 @@ only pose):
 | square | 0.880 | 0.020 / 0.080 | 42, 43 |
 | can | 0.980 | **0.020** | 42 |
 
-**Final sweeps** (`azimuth_interp`, strict `success_rate`, 50 paired episodes).
-This is where the two tasks diverge sharply:
-
-| viewpoint | M1 lift | **L1 lift** | M1 square | L1 square (s42 / s43) |
-|---|---|---|---|---|
-| az_0 | 0.760 | **0.960** | 0.820 | 0.020 / 0.040 |
-| az_p15 | 0.080 | **0.920** | 0.000 | 0.020 / 0.020 |
-| az_m15 | 0.080 | **0.900** | 0.020 | 0.000 / 0.020 |
-| az_p30 | 0.000 | **0.940** | 0.000 | 0.000 / 0.080 |
-| az_m30 | 0.000 | **0.880** | 0.000 | 0.000 / 0.040 |
-| az_p45 | — | 0.960 | — | 0.020 / 0.040 |
-| az_m45 | — | 0.860 | — | 0.000 / 0.040 |
-| az_p60 | — | 0.900 | — | 0.060 / 0.040 |
-| az_m60 | — | 0.840 | — | 0.020 / 0.000 |
-| az_p75 | — | 0.840 | — | 0.040 / 0.000 |
-| az_m75 | — | 0.760 | — | 0.020 / 0.020 |
-
-Can's sweep is still running; its az_0 in-training rollout is 0.020 against M1's
-0.980, so it is tracking square. Can's M1 reference: 0.98 at az_0, 0.08/0.00 at
-±15°, 0.00 at ±30°.
+Can confirms the square pattern exactly: uniform ~0 across all 11 viewpoints,
+including trained poses. There is no third behaviour — the tasks split 2–1.
 
 ### 8.4 What this means
 
