@@ -1,6 +1,6 @@
 # PROGRESS
 
-Last updated: 2026-09-12. See `PROPOSAL.md` (research direction) and `PLAN.md`
+Last updated: 2026-09-17. See `PROPOSAL.md` (research direction) and `PLAN.md`
 (milestones M1–M5).
 
 **M1 is COMPLETE.** Single-view DP baselines were trained for can, lift, and
@@ -9,8 +9,11 @@ machine, and the novel-view degradation curves were measured at azimuth
 0°, ±15°, ±30°. The headline result: success collapses essentially to zero at
 ±15° on all three tasks.
 
-**M2 (multi-view data) is COMPLETE.** All three multi-view zarrs were rendered
-and verified on 2026-09-15 (§7). Next: the N=1 training gate, then M3.
+**M2 (multi-view data) is COMPLETE** (§7, 2026-09-15) and its data is validated
+by the N=1 gate (§8.5). **L1 (the view-randomized baseline) is COMPLETE** across
+all three tasks (§8, 2026-09-17): its effect is task-dependent in *both*
+directions — it solves lift outright and destroys square/can — which is now M3's
+motivation. Next: **M3**, the view-conditioned encoder.
 
 ---
 
@@ -172,19 +175,19 @@ Timings on this box (idle; fp32, no AMP — the workspace has none):
 
 ## 6. Not yet done / next
 
-- **L1 replication** (§8.6): square/seed 43 and lift/seed 42 are training, to test
-  whether the §8.3 result is seed- or task-specific. Results to be recorded in §8.6.
-- **The ablation that separates two explanations of L1's failure** — no pose
-  information vs only one slot to represent seven views. M3's Plücker
-  conditioning tests the first; a K-slot *unconditioned* variant would test the
-  second. Without it the M3 gain is not cleanly attributable to conditioning
-  rather than to capacity.
-- **Mechanism probe** (optional but cheap): view classification from L1's frozen
-  encoder, to test the "viewpoint confusion" story directly rather than inferring
-  it from the rollout numbers (§8.4).
-- Open design questions to settle before M3: fusion module choice, and
-  whether aux heads condition on camera-frame action history, Plücker map, or
-  both (PROPOSAL.md §7).
+- **M3 — view-conditioned encoder + fusion. IN PROGRESS.** Built per PROPOSAL.md
+  §2: a shared encoder modulated by a Plücker ray map and the camera-frame action
+  history, fused over view tokens, feeding the *existing* base-frame diffusion
+  head (no change to `DiffusionUnetImagePolicy`; the encoder is injected via
+  `cfg.policy.obs_encoder`). Design decisions recorded in §9 as they land.
+- **M3's ablation table must include conditioning-off.** With the K-slot
+  unconditioned variant dropped, this is the only control that holds capacity
+  constant while varying the pose signal — without it an M3 gain cannot be
+  attributed to conditioning rather than to simply having more slots.
+- **Can's sweep** is finishing; its numbers drop into §8.3 when done.
+- Open questions M3 must answer: fusion module choice, and whether the aux heads
+  need camera-frame action history as *conditioning* in addition to the Plücker
+  map (nominally M4's question, but it shapes M3's per-view interface).
 
 ## 7. M2 — multi-view data (DONE 2026-09-15)
 
@@ -401,7 +404,7 @@ subsampling will likely be needed to keep epoch time near M1's.
 
 ---
 
-## 8. L1 — the view-randomized baseline (square/seed 42 complete; replication in flight)
+## 8. L1 — the view-randomized baseline (COMPLETE, all three tasks, 2026-09-17)
 
 **Naming.** "L1" is this fork's label, not a milestone and not an upstream term.
 It names the second rung of the experiment ladder:
@@ -471,53 +474,65 @@ python eval_novel_view.py -c <run>/checkpoints/latest.ckpt -o <out> \
   success_rate, sim_max_reward_<seed>}` — any number can be re-derived without
   re-running. `python summarize_novel_view.py <file>` prints the tables.
 
-### 8.3 Results
+### 8.3 Results — all three tasks
 
-**L1 square seed 42, final sweep** (`success_rate`; `mean_score` is identical to
-3 dp at every viewpoint here):
+**In-training rollouts at az_0** (`mean_score`; a pose L1 trained on, and M1's
+only pose):
 
-| viewpoint | trained on? | L1 | M1 (comparison) |
+| task | M1 (1 pose) | L1 (7 poses) | L1 seeds |
 |---|---|---|---|
-| az_0 | **yes** | **0.020** | **0.820** |
-| az_p15 | no | 0.020 | 0.000 |
-| az_m15 | no | 0.000 | 0.020 |
-| az_p30 | **yes** | 0.000 | 0.000 |
-| az_m30 | **yes** | 0.000 | 0.000 |
-| az_p45 | no | 0.020 | — |
-| az_m45 | no | 0.000 | — |
-| az_p60 | **yes** | 0.060 | — |
-| az_m60 | **yes** | 0.020 | — |
-| az_p75 | no | 0.040 | — |
-| az_m75 | no | 0.020 | — |
+| lift | 1.000 | **1.000** | 42 |
+| square | 0.880 | 0.020 / 0.080 | 42, 43 |
+| can | 0.980 | **0.020** | 42 |
 
-**In-training rollouts at az_0** (a pose L1 trained on):
+**Final sweeps** (`azimuth_interp`, strict `success_rate`, 50 paired episodes).
+This is where the two tasks diverge sharply:
 
-| epoch | 0 | 50 | 100 | 150 | 200 |
-|---|---|---|---|---|---|
-| M1 | 0.000 | 0.840 | 0.880 | 0.860 | **0.880** |
-| L1 | 0.000 | 0.020 | 0.040 | 0.000 | **0.020** |
+| viewpoint | M1 lift | **L1 lift** | M1 square | L1 square (s42 / s43) |
+|---|---|---|---|---|
+| az_0 | 0.760 | **0.960** | 0.820 | 0.020 / 0.040 |
+| az_p15 | 0.080 | **0.920** | 0.000 | 0.020 / 0.020 |
+| az_m15 | 0.080 | **0.900** | 0.020 | 0.000 / 0.020 |
+| az_p30 | 0.000 | **0.940** | 0.000 | 0.000 / 0.080 |
+| az_m30 | 0.000 | **0.880** | 0.000 | 0.000 / 0.040 |
+| az_p45 | — | 0.960 | — | 0.020 / 0.040 |
+| az_m45 | — | 0.860 | — | 0.000 / 0.040 |
+| az_p60 | — | 0.900 | — | 0.060 / 0.040 |
+| az_m60 | — | 0.840 | — | 0.020 / 0.000 |
+| az_p75 | — | 0.840 | — | 0.040 / 0.000 |
+| az_m75 | — | 0.760 | — | 0.020 / 0.020 |
 
-Final val_loss: M1 0.0285, L1 0.0599.
+Can's sweep is still running; its az_0 in-training rollout is 0.020 against M1's
+0.980, so it is tracking square. Can's M1 reference: 0.98 at az_0, 0.08/0.00 at
+±15°, 0.00 at ±30°.
 
-### 8.4 Interpretation, and its limits
+### 8.4 What this means
 
-L1 is flat at ~0.00–0.06 **everywhere** — trained and held-out poses alike, with
-no systematic difference between them. It is therefore **not** a failure to
-generalize to novel viewpoints. Adding six extra training poses to M1's recipe
-did not make the policy view-invariant; it removed the ability to act from *any*
-pose, **including az_0, which it trained on and where M1 scores 0.82**.
+**The effect is task-dependent, and in opposite directions.**
 
-Limits, stated plainly:
-- L1's final val_loss is **2× M1's** (0.0599 vs 0.0285), so it does fit the
-  demonstrations somewhat worse — a 7-pose problem is genuinely harder to fit.
-  But a 2× loss gap does not explain a 44× rollout gap, and the failure is at a
-  *trained* pose. Call this **well-supported, not proven**.
-- **One seed, one task** (§8.6).
-- **The mechanism is inferred, not measured.** The plausible story is that a
-  shared encoder receiving seven mutually-inconsistent views of the same scene
-  state, with no signal indicating which camera it is behind, converges to a
-  representation confused at every pose. A targeted probe (e.g. view
-  classification from the frozen encoder) would test this and has not been run.
+- **On lift, 7-pose randomization *solves* the problem.** L1 holds 0.76–0.96 at
+  every viewpoint out to ±75°, where M1 collapses to 0.08 (±15°) and 0.00 (±30°).
+  A conditioning-free baseline already achieves the project's stated goal —
+  single camera, novel pose — on lift.
+- **On square and can, the same intervention is catastrophic.** L1 sits at ≤0.08
+  everywhere, *including poses it trained on*, where M1 scores 0.82 / 0.98.
+
+So "view diversity alone fails" is false as a general claim — wrong in both
+directions, and worth stating that way rather than picking the flattering half.
+
+**What separates lift from square/can is not identified.** The cleanest
+structural difference is that lift is the only task requiring no goal-directed
+placement — grasp-and-raise, where the target is wherever the object already is,
+versus nut-onto-peg and can-into-bin. That would make the axis "how much precise
+spatial localization from the image the task needs." That is a **hypothesis with
+one task per side, not a finding.** A confound we cannot rule out: lift's scene
+is visually far simpler (plain table + cube) than can's cluttered shelf, so it
+could be scene regularity rather than task structure.
+
+Limit that stands: on square, L1's val_loss is ~2× M1's (0.060 vs 0.029) — it
+does fit worse — but a 2× loss gap does not explain a 44× rollout gap. The
+mechanism is **inferred, not measured**; the probe that would test it was
+deliberately dropped, so this hedge is permanent, not provisional.
 
 ### 8.5 The N=1 gate — why everything above is measured on the generated zarr
 
@@ -541,17 +556,25 @@ score. Residual differences sit inside the ±0.05 rollout noise documented in §
 This is the result that licenses measuring every later milestone on the
 multi-view zarr instead of the hdf5.
 
-### 8.6 Replication in flight
+### 8.6 Replication
 
-The §8.3/§8.4 claim currently rests on one seed of one task — too thin to carry
-M3's motivation. Two runs were launched to test it from both directions:
+Three runs beyond square/s42, all on the config default 7-view subset (no
+`view_subset` override — that belonged to §8.5's gate):
 
-| run | question |
-|---|---|
-| `run_square_randview_s43_200ep` | is the effect **seed**-specific? |
-| `run_lift_randview_s42_200ep` | is it **task**-specific? |
+| run | task | seed | az_0 rollout | sweep |
+|---|---|---|---|---|
+| `run_square_randview_s42_200ep` | square | 42 | 0.020 | ≤0.08, all 11 vp |
+| `run_square_randview_s43_200ep` | square | 43 | 0.080 (best) | ≤0.08, all 11 vp |
+| `run_lift_randview_s42_200ep` | lift | 42 | 1.000 | **0.76–0.96, all 11 vp** |
+| `run_can_randview_s42_200ep` | can | 42 | 0.020 | running |
 
-Both use the config default 7-view subset (no `view_subset` override), then the
-§8.2 sweep. **If either behaves differently, that is a finding to report, not a
-failure to re-run** — it would mean the effect is task- or seed-dependent.
-Results to be recorded here.
+The replication did its job by **overturning** the original claim: square
+reproduces across seeds, but lift inverts the story entirely — rather than merely
+being "unaffected," it is far *better* than M1 off-axis.
+
+**Read `success_rate`, not `mean_score`, on lift.** The improvement was initially
+invisible: in-training rollouts log only `mean_score`, which saturates at 1.000
+on lift (M1 lift: mean 1.00 but success 0.76). Only the strict sweep revealed it.
+
+Naming trap: `run_lift_n1gate_*` (1 view, §8.5's fidelity control) and
+`run_lift_randview_*` (7 views, this table) share a task and seed.
