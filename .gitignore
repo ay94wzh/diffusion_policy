@@ -3,8 +3,14 @@ logs
 wandb
 outputs
 data/*
-!data/eval_az5_*_ep200/
-!data/eval_az5_*_ep200/**
+# every novel-view sweep publishes (eval_log.json + rollout videos), so a new
+# sweep needs no .gitignore edit; the multi-GB zarrs/checkpoints stay out
+!data/eval_*/
+!data/eval_*/**
+# ring montages only -- data/multiview/ also holds the multi-GB zarrs
+!data/multiview/
+data/multiview/*
+!data/multiview/*.png
 !data/outputs/
 data/outputs/*
 !data/outputs/run_*_abs_single_s42_200ep/
