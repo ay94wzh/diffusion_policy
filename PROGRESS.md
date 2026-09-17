@@ -578,3 +578,49 @@ on lift (M1 lift: mean 1.00 but success 0.76). Only the strict sweep revealed it
 
 Naming trap: `run_lift_n1gate_*` (1 view, §8.5's fidelity control) and
 `run_lift_randview_*` (7 views, this table) share a task and seed.
+
+---
+
+## 9. M3 — view-conditioned encoder (SPECIFIED, draft code unverified)
+
+**Status: design written, code NOT working, nothing committed.** The full design
+spec lives in `PLAN.md` ("M3 design spec"). This section records only the honest
+state of what is on disk.
+
+### 9.1 What exists (untracked, uncommitted)
+
+| file | state |
+|---|---|
+| `diffusion_policy/model/vision/plucker.py` | draft, **has a known bug** |
+| `diffusion_policy/model/vision/view_conditioned_obs_encoder.py` | draft, never successfully constructed |
+
+### 9.2 What is known to be broken
+
+- **`plucker.py` raises on the first real call.** `quat_wxyz_to_mat_torch`
+  returns a **2-D** matrix when handed a **1-D** `(4,)` quaternion, so
+  `einsum('bij,jhw->bhwi', ...)` fails with *"number of subscripts in the
+  equation (3) does not match the number of dimensions (2)"*. Needs a leading
+  batch dimension forced, or an `unsqueeze`.
+- **The Plücker convention is UNVERIFIED.** A convention check was written but
+  was **itself wrong**: it compared a *camera-frame* ray direction against a
+  *world-frame* expected direction without applying the rotation `R`, so its
+  output (dots of −0.85, −0.18, −0.60 instead of ≈1.0) says nothing about the
+  code. A correct check must compare `R @ d_cam` against `(p_world − cam_pos)`
+  normalised, at the pixel that `project_world_to_pixel` (the numpy path M2's
+  gate 2 validated against the simulator) puts it at.
+
+### 9.3 What is designed but unbuilt
+
+- The dataset does **not** yet emit `view_XX_cam` keys, so the encoder has no
+  pose input.
+- `eval_novel_view.py` does **not** yet publish the perturbed pose into the obs
+  dict, so a trained M3 model could not be evaluated at a novel view.
+- No config references the new encoder; no training run has been attempted.
+
+### 9.4 The one thing to preserve from the design
+
+`fused_dim = 512` makes M3's `output_shape()` **521**, identical to M1's and
+L1's. That is what lets M3 differ from the baselines in *training distribution and
+conditioning* rather than in downstream capacity — and `use_plucker=False` is the
+constructor flag that isolates conditioning at matched capacity. Losing that
+property would make the headline comparison uninterpretable.

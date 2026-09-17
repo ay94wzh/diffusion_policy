@@ -64,6 +64,92 @@ Each step lands as new files, has an experiment gate before proceeding, and keep
 - **M4 — Per-view aux heads.** New policy subclass (e.g. `DiffusionUnetImagePolicyAux`): encoder exposes per-view latents + fused latent (small interface extension, e.g. `forward_full`); per-view MLP head predicts the camera-frame action chunk; aux loss added in a `compute_loss` override. Workspace untouched (single optimizer covers all params). *Gate:* aux loss improves novel-view generalization; ablations: conditioning on/off, aux on/off.
 - **M5 — Single-novel-view inference (+ optional distillation).** Fusion already supports N=1; at eval the novel camera pose is known from the sim, so Plücker maps + action-history transforms are computed for the novel view. Optional teacher→student distillation (single-view encoder regresses the multi-view fused latent). *Gate:* final sweep tables vs the Milestone 1 baseline curves.
 
+## M3 design spec — ViewConditionedObsEncoder
+
+Implements PROPOSAL.md §2 steps 1–2. **Status: specified, not yet working** (see
+`PROGRESS.md` §9 for the honest state of the draft code).
+
+### Interface contract (why this is a small change)
+
+`ViewConditionedObsEncoder` must be a **drop-in for `MultiImageObsEncoder`**:
+`__init__(shape_meta, ...)`, `forward(obs_dict) -> (B·To, D)`, `output_shape()`.
+`DiffusionUnetImagePolicy` reads `output_shape()[0]` and sets
+`global_cond_dim = D * n_obs_steps`, so the encoder swaps in **through config
+only** — no policy change. This is the same trick M3's predecessor encoders use.
+
+### Architecture
+
+```
+view_0: image ─┐
+        plucker ├─► [ shared resnet18, conv1 widened to 9ch ] ─► z_0 ─┐
+view_1: image ─┤                                                     │
+        plucker ├─► [ same shared backbone ]              ─► z_1 ─► [ fusion: MHA,
+        ...     ─┘                                                     learnable query ] ─► z_g ─► + lowdim ─► out
+```
+
+- **Per view**: image (3ch) concatenated with its **Plücker ray map** (6ch) →
+  shared resnet18 whose `conv1` is widened from 3 to 9 input channels (the
+  pretrained RGB filters are copied into the first 3). Output `z_v` (512-d).
+- **Fusion**: `nn.MultiheadAttention` over the N view tokens with a single
+  **learnable query** → `z_g` (512-d). Degenerates correctly at N = 1, which is
+  what makes M5's single-novel-view inference work.
+- **Output**: `[z_g | lowdim keys]`, matching the stock layout.
+
+### The matched-capacity property (important)
+
+With `fused_dim = 512`, M3's `output_shape()` is **521 = 512 + 9**, i.e. exactly
+M1/L1's. So M3 and M1 differ in *training distribution and conditioning*, **not in
+downstream capacity** — the UNet's `cond_dim` is identical. Without this, any M3
+gain would be confounded with simply feeding the UNet a wider conditioning
+vector.
+
+### Camera-parameter plumbing
+
+Poses arrive as ordinary obs keys, one per view: image key `view_07_image` is
+paired with `view_07_cam` of shape `(10,)` =
+`[pos(3), quat_wxyz(4), fovy(1), h(1), w(1)]`. The encoder consumes these and
+**excludes them from the low-dim block**.
+
+Passing them per-sample (rather than as a fixed per-slot buffer) is deliberate:
+at test time the camera sits at a *novel* pose, so the pose cannot be baked in at
+construction. Required changes:
+
+- **Dataset** (`multiview_image_dataset.py`): optionally emit `view_XX_cam` keys
+  from the existing `camera_params` property (already validated by M2's gate 2).
+- **Eval** (`eval_novel_view.py`): emit the *perturbed* pose as the cam key. The
+  harness already computes it in `ViewpointImageWrapper._apply_viewpoint`, so it
+  knows the answer; it just has to publish it into the obs dict.
+
+### Required ablation
+
+`use_plucker=False` drops the ray-map channels, keeping everything else — same
+N views, same `fused_dim`, same capacity. **This is the only remaining control
+for attributing an M3 gain to conditioning rather than to having more slots**
+(the K-slot unconditioned variant was dropped). It is a constructor flag, so the
+ablation costs one config, not one code path.
+
+### Gates
+
+1. **N=1 sanity**: one view + its pose should roughly reproduce the M1/L1 single
+   view result. A large gap means the Plücker path is corrupting the image path.
+2. **The headline**: 7 views on **square** (where view randomization alone fails,
+   ≤0.08). Conditioning-on must beat conditioning-off there.
+3. **Lift control**: lift is already solved by the conditioning-free baseline
+   (0.76–0.96 across ±75°), so M3 should *not* be headlined on lift.
+
+### Open risks
+
+- **Crop alignment.** The stock encoder random-crops 76×76 from 84×84. The
+  Plücker map must be cropped with the *identical* window or the conditioning
+  desynchronises from the pixels. The draft does this itself for that reason
+  (it cannot use `CropRandomizer`, which returns no offsets).
+- **Novel-pose eval is the real integration risk**, not the encoder: the harness
+  must publish the perturbed pose, and `robomimic`'s obs-modality mapping has
+  already bitten this project twice (see `PROGRESS.md` §7.4).
+- **Action-history conditioning** (PROPOSAL §2.1, second condition) is *not* in
+  this spec. Staging it after the Plücker path works keeps the first experiment
+  interpretable; it is M4-adjacent and shapes the per-view interface.
+
 ## Out of scope for now
 
 ACT, mujoco pipeline (incl. `mujoco_image_dataset.py` normalizer bug), and any M2–M5 coding until the baseline is done and reviewed.
