@@ -587,14 +587,15 @@ Naming trap: `run_lift_n1gate_*` (1 view, §8.5's fidelity control) and
 spec lives in `PLAN.md` ("M3 design spec"). This section records only the honest
 state of what is on disk.
 
-### 9.1 What exists (untracked, uncommitted)
+### 9.1 What exists
 
-| file | state |
-|---|---|
-| `diffusion_policy/model/vision/plucker.py` | draft, **has a known bug** |
-| `diffusion_policy/model/vision/view_conditioned_obs_encoder.py` | draft, never successfully constructed |
+**No code.** The two drafts (`model/vision/plucker.py`,
+`model/vision/view_conditioned_obs_encoder.py`) were **deleted**; the tree is
+clean at `6aab4c6`. The durable artifact from this session is the **design spec in
+`PLAN.md`**, not the code. §9.2 and §9.3 are kept as a record of what to avoid
+and what to build when the encoder is actually written.
 
-### 9.2 What is known to be broken
+### 9.2 What was wrong with the deleted draft (keep as a warning)
 
 - **`plucker.py` raises on the first real call.** `quat_wxyz_to_mat_torch`
   returns a **2-D** matrix when handed a **1-D** `(4,)` quaternion, so
