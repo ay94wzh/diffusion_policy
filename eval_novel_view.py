@@ -43,9 +43,12 @@ import numpy as np
 import wandb
 import tqdm
 import wandb.sdk.data_types.video as wv
+from gym import spaces
 
 from diffusion_policy.env_runner.robomimic_image_runner import create_env
 from diffusion_policy.env.robomimic.robomimic_image_wrapper import RobomimicImageWrapper
+from diffusion_policy.dataset.multiview_image_dataset import (
+    EEF_HIST_STEP_DIM, eef_hist_to_cam)
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.video_recording_wrapper import VideoRecordingWrapper, VideoRecorder
@@ -87,6 +90,20 @@ PRESETS = {
     # views and odd indices (az +-15, +-45, +-75) are held out. This sweep spans
     # both, so a single run shows in-distribution and held-out performance.
     # az_0/+-30 also match azimuth_sweep5, keeping the M1 comparison exact.
+    # Elevation viewpoints at az_0, implemented as an ORBIT about the look-at
+    # point rather than the in-place `elevation_deg` pitch -- so the scene stays
+    # centred and every view keeps its information, the same principle that
+    # keeps the azimuth sweep inside +-90. +-15 deg only: +-30/+-45 put the
+    # table edge-on and the frame is dominated by the surface. At this camera
+    # radius +-15 still moves the camera ~0.36 m, a substantial view change.
+    'elevation_az0': {
+        'camera': 'agentview',
+        'viewpoints': [
+            {'name': 'el_0'},
+            {'name': 'el_p15', 'elevation_orbit_deg': 15},
+            {'name': 'el_m15', 'elevation_orbit_deg': -15},
+        ]
+    },
     'azimuth_interp': {
         'camera': 'agentview',
         'viewpoints': [
@@ -141,6 +158,33 @@ def _look_at_quat(pos, target):
     rmat = np.stack([x_axis, y_axis, z_axis], axis=1)  # columns = cam axes
     return T.mat2quat(rmat)  # xyzw
 
+def _orbit_elevation(pos, target, deg):
+    """Raise (+) or lower (-) the camera on a sphere about `target`.
+
+    `elevation_deg` only pitches the camera in place (`R_lookat @ R_x`), which
+    swings the scene toward the frame edge and eventually out of it. This MOVES
+    the camera instead, and the caller re-aims at `target` afterwards, so the
+    scene stays centred and the view keeps its information content.
+
+    The polar angle is clipped short of the poles: exactly on the pole
+    `_look_at_quat`'s cross product degenerates. It has a fallback, but relying
+    on it is worse than not going there.
+    """
+    target = np.asarray(target, dtype=np.float64)
+    v = np.asarray(pos, dtype=np.float64) - target
+    r = float(np.linalg.norm(v))
+    if r < 1e-9:
+        return np.asarray(pos, dtype=np.float64).copy()
+    polar = math.acos(float(np.clip(v[2] / r, -1.0, 1.0)))
+    azim = math.atan2(v[1], v[0])
+    polar = float(np.clip(polar - math.radians(deg),
+                          math.radians(2.0), math.radians(178.0)))
+    offset = np.array([math.sin(polar) * math.cos(azim),
+                       math.sin(polar) * math.sin(azim),
+                       math.cos(polar)]) * r
+    return target + offset
+
+
 def _compute_perturbed_pose(base_pos, base_quat_wxyz, spec):
     """
     Absolute camera pose from the base (dataset) pose. Applied in order:
@@ -153,20 +197,27 @@ def _compute_perturbed_pose(base_pos, base_quat_wxyz, spec):
         np.asarray(base_quat_wxyz, dtype=np.float64), to='xyzw')
 
     has_move = any(k in spec for k in
-        ('azimuth_deg', 'elevation_deg', 'pos_delta', 'euler_delta_deg'))
+        ('azimuth_deg', 'elevation_deg', 'elevation_orbit_deg',
+         'pos_delta', 'euler_delta_deg'))
     if not has_move:
         return pos, np.asarray(base_quat_wxyz, dtype=np.float64).copy()
 
     azimuth_deg = spec.get('azimuth_deg', 0.0)
     elevation_deg = spec.get('elevation_deg', 0.0)
-    if azimuth_deg != 0.0 or elevation_deg != 0.0:
+    elevation_orbit_deg = spec.get('elevation_orbit_deg', 0.0)
+    if azimuth_deg != 0.0 or elevation_deg != 0.0 or elevation_orbit_deg != 0.0:
         pos = _rot_z(math.radians(azimuth_deg)) @ pos
         # base camera look-at point (1 m along the camera forward axis, -z)
         forward = T.quat2mat(base_quat) @ np.array([0.0, 0.0, -1.0])
         target = spec.get('look_at', None)
         if target is None:
             target = np.asarray(base_pos, dtype=np.float64) + forward
-        quat = _look_at_quat(pos, np.asarray(target, dtype=np.float64))
+        target = np.asarray(target, dtype=np.float64)
+        if elevation_orbit_deg != 0.0:
+            # MOVE the camera (not just pitch it), then re-aim below, so the
+            # target stays centred at every elevation
+            pos = _orbit_elevation(pos, target, elevation_orbit_deg)
+        quat = _look_at_quat(pos, target)
         if elevation_deg != 0.0:
             pitch = T.mat2quat(_rot_x(math.radians(elevation_deg)))
             # post-multiplied local pitch: R = R_lookat @ R_x
@@ -185,13 +236,38 @@ def _compute_perturbed_pose(base_pos, base_quat_wxyz, spec):
 
 
 class ViewpointImageWrapper(RobomimicImageWrapper):
-    """Script-local wrapper: applies a camera viewpoint at every reset."""
+    """Script-local wrapper: applies a camera viewpoint at every reset, and
+    (M3) serves the view-slot / camera / mask / EE-history keys."""
 
-    def __init__(self, *args, serve_obs_key=None, **kwargs):
+    def __init__(self, *args, serve_obs_key=None, m3_slots=0,
+                 eef_hist_steps=4, **kwargs):
         super().__init__(*args, **kwargs)
         self.viewpoint = None
         self.serve_obs_key = serve_obs_key
         self._base_camera_poses = dict()
+        self.m3_slots = int(m3_slots)
+        self.eef_hist_steps = int(eef_hist_steps)
+        self._eef_hist = collections.deque(maxlen=max(self.eef_hist_steps, 1))
+
+        if self.m3_slots > 0:
+            # M3's extra keys are NOT in shape_meta -- the env cannot serve them
+            # and RobomimicImageWrapper raises on an unknown key suffix -- so
+            # register them on the observation space here. Registering is also
+            # necessary: MultiStepWrapper and gym's shared-memory writer both
+            # whitelist by space key, so an unregistered key would be dropped
+            # before the policy ever saw it.
+            render_shape = tuple(self.observation_space[self.render_obs_key].shape)
+            for k in range(self.m3_slots):
+                self.observation_space[f'view_slot_{k:02d}_image'] = spaces.Box(
+                    low=0.0, high=1.0, shape=render_shape, dtype=np.float32)
+                self.observation_space[f'view_slot_{k:02d}_cam'] = spaces.Box(
+                    low=-np.inf, high=np.inf, shape=(10,), dtype=np.float32)
+            self.observation_space['view_mask'] = spaces.Box(
+                low=0.0, high=1.0, shape=(self.m3_slots,), dtype=np.float32)
+            self.observation_space['view_eef_hist'] = spaces.Box(
+                low=-np.inf, high=np.inf,
+                shape=(self.m3_slots, EEF_HIST_STEP_DIM * self.eef_hist_steps),
+                dtype=np.float32)
 
     def get_observation(self, raw_obs=None):
         # A policy trained on a multi-view dataset expects a `view_XX_image`
@@ -201,10 +277,82 @@ class ViewpointImageWrapper(RobomimicImageWrapper):
         # shape_meta keys, so the alias has to exist before that loop runs.
         if raw_obs is None:
             raw_obs = self.env.get_observation()
+        raw_obs = dict(raw_obs)
         if self.serve_obs_key is not None and self.serve_obs_key not in raw_obs:
-            raw_obs = dict(raw_obs)
             raw_obs[self.serve_obs_key] = raw_obs[self.render_obs_key]
+        if self.m3_slots > 0:
+            self._serve_m3(raw_obs)
         return super().get_observation(raw_obs)
+
+    def _current_cam(self, h, w):
+        """The live camera vector (10,) = [pos, quat_wxyz, fovy, h, w].
+
+        Read back FROM THE SIM rather than recomputed from the viewpoint spec,
+        so the published pose is exactly the pose that rendered the frame --
+        `_apply_viewpoint` already wrote it there and mujoco's cam_quat is
+        already wxyz, matching the dataset's convention (degrees, mujoco
+        conventions throughout).
+        """
+        spec = dict(self.viewpoint) if self.viewpoint is not None else {}
+        camera = spec.get('camera', 'agentview')
+        sim = self.env.env.sim
+        cid = sim.model.camera_name2id(camera)
+        return np.concatenate([
+            np.asarray(sim.model.cam_pos[cid], dtype=np.float64),
+            np.asarray(sim.model.cam_quat[cid], dtype=np.float64),
+            [float(sim.model.cam_fovy[cid]), float(h), float(w)],
+        ]).astype(np.float32)
+
+    def _push_eef(self, raw_obs):
+        """Append the current EE pose, seeding the buffer at episode start.
+
+        The seed repeats the first pose `eef_hist_steps` times, which is the
+        same rule `MultiViewImageDataset._eef_history` applies when clipping the
+        history to the sample window. If the two ever disagree the history is
+        wrong only at episode starts -- nearly invisible in training, and wrong
+        at rollout -- so both sides share `eef_hist_to_cam` and this pad rule.
+        """
+        pose = (np.asarray(raw_obs['robot0_eef_pos'], dtype=np.float64),
+                np.asarray(raw_obs['robot0_eef_quat'], dtype=np.float64),
+                np.asarray(raw_obs['robot0_gripper_qpos'], dtype=np.float64))
+        if len(self._eef_hist) == 0:
+            for _ in range(self.eef_hist_steps):
+                self._eef_hist.append(pose)
+        else:
+            self._eef_hist.append(pose)
+
+    def _serve_m3(self, raw_obs):
+        """Fill the M3 keys: one live slot, the rest zero and masked out.
+
+        The live env has exactly one camera, so this is always an N=1
+        inference -- which is M5's setting, and the reason N is randomized
+        during training (so N=1 is in distribution). Masked slots carry zeros:
+        they cannot leak (the encoder gathers only active slots), and if the
+        mask were ever ignored the result would be loudly wrong, not subtly.
+        """
+        frame = raw_obs[self.render_obs_key]
+        h, w = frame.shape[-2:]
+        cam = self._current_cam(h, w)
+        self._push_eef(raw_obs)
+        pos = np.stack([p for p, _, _ in self._eef_hist])
+        quat = np.stack([q for _, q, _ in self._eef_hist])
+        grip = np.stack([g for _, _, g in self._eef_hist])
+        hist_cam = eef_hist_to_cam(pos, quat, grip, cam[:3], cam[3:7])
+        # step-major flatten, matching MultiViewImageDataset._m3_slots
+        hist_cam = hist_cam.reshape(-1).astype(np.float32)
+
+        mask = np.zeros(self.m3_slots, dtype=np.float32)
+        mask[0] = 1.0
+        for k in range(self.m3_slots):
+            live = (k == 0)
+            raw_obs[f'view_slot_{k:02d}_image'] = (
+                frame if live else np.zeros_like(frame))
+            raw_obs[f'view_slot_{k:02d}_cam'] = (
+                cam if live else np.zeros(10, dtype=np.float32))
+        raw_obs['view_mask'] = mask
+        raw_obs['view_eef_hist'] = np.stack([
+            hist_cam if k == 0 else np.zeros_like(hist_cam)
+            for k in range(self.m3_slots)])
 
     def set_viewpoint(self, viewpoint):
         self.viewpoint = viewpoint
@@ -215,6 +363,7 @@ class ViewpointImageWrapper(RobomimicImageWrapper):
         return self.env.is_success()
 
     def reset(self):
+        self._eef_hist.clear()      # reseed per episode
         obs = super().reset()
         if self.viewpoint is not None:
             self._apply_viewpoint()
@@ -280,6 +429,8 @@ def run_novel_view_eval(policy,
         max_steps=400,
         render_obs_key='agentview_image',
         serve_obs_key=None,
+        m3_slots=0,
+        eef_hist_steps=4,
         past_action=False,
         abs_action=False,
         fps=10,
@@ -323,7 +474,9 @@ def run_novel_view_eval(policy,
                     shape_meta=shape_meta,
                     init_state=None,
                     render_obs_key=render_obs_key,
-                    serve_obs_key=serve_obs_key
+                    serve_obs_key=serve_obs_key,
+                    m3_slots=m3_slots,
+                    eef_hist_steps=eef_hist_steps
                 ),
                 video_recoder=VideoRecorder.create_h264(
                     fps=fps,
@@ -357,7 +510,9 @@ def run_novel_view_eval(policy,
                     shape_meta=shape_meta,
                     init_state=None,
                     render_obs_key=render_obs_key,
-                    serve_obs_key=serve_obs_key
+                    serve_obs_key=serve_obs_key,
+                    m3_slots=m3_slots,
+                    eef_hist_steps=eef_hist_steps
                 ),
                 video_recoder=VideoRecorder.create_h264(
                     fps=fps,
@@ -556,8 +711,14 @@ def to_json_log(log_data):
 @click.option('--serve-obs-key', default=None,
     help='also serve the rendered camera image under this obs key, for '
          'policies trained on a multi-view dataset (e.g. view_06_image)')
+@click.option('--m3-slots', type=int, default=0,
+    help='M3: number of view slots (0 = off). Registers and serves the '
+         'view_slot_XX_image / _cam / view_mask / view_eef_hist keys that the '
+         'view-conditioned encoder consumes.')
+@click.option('--eef-hist-steps', type=int, default=4,
+    help='M3: number of EE-pose history steps per slot (must match training)')
 def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs,
-        serve_obs_key):
+        serve_obs_key, m3_slots, eef_hist_steps):
     if os.path.exists(output_dir):
         click.confirm(f"Output path {output_dir} already exists! Overwrite?", abort=True)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -589,7 +750,23 @@ def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs
     # rendered key as well; --serve-obs-key aliases one to the other in
     # ViewpointImageWrapper.get_observation.
     env_shape_meta = er.shape_meta
-    if serve_obs_key is not None and er.render_obs_key not in env_shape_meta['obs']:
+    if m3_slots > 0:
+        # M3: the policy consumes K view-slot keys, but the live env renders ONE
+        # camera. create_env builds robomimic's obs-modality mapping from this
+        # shape_meta and EnvRobosuite.get_observation then tries to emit every
+        # rgb key in it, so the ENV side must carry exactly one rgb key -- the
+        # rendered one. The wrapper registers and supplies the slots itself.
+        env_shape_meta = copy.deepcopy(env_shape_meta)
+        slot_keys = [k for k, a in env_shape_meta['obs'].items()
+                     if a.get('type', 'low_dim') == 'rgb']
+        assert len(slot_keys) == m3_slots, (
+            f'shape_meta has {len(slot_keys)} rgb slots, --m3-slots={m3_slots}')
+        render_shape = env_shape_meta['obs'][slot_keys[0]]['shape']
+        for k in slot_keys:
+            del env_shape_meta['obs'][k]
+        env_shape_meta['obs'][er.render_obs_key] = dict(
+            shape=render_shape, type='rgb')
+    elif serve_obs_key is not None and er.render_obs_key not in env_shape_meta['obs']:
         env_shape_meta = copy.deepcopy(env_shape_meta)
         env_shape_meta['obs'][er.render_obs_key] = dict(
             shape=env_shape_meta['obs'][serve_obs_key]['shape'], type='rgb')
@@ -608,6 +785,8 @@ def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs
         max_steps=er.max_steps,
         render_obs_key=er.render_obs_key,
         serve_obs_key=serve_obs_key,
+        m3_slots=m3_slots,
+        eef_hist_steps=eef_hist_steps,
         past_action=er.past_action,
         abs_action=er.abs_action,
         fps=er.fps,

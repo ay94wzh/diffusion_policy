@@ -1,0 +1,76 @@
+name: m3_plucker_image_abs_n1
+
+# M3's N=1 gate (PLAN.md's gate 1): the view-conditioned encoder with ONE slot
+# and ONE camera pose (az_0 of the ring), i.e. the same single-camera setup as
+# M1/L1 but through the new Pluecker + EE-history path.
+#
+# This is a FIDELITY control, not a new method. It should roughly reproduce the
+# M1/L1 single-view result; a large gap means the Pluecker or FiLM path is
+# corrupting the image path. Compare with run_*_abs_single_s42_200ep and
+# run_lift_n1gate_s42_200ep (PROGRESS.md sections 1 and 8.5).
+#
+# One file serves all three tasks: task.task_name=lift.
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    view_slot_00_image:
+      shape: [3, 84, 84]
+      type: rgb
+    robot0_eef_pos:
+      shape: [3]
+      # type default: low_dim
+    robot0_eef_quat:
+      shape: [4]
+    robot0_gripper_qpos:
+      shape: [2]
+  action:
+    shape: [10]
+
+task_name: &task_name square
+dataset_type: &dataset_type ph
+hdf5_path: &hdf5_path data/robomimic/datasets/${task.task_name}/${task.dataset_type}/image_abs.hdf5
+zarr_path: &zarr_path data/multiview/${task.task_name}_${task.dataset_type}_ring13.zarr
+abs_action: &abs_action True
+# az_0 is ring index 6 -- the same view the live `agentview` camera renders, so
+# this gate is directly comparable to M1 and to section 8.5's N=1 gate
+n1_view_pool: &n1_view_pool [6]
+view_count_range: &view_count_range [1, 1]
+eef_hist_steps: &eef_hist_steps 4
+
+env_runner:
+  _target_: diffusion_policy.env_runner.cam_key_image_runner.CamKeyImageRunner
+  dataset_path: *hdf5_path
+  shape_meta: *shape_meta
+  m3_slots: 1
+  eef_hist_steps: *eef_hist_steps
+  n_train: 6
+  n_train_vis: 2
+  train_start_idx: 0
+  n_test: 50
+  n_test_vis: 4
+  test_start_seed: 100000
+  max_steps: ${eval:'500 if "${task.dataset_type}" == "mh" else 400'}
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  render_obs_key: 'agentview_image'
+  fps: 10
+  crf: 22
+  past_action: ${past_action_visible}
+  abs_action: *abs_action
+  tqdm_interval_sec: 1.0
+  n_envs: 14
+
+dataset:
+  _target_: diffusion_policy.dataset.multiview_image_dataset.MultiViewImageDataset
+  shape_meta: *shape_meta
+  dataset_path: *zarr_path
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  abs_action: *abs_action
+  view_pool: *n1_view_pool
+  view_count_range: *view_count_range
+  eef_hist_steps: *eef_hist_steps
+  seed: 42
+  val_ratio: 0.02

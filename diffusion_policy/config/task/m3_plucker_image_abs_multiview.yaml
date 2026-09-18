@@ -1,0 +1,112 @@
+name: m3_plucker_image_abs_multiview
+
+# M3 training task: K view SLOTS fed to the view-conditioned encoder, each
+# filled per sample from a random subset of the training ring.
+#
+# The rgb keys below are slot LABELS, not zarr array names: MultiViewImageDataset
+# reads the drawn view via view_key(idx). They are named `view_slot_XX_image`
+# (deliberately not a real zarr view name) so no path can mistake a slot for an
+# array.
+#
+# The camera vectors, the activity mask and the EE history are NOT here. They
+# are emitted by the dataset as extra obs keys, because `create_env` builds
+# robomimic's obs-modality mapping from shape_meta and RobomimicImageWrapper
+# raises on any key suffix it does not recognise -- a cam key in shape_meta
+# breaks the rollout env. The encoder takes their names by constructor
+# convention (`view_slot_03_image` -> `view_slot_03_cam`).
+#
+# K slots is also the ablation's capacity knob: fewer slots = fewer views fused.
+# N is randomized per sample over view_count_range, so the N=1 setting that M5
+# and the rollouts run at is IN DISTRIBUTION rather than a distribution shift.
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    view_slot_00_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_01_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_02_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_03_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_04_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_05_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_06_image:
+      shape: [3, 84, 84]
+      type: rgb
+    robot0_eef_pos:
+      shape: [3]
+      # type default: low_dim
+    robot0_eef_quat:
+      shape: [4]
+    robot0_gripper_qpos:
+      shape: [2]
+  action:
+    shape: [10]
+
+task_name: &task_name square
+dataset_type: &dataset_type ph
+# source hdf5 (used only to build the evaluation env) and the generated zarr
+hdf5_path: &hdf5_path data/robomimic/datasets/${task.task_name}/${task.dataset_type}/image_abs.hdf5
+zarr_path: &zarr_path data/multiview/${task.task_name}_${task.dataset_type}_ring13.zarr
+abs_action: &abs_action True
+# even ring indices == az -90/-60/-30/0/+30/+60/+90 (every 30deg). The odd
+# indices (az +-15/+-45/+-75) are NEVER drawn, which is what makes held-out-view
+# evaluation honest.
+train_view_pool: &train_view_pool [0, 2, 4, 6, 8, 10, 12]
+# active views per sample, drawn uniformly from [lo, hi]. hi must equal the slot
+# count (slots are filled without replacement).
+view_count_range: &view_count_range [1, 7]
+eef_hist_steps: &eef_hist_steps 4
+
+env_runner:
+  # the stock runner cannot serve the slot/cam/mask/history keys
+  _target_: diffusion_policy.env_runner.cam_key_image_runner.CamKeyImageRunner
+  dataset_path: *hdf5_path
+  shape_meta: *shape_meta
+  m3_slots: 7
+  eef_hist_steps: *eef_hist_steps
+  # The live env has ONE camera, so an in-training rollout is an N=1 inference
+  # at az_0 -- the M5 setting. It is a real number, just not a K-view one; the
+  # headline numbers come from eval_novel_view.py --m3-slots 7.
+  n_train: 6
+  n_train_vis: 2
+  train_start_idx: 0
+  n_test: 50
+  n_test_vis: 4
+  test_start_seed: 100000
+  # use python's eval function as resolver, single-quoted string as argument
+  max_steps: ${eval:'500 if "${task.dataset_type}" == "mh" else 400'}
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  render_obs_key: 'agentview_image'
+  fps: 10
+  crf: 22
+  past_action: ${past_action_visible}
+  abs_action: *abs_action
+  tqdm_interval_sec: 1.0
+  n_envs: 14
+
+dataset:
+  _target_: diffusion_policy.dataset.multiview_image_dataset.MultiViewImageDataset
+  shape_meta: *shape_meta
+  dataset_path: *zarr_path
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  abs_action: *abs_action
+  # M3 mode: K slots filled from view_pool, plus cam/mask/history keys
+  view_pool: *train_view_pool
+  view_count_range: *view_count_range
+  eef_hist_steps: *eef_hist_steps
+  seed: 42
+  val_ratio: 0.02

@@ -60,14 +60,18 @@ Each step lands as new files, has an experiment gate before proceeding, and keep
 
 - **M2 — Multi-view data with camera poses.** ✅ **DONE (2026-09-15) — all three tasks rendered and verified; see `PROGRESS.md` §7** (results, verification, and two findings that change M3's design). New files: `generate_multiview_dataset.py`, `diffusion_policy/dataset/multiview_image_dataset.py`, `tests/test_multiview_dataset.py` (CPU-only, passes locally), `config/task/{square,can,lift}_image_abs_multiview.yaml`. Original plan: re-renders each demo (subsampled steps) at N camera poses via stored mujoco `states` + `env.reset_to({'states': s})` + camera move + render; stores per-view images + per-view camera params (pose, fovy → intrinsics; extrinsics from pose) + per-view camera-frame actions (base-frame actions transformed by extrinsics) in a new zarr. New dataset class mirroring `RobomimicReplayImageDataset`. *Seam:* new shape_meta obs types (e.g. `camera`) need small branches in dataset + encoder key-classification loops (currently `rgb`/`low_dim` only). *Gate:* rendered views look right; N=1 training reproduces the single-view baseline. Verified locally (no rendering): dataset schema/sampling/normalizers/camera-parameter round-trip and config composition. To verify on the render box, each generation run prints gate 1 (az_0 re-render vs the hdf5's stored image — catches a wrong `[::-1]` flip), gate 2 (gripper projection through the derived intrinsics/extrinsics) and gate 3 (ring montage).
 - **L1 — view-randomized single-slot baseline ("view diversity only").** ✅ **DONE, all three tasks (2026-09-17).** M1's *exact* architecture with its one camera slot filled per sample from a randomly drawn training view (7 of the 13 ring poses; the odd azimuths ±15/±45/±75 are never trained on). **The effect is task-dependent in both directions:** on **lift** it *solves* the problem — 0.76–0.96 success at every viewpoint out to ±75° where M1 collapses to 0.08/0.00 — while on **square and can** it is catastrophic (≤0.08 everywhere, including poses it trained on, where M1 scores 0.82/0.98). What separates lift from square/can is **not identified**; the leading hypothesis (lift needs no goal-directed placement, so less precise visual localization) has one task per side, and a scene-complexity confound can't be ruled out. Full tables and stated limits in `PROGRESS.md` §8. **Consequence for M3: it must win on square/can, and explain why lift didn't need it.**
-- **M3 — View-conditioned encoder + fusion.** 🔵 **IN PROGRESS (2026-09-17).** New `ViewConditionedObsEncoder` in `model/vision/` (same dict-in → 1-D-out contract as `MultiImageObsEncoder`): shared backbone; per-view conditioning = Plücker map (channel-concat or feature embedding) + camera-frame action-history embedding; fusion = small transformer/cross-attention over per-view features that supports N=1. *Gate:* multi-view training ≈ stock 2-view DP at original views. **Required ablation: conditioning-off** (the only remaining control that holds capacity constant).
-- **M4 — Per-view aux heads.** New policy subclass (e.g. `DiffusionUnetImagePolicyAux`): encoder exposes per-view latents + fused latent (small interface extension, e.g. `forward_full`); per-view MLP head predicts the camera-frame action chunk; aux loss added in a `compute_loss` override. Workspace untouched (single optimizer covers all params). *Gate:* aux loss improves novel-view generalization; ablations: conditioning on/off, aux on/off.
-- **M5 — Single-novel-view inference (+ optional distillation).** Fusion already supports N=1; at eval the novel camera pose is known from the sim, so Plücker maps + action-history transforms are computed for the novel view. Optional teacher→student distillation (single-view encoder regresses the multi-view fused latent). *Gate:* final sweep tables vs the Milestone 1 baseline curves.
+- **M3 — View-conditioned encoder + fusion.** 🟡 **CODE COMPLETE, CPU-VERIFIED, NOT YET TRAINED (2026-09-18).** `ViewConditionedObsEncoder` in `model/vision/` (same dict-in → 1-D-out contract as `MultiImageObsEncoder`, so it swaps in through config and the policy and training loop are untouched — M3 adds **no new loss**): one shared resnet18 whose `conv1` is widened 3→9 to take the image ‖ Plücker map, per-view **AdaGN/FiLM** modulation from the camera-frame EE-pose history, and fusion by `nn.MultiheadAttention` with a learnable query over the view tokens (supports N=1). Also new: the dataset's M3 mode, the eval-harness key-serving path, `CamKeyImageRunner` for rollouts, and `preview_viewpoints.py`. **Two scope additions beyond the spec below, decided after it was written:** the EE history is conditioned via AdaGN (PROPOSAL §2.1's "modulated by two conditions", read literally), and **N is randomized per sample** so the N=1 setting M5 needs is in distribution. `output_shape() == (521,)` is unchanged and now enforced against the stock encoder, with all 148 UNet parameter tensors verified shape-identical. Full state, the 16-section CPU test, the eight bugs caught, and what remains unproven: `PROGRESS.md` §10. **The 9-run matrix and its gates are §10.6.** **Required ablation: conditioning-off** — now a 2×2 over both signals, parameter-identical between cells.
+- **M4 — Per-view aux heads.** New policy subclass (e.g. `DiffusionUnetImagePolicyAux`): encoder exposes per-view latents + fused latent (small interface extension, e.g. `forward_full`); per-view MLP head predicts the camera-frame action chunk; aux loss added in a `compute_loss` override. Workspace untouched (single optimizer covers all params). *Gate:* aux loss improves novel-view generalization; ablations: conditioning on/off, aux on/off. *(Its hooks exist: the encoder already keeps per-view latents separate before fusion, and the camera-frame action transform M4 needs is `eef_hist_to_cam` in `multiview_image_dataset.py`.)*
+- **M5 — Single-novel-view inference (+ optional distillation).** Fusion already supports N=1 **and M3 is trained with randomized N precisely so this works**; at eval the novel camera pose is known from the sim, and `eval_novel_view.py --m3-slots K` already publishes the perturbed pose into the slot's cam key. Optional teacher→student distillation (single-view encoder regresses the multi-view fused latent). *Gate:* final sweep tables vs the Milestone 1 baseline curves.
 
 ## M3 design spec — ViewConditionedObsEncoder
 
-Implements PROPOSAL.md §2 steps 1–2. **Status: specified, not yet working** (see
-`PROGRESS.md` §9 for the honest state of the draft code).
+Implements PROPOSAL.md §2 steps 1–2. **Status: IMPLEMENTED and CPU-verified, not
+yet trained** — this spec is now the design record; `PROGRESS.md` §10 has the
+implementation state, the parameter counts, the eight bugs caught before the run,
+and what remains unproven. Two deviations from the text below were decided after
+it was written and are marked inline: the EE history is conditioned by **AdaGN**,
+and **N is randomized per sample**.
 
 ### Interface contract (why this is a small change)
 
@@ -88,11 +92,21 @@ view_1: image ─┤                                                     │
 ```
 
 - **Per view**: image (3ch) concatenated with its **Plücker ray map** (6ch) →
-  shared resnet18 whose `conv1` is widened from 3 to 9 input channels (the
-  pretrained RGB filters are copied into the first 3). Output `z_v` (512-d).
+  shared resnet18 whose `conv1` is widened from 3 to 9 input channels. Output
+  `z_v` (512-d). *(Correction: the config uses `weights: null`, so the resnet is
+  randomly initialised — there are no pretrained RGB filters to copy, and the
+  copy step is vestigial. It is kept so an `IMAGENET1K_V1` config would work
+  unchanged, but it buys nothing today.)*
+- **Modulation (added after this spec)**: `z_v`'s computation is additionally
+  **modulated** by the camera-frame EE-pose history via AdaGN/FiLM at each
+  residual stage — PROPOSAL §2.1's second condition, read literally. The FiLM
+  heads are zero-init so training starts unconditioned.
 - **Fusion**: `nn.MultiheadAttention` over the N view tokens with a single
   **learnable query** → `z_g` (512-d). Degenerates correctly at N = 1, which is
-  what makes M5's single-novel-view inference work.
+  what makes M5's single-novel-view inference work. **N is randomized per sample
+  over `[1, K]`** (added after this spec) so that the N=1 case is in
+  distribution rather than a shift — the slots stay fixed in number and a
+  `view_mask` marks the live ones, so batches remain rectangular.
 - **Output**: `[z_g | lowdim keys]`, matching the stock layout.
 
 ### The matched-capacity property (important)
@@ -102,6 +116,13 @@ M1/L1's. So M3 and M1 differ in *training distribution and conditioning*, **not 
 downstream capacity** — the UNet's `cond_dim` is identical. Without this, any M3
 gain would be confounded with simply feeding the UNet a wider conditioning
 vector.
+
+**Measured, not asserted** (`PROGRESS.md` §10.2): `output_shape() == (521,)` for
+all four flag combinations, `global_cond_dim == 1042`, and building both UNets
+shows **all 148 parameter tensors shape-identical** — exactly the twelve
+`cond_encoder.1.weight` matrices depend on this width. Scope limit worth stating
+plainly: this is *downstream* capacity. The encoder itself grows 11,176,512 →
+12,532,928 params (+12.14%), which is 0.47% of the total model.
 
 ### Camera-parameter plumbing
 
@@ -114,42 +135,78 @@ Passing them per-sample (rather than as a fixed per-slot buffer) is deliberate:
 at test time the camera sits at a *novel* pose, so the pose cannot be baked in at
 construction. Required changes:
 
-- **Dataset** (`multiview_image_dataset.py`): optionally emit `view_XX_cam` keys
-  from the existing `camera_params` property (already validated by M2's gate 2).
-- **Eval** (`eval_novel_view.py`): emit the *perturbed* pose as the cam key. The
-  harness already computes it in `ViewpointImageWrapper._apply_viewpoint`, so it
-  knows the answer; it just has to publish it into the obs dict.
+- **Dataset** (`multiview_image_dataset.py`): ✅ emits the cam keys from
+  `camera_params` (already validated by M2's gate 2), plus `view_mask` and the
+  camera-frame `view_eef_hist`.
+- **Eval** (`eval_novel_view.py`): ✅ `--m3-slots K` publishes the perturbed pose
+  as the cam key. It is read **back from the sim** (`sim.model.cam_pos/cam_quat/
+  cam_fovy`) rather than recomputed from the viewpoint spec, so the published
+  pose is guaranteed to be the one that rendered the frame.
+
+  One addition this spec did not anticipate: the env-side `shape_meta` must be
+  **reduced** to the single rgb key robosuite actually renders, because
+  `create_env` builds robomimic's obs-modality mapping from it and
+  `EnvRobosuite.get_observation` would otherwise try to emit 7 cameras. The
+  wrapper supplies the other slots itself.
 
 ### Required ablation
 
-`use_plucker=False` drops the ray-map channels, keeping everything else — same
-N views, same `fused_dim`, same capacity. **This is the only remaining control
-for attributing an M3 gain to conditioning rather than to having more slots**
-(the K-slot unconditioned variant was dropped). It is a constructor flag, so the
-ablation costs one config, not one code path.
+Two flags, so the control is a **2×2** rather than a single off-switch:
+`use_plucker` (the ray-map channels) and `use_eef_hist` (the AdaGN modulation).
+All four cells have **identical parameter counts** (12,532,928 — verified), so
+each cell differs from another only in the conditioning signal it receives.
+`use_plucker=False` keeps the widened `conv1` and feeds zeros, which drives the
+gradient into those 6 channels to *exactly* 0.0.
+
+The two single-signal cells are what answer PROPOSAL §7's own question ("do the
+per-view auxiliary heads need the camera-frame action history as *conditioning*
+as well as the Plücker map, or is one of the two sufficient?"). **The
+`M3-off` cell carries the attribution** — M3-on vs L1 conflates "variable
+multi-view" with "conditioning".
 
 ### Gates
 
 1. **N=1 sanity**: one view + its pose should roughly reproduce the M1/L1 single
-   view result. A large gap means the Plücker path is corrupting the image path.
+   view result. A large gap means the Plücker or FiLM path is corrupting the
+   image path. Run **before** the bulk — it is the cheapest way to avoid
+   spending ~15 h on a broken encoder.
 2. **The headline**: 7 views on **square** (where view randomization alone fails,
-   ≤0.08). Conditioning-on must beat conditioning-off there.
+   ≤0.08). Conditioning-on must beat conditioning-off there, and the square 2×2
+   is read *before* committing to the can and lift runs.
 3. **Lift control**: lift is already solved by the conditioning-free baseline
-   (0.76–0.96 across ±75°), so M3 should *not* be headlined on lift.
+   (0.76–0.96 across ±75°), so M3 should *not* be headlined on lift — one M3-on
+   run there is a regression check, not a result.
+
+Full ordering, the preflight, and the elevation sweep: `PROGRESS.md` §10.6.
 
 ### Open risks
 
-- **Crop alignment.** The stock encoder random-crops 76×76 from 84×84. The
-  Plücker map must be cropped with the *identical* window or the conditioning
-  desynchronises from the pixels. The draft does this itself for that reason
-  (it cannot use `CropRandomizer`, which returns no offsets).
-- **Novel-pose eval is the real integration risk**, not the encoder: the harness
-  must publish the perturbed pose, and `robomimic`'s obs-modality mapping has
-  already bitten this project twice (see `PROGRESS.md` §7.4).
-- **Action-history conditioning** (PROPOSAL §2.1, second condition) is *not* in
-  this spec. Staging it after the Plücker path works keeps the first experiment
-  interpretable; it is M4-adjacent and shapes the per-view interface.
+- ~~**Crop alignment.**~~ **Resolved and verified.** The encoder samples the crop
+  offsets once and applies them to both the image and its Plücker map (the stock
+  `CropRandomizer` cannot be used — its `forward_in` discards the offsets,
+  `crop_randomizer.py:88`). Checked exactly by spying on the offsets, and the
+  eval path's `(4,4)` offset reproduces `torchvision.center_crop`.
+- **Novel-pose eval is the real integration risk**, not the encoder — and it
+  remains unproven. The harness now publishes the perturbed pose *and* must
+  reduce the env-side `shape_meta` to one rgb key; `robomimic`'s obs-modality
+  mapping has already bitten this project twice (§7.4). Implemented, never
+  executed (`PROGRESS.md` §10.5).
+- ~~**Action-history conditioning** is *not* in this spec.~~ **Now in.** It is
+  implemented as **AdaGN** modulation of the backbone rather than as extra input
+  channels: the history is a global vector, so modulation is the path that
+  matches its shape, and a channel broadcast would be spatially constant. This
+  does mean the "first experiment interpretable" staging is gone — mitigated by
+  the 2×2, which isolates each signal's contribution.
+- **New risk, introduced by randomization:** because N varies per sample, the
+  dataset must read all K slot arrays, so the IO saving that a fixed single-slot
+  config would get is not available. Bounded and measured in §7.5 terms (≈13 ms
+  cold per sample; the store fits in page cache).
 
 ## Out of scope for now
 
-ACT, mujoco pipeline (incl. `mujoco_image_dataset.py` normalizer bug), and any M2–M5 coding until the baseline is done and reviewed.
+ACT, and the mujoco pipeline (incl. the `mujoco_image_dataset.py` normalizer bug
+noted in `CLAUDE.md`).
+
+*(The line that used to sit here — "any M2–M5 coding until the baseline is done
+and reviewed" — is discharged: M1/L1 are done, M2 is done, and M3 is coded.
+M4 and M5 remain uncoded and are staged behind M3's results.)*

@@ -1,6 +1,6 @@
 # PROGRESS
 
-Last updated: 2026-09-17. See `PROPOSAL.md` (research direction) and `PLAN.md`
+Last updated: 2026-09-18. See `PROPOSAL.md` (research direction) and `PLAN.md`
 (milestones M1–M5).
 
 **M1 is COMPLETE.** Single-view DP baselines were trained for can, lift, and
@@ -13,7 +13,15 @@ machine, and the novel-view degradation curves were measured at azimuth
 by the N=1 gate (§8.5). **L1 (the view-randomized baseline) is COMPLETE** across
 all three tasks (§8, 2026-09-17): its effect is task-dependent in *both*
 directions — it solves lift outright and destroys square/can — which is now M3's
-motivation. Next: **M3**, the view-conditioned encoder.
+motivation.
+
+**M3 (view-conditioned encoder) is CODE COMPLETE AND CPU-VERIFIED, NOT YET
+TRAINED** (§10, 2026-09-18). The encoder, the dataset seam, the eval-harness
+seam, the rollout runner and the configs exist; a 16-section CPU test passes,
+including proof that the UNet stays shape-identical to the baseline's. **Nothing
+has been run against the simulator**: the rollout runner and the eval serving
+path have never executed (§10.5). The 9-run training matrix and its gates are
+§10.6.
 
 ---
 
@@ -130,8 +138,11 @@ Timings on this box (idle; fp32, no AMP — the workspace has none):
 - rollout ~2–3 min (28 envs, 56 episodes); epoch-0 rollout is the worst case
 - full sweep ~18 min (5 viewpoints × 50 episodes)
 - checkpoint = 4.62 GB (policy + EMA + Adam state); `topk.k=1` + latest ≈
-  9.2 GB/run. Root disk is 97–100% full — check `df -h` before running more.
-  `/data` (15 TB) exists but is owned by another user and not writable.
+  9.2 GB/run — so the 9 M3 runs need ~83 GB, which is why `df -h` is step 0 of
+  the M3 preflight (§10.6). **At M1 time the root disk was 97–100% full**; as of
+  2026-09-18 there is reported headroom, but that is a report, not a measurement —
+  re-check before starting. `/data` (15 TB) exists but is owned by another user
+  and not writable.
 
 ## 4. Verified environment facts (all checked by running)
 
@@ -175,19 +186,27 @@ Timings on this box (idle; fp32, no AMP — the workspace has none):
 
 ## 6. Not yet done / next
 
-- **M3 — view-conditioned encoder + fusion. IN PROGRESS.** Built per PROPOSAL.md
-  §2: a shared encoder modulated by a Plücker ray map and the camera-frame action
-  history, fused over view tokens, feeding the *existing* base-frame diffusion
-  head (no change to `DiffusionUnetImagePolicy`; the encoder is injected via
-  `cfg.policy.obs_encoder`). Design decisions recorded in §9 as they land.
-- **M3's ablation table must include conditioning-off.** With the K-slot
-  unconditioned variant dropped, this is the only control that holds capacity
-  constant while varying the pose signal — without it an M3 gain cannot be
-  attributed to conditioning rather than to simply having more slots.
-- **Can's sweep** is finishing; its numbers drop into §8.3 when done.
-- Open questions M3 must answer: fusion module choice, and whether the aux heads
-  need camera-frame action history as *conditioning* in addition to the Plücker
-  map (nominally M4's question, but it shapes M3's per-view interface).
+- **M3 — view-conditioned encoder + fusion. CODE COMPLETE, CPU-VERIFIED, NOT
+  YET TRAINED** (§10, 2026-09-18). Design in PROPOSAL.md §2 implemented as a
+  drop-in obs encoder injected via `cfg.policy.obs_encoder`, so
+  `DiffusionUnetImagePolicy` and the training loop are untouched and M3 adds
+  **no new loss**. Two scope additions were decided after PLAN.md's spec was
+  written: the camera-frame EE history is conditioned via **AdaGN/FiLM**
+  (PROPOSAL §2.1's "modulated by two conditions", read literally), and **N is
+  randomized per sample** so the N=1 setting M5 needs is in distribution.
+- **Next: the 9-run training matrix and its gates** (§10.6). Square 2×2 + can
+  2×2 + lift M3-on, seed 42. The conditioning-off cell (`use_plucker=False`,
+  `use_eef_hist=False`) is the control that carries the attribution — M3-on vs
+  L1 alone conflates "variable multi-view" with "conditioning".
+- **M4 (per-view aux heads)** and **M5 (single-novel-view inference +
+  distillation)** are not started. The encoder's per-view interface and the
+  eval harness's pose-publishing path (§10.1) are the hooks they need, and both
+  exist.
+- Open questions M3 must answer once trained: whether *either* conditioning
+  signal suffices or both are needed (PROPOSAL §7's own question — the 2×2's two
+  single-signal rows answer it), and how far the method extrapolates off the
+  training manifold (the elevation sweep, since azimuth past ±90° is useless —
+  see §10.6).
 
 ## 7. M2 — multi-view data (DONE 2026-09-15)
 
@@ -256,6 +275,20 @@ Two PROGRESS estimates were wrong and are corrected here:
   wipes the store. Hence the driver wipes each output before starting.
 
 ### 7.4 Prerequisites for the N=1 gate (built, verified, not yet run)
+
+> **Correction (2026-09-18, found while building M3):** the config below claimed
+> rollouts were disabled by `training.rollout_every > num_epochs`. That is
+> **false** — the workspace tests `epoch % rollout_every == 0`
+> (`train_diffusion_unet_image_workspace.py:218`), which is true at epoch 0, so
+> the first rollout fires and dies with `KeyError: 'view_06_image'` because the
+> stock runner cannot serve that key. The config comment is now corrected and
+> gives the overrides that actually disable rollouts
+> (`training.rollout_every=1000000` **plus**
+> `checkpoint.topk.monitor_key=val_loss checkpoint.topk.mode=min`, the second
+> flag being necessary because `TopKCheckpointManager` does an unguarded
+> `data[monitor_key]` lookup). This gate is in any case **superseded** by
+> `config/task/m3_plucker_image_abs_n1.yaml`, which runs the same single-view
+> check through the M3 encoder with a runner that can serve the slots.
 
 - `diffusion_policy/config/task/single_view_image_abs_multiview.yaml` — one view
   (`view_06_image`) of the multi-view zarr. Because the multiview configs route
@@ -629,3 +662,201 @@ L1's. That is what lets M3 differ from the baselines in *training distribution a
 conditioning* rather than in downstream capacity — and `use_plucker=False` is the
 constructor flag that isolates conditioning at matched capacity. Losing that
 property would make the headline comparison uninterpretable.
+
+*(Superseded in detail — §10.3: `use_plucker=False` now *keeps* the widened
+conv1 and feeds zeros rather than dropping the channels, which makes the
+ablation parameter-**identical** rather than merely comparable. Same property,
+stronger form.)*
+
+---
+
+## 10. M3 — view-conditioned encoder (CODE COMPLETE, CPU-VERIFIED, NOT YET TRAINED)
+
+**Status: written and verified on CPU; nothing has run against the simulator.**
+The distinction is the whole point of this section: §9 recorded a session whose
+draft code did not work and was deleted. This one works — but "works on CPU" is
+not "works", and §10.5 lists exactly what remains unproven.
+
+### 10.1 What was built
+
+| File | |
+|---|---|
+| `diffusion_policy/model/vision/plucker.py` | Plücker ray maps (torch only, no simulator import) |
+| `diffusion_policy/model/vision/view_conditioned_obs_encoder.py` | `ViewConditionedObsEncoder` — drop-in for `MultiImageObsEncoder` |
+| `diffusion_policy/env_runner/cam_key_image_runner.py` | `CamKeyImageRunner` + `CamKeyImageWrapper` for training rollouts |
+| `diffusion_policy/config/task/m3_plucker_image_abs_multiview.yaml` | K=7 training task |
+| `diffusion_policy/config/task/m3_plucker_image_abs_n1.yaml` | the N=1 fidelity gate |
+| `diffusion_policy/config/train_diffusion_unet_image_workspace_m3.yaml` | workspace with `policy.obs_encoder._target_` swapped |
+| `tests/test_view_conditioned_obs_encoder.py` | 16-section CPU test |
+| `preview_viewpoints.py` | renders candidate eval viewpoints to a montage + coverage numbers |
+
+Edited: `dataset/multiview_image_dataset.py` (M3 mode: cam table, per-sample view
+draw, mask, camera-frame EE history, identity normalizers), `eval_novel_view.py`
+(`--m3-slots`/`--eef-hist-steps`, serves the slot/cam/mask/history keys, an
+elevation **orbit**, `elevation_az0` preset), `summarize_novel_view.py` (sort key
+for `el_*` names), and the `single_view_image_abs_multiview.yaml` comment (§7.4).
+
+**No upstream package file was modified.** All three edited files were themselves
+added by this fork — `git log --diff-filter=A` gives `multiview_image_dataset.py`
+ce94279 (M2), `eval_novel_view.py` fa2965f (M1), the M2 config 7205ad8.
+
+### 10.2 What was verified on CPU (not assumed)
+
+`python tests/test_view_conditioned_obs_encoder.py` → **ALL VIEW-CONDITIONED
+ENCODER CHECKS PASSED**, 16 sections. In rough order of how much they buy:
+
+- **Plücker convention to 6.66e-16**, over 360 pixel centres at three
+  **non-identity** camera poses, with the moment at 2.22e-16 and grid alignment
+  0.355° against a 1-pixel bound of 0.565°. Anchored to `project_world_to_pixel`,
+  the numpy projector M2's gate 2 validated against the simulator — not to the
+  torch code itself.
+- **Five mutation power checks**, all caught (R.T / no-rotation 0.62, −R 1.98,
+  flipped y row 1.44, xyzw-not-wxyz 1.59, +z-forward-not−z 1.80). This is §9.2's
+  lesson made executable: *a convention check that cannot fail proves nothing*,
+  and the deleted draft's check was itself wrong. A test with an **identity**
+  camera would have been vacuous (`R == Rᵀ == I`), so all poses are non-identity.
+- **Matched capacity, end to end**: `output_shape() == (521,)` for all four
+  ablation-flag combinations, `global_cond_dim == 1042`, and — the strongest
+  form — **all 148 `ConditionalUnet1D` parameter tensors shape-identical to a
+  stock-encoder policy's**, by building both UNets and diffing `state_dict`.
+  Exactly the 12 `cond_encoder.1.weight` matrices depend on this width.
+- **Both ablations are exact, and parameter-identical**: the two flag
+  combinations both instantiate **12,532,928** parameters, `use_plucker=False`
+  drives the gradient into the 6 ray channels to *exactly* 0.0, and
+  `use_eef_hist=False` provably ignores the history tensor.
+- **Crop alignment**: image and Plücker map share one sampled window (verified
+  exactly by spying on the offsets), and the eval path's `(4,4)` offset
+  reproduces `torchvision.center_crop`.
+- **N path**: K=1 and K=7 both forward; the fusion is permutation-invariant
+  (3e-7), which the per-sample view shuffle depends on.
+- **Dataset → encoder pairing**: each slot's camera vector and EE history belong
+  to the *same view whose image is in that slot*, recovered from the
+  deterministic render rather than assumed. A swapped cam key would otherwise
+  train happily and show up only as a mysteriously weak result.
+- Config consistency: both M3 configs resolve, and the slot count and
+  `eef_hist_steps` agree across the dataset, the encoder and the runner.
+
+Parameter budget (measured): stock encoder 11,176,512; M3 encoder 12,532,928
+(**+12.14%**, of which the fusion MHA is 1,050,624 and the widened `conv1`'s 6
+extra channels 18,816); UNet 277,632,138. So the M3 encoder is **0.49% of the
+UNet**, and the whole model grows **+0.47%** over M1/L1.
+
+### 10.3 Design decisions worth keeping
+
+- **The cam keys, the mask, the EE history — and the extra view slots — all live
+  OUTSIDE `shape_meta`.** Two independent reasons: `create_env` builds
+  robomimic's obs-modality mapping from `shape_meta`, so a `cam` key makes
+  `EnvRobosuite.get_observation` look for a sensor that does not exist and
+  `RobomimicImageWrapper.__init__` raises on the key suffix; and with 7 rgb keys
+  in `shape_meta` the rollout env would demand 7 cameras, which is exactly why
+  the M2 13-view configs disable rollouts. Keeping M3's `shape_meta` at **one**
+  rgb key (L1's trick) is what lets M3 keep training rollouts at all.
+- **Non-image keys get IDENTITY normalizers, registered explicitly.** Mandatory —
+  the policy normalizes every key present and `LinearNormalizer` hard-looks-up
+  `params_dict[key]` — but they must not be *fitted*: under `mode='limits'` a
+  constant dim maps to 0, which would silently destroy a novel camera pose at
+  eval. The tables must be float32 (`_normalize` casts to the scale's dtype and
+  `create_manual` does not cast).
+- **N is randomized per sample** over `[1, K]`, with the slot count fixed at K
+  and a `view_mask` marking the live ones, so the batch stays rectangular and the
+  encoder gathers only active views. This makes the N=1 setting that M5, the
+  N=1 gate and every rollout run at *in distribution* rather than a shift.
+- **AdaGN walks the resnet's submodules explicitly** (`conv1, bn1, relu,
+  maxpool, layer1..4, avgpool`) instead of calling torchvision's `forward`, which
+  has no conditioning input and would force hooks or module-level state. The
+  FiLM heads are zero-init, so training starts unconditioned and the
+  conditioning-off ablation is exact.
+- **`use_plucker=False` keeps the 9-channel `conv1` and feeds zeros.** Verified
+  to give exactly-zero gradient into those channels and numerically identical
+  conv output to a 3-channel `conv1` on the image part — so the two variants stay
+  parameter-identical (above) and the ablation is exact rather than approximate.
+- Matched capacity is **downstream** capacity. The encoder does grow by 12.14%
+  (0.47% of the total model); what is held fixed is the width the UNet sees.
+
+### 10.4 Bugs caught before the run (all silent-degradation class)
+
+None of these crashed. Each would have produced a plausible-looking number.
+
+1. **`keepdim=True` on the quaternion normalisation** produced a `(3,3,1)`
+   rotation matrix instead of `(3,3)` — *the same bug family as §9.2*, caught by
+   a shape assertion rather than by a wrong-looking result.
+2. **`reshape(3,-1)` folded a leading view dim into the channel axis**, so
+   per-view fovys silently mis-batched.
+3. **A shadowed `rows` index** in the slot gather broke the row-major
+   correspondence between the gathered views and their mask/history.
+4. **The EE-history flatten dim** was allocated per-step instead of flattened,
+   which would have thrown — but only at the first batch.
+5. **Two crop-offset sharing mistakes**, i.e. cropping the image and the ray map
+   with different windows: precisely the desynchronisation the design exists to
+   avoid.
+6. **`torch.cat` on a 0-dim tensor** for a scalar fovy.
+7. **A normalisation asymmetry**: the numpy `quat_wxyz_to_mat` did not normalise
+   while the batched and torch versions did. Found because a test fed a quaternion
+   that was unit only to float precision and the look-at point landed 3.5e-6 px
+   off centre. All three now normalise. (`_look_at_quat` itself returns a
+   **float32** quaternion via robosuite's `mat2quat`, worth ~3e-8 rad ~ 3e-6 px
+   of centring error; this is pre-existing, affects the committed M1/L1 sweeps
+   identically, and was deliberately NOT changed — perturbing geometry that
+   already produced committed results costs comparability for no measurable gain.)
+8. **The M2 N=1 gate config's false claim** that rollouts were disabled (§7.4).
+
+### 10.5 What is NOT verified — read before the run
+
+- **The rollout runner (`cam_key_image_runner.py`) and the eval-harness serving
+  path have never executed.** There is no robosuite, no zarr and no checkpoint on
+  the dev laptop. They are import-checked and the structural requirements are
+  verified (`CamKeyImageWrapper.__mro__` confirms the `isinstance` asserts in
+  `init_fn` hold; `spaces.Dict.__setitem__` exists on gym 0.21; gym's
+  shared-memory writer does not clip or validate Box bounds, so only shape and
+  dtype matter) — but **no rollout has ever run through them**. This is the top
+  risk in the milestone, and it is why step 0 of §10.6 is what it is.
+- All dataset verification used the **synthetic** zarr of
+  `tests/test_multiview_dataset.py`, not a real generated store.
+- `preview_viewpoints.py`'s render path is likewise unexecuted (it imports
+  cleanly; its pure helpers — viewpoint resolution, `scene_coverage` — are
+  tested).
+- The **epoch cost is an estimate**, not a measurement (§10.6).
+
+### 10.6 The training matrix and its gates
+
+Nine runs, seed 42, batch 64, 201 epochs, identical shape/optimiser settings to
+M1/L1. Cells differ only by CLI override, so the only variable is conditioning.
+**M3-off carries the attribution** — M3-on vs L1 conflates "variable multi-view"
+with "conditioning" and must not be quoted alone.
+
+| run dir | task | Plücker | EE-hist FiLM | isolates |
+|---|---|---|---|---|
+| `run_{square,can}_m3off_s42_200ep` | square, can | off | off | the "more slots / variable N" effect |
+| `run_{square,can}_m3plucker_s42_200ep` | square, can | **on** | off | the geometry effect |
+| `run_{square,can}_m3eef_s42_200ep` | square, can | off | **on** | the camera-frame motion effect |
+| `run_{square,can}_m3on_s42_200ep` | square, can | **on** | **on** | the headline |
+| `run_lift_m3on_s42_200ep` | lift | **on** | **on** | regression: do not break what L1 solved |
+
+Gates, in order:
+0. **Preflight on the box** — both CPU suites pass there, the three zarrs exist,
+   `df -h`, then `preview_viewpoints.py --preset elevation_az0` and *look at the
+   montage*. A viewpoint set that cannot see the scene produces a
+   plausible-looking curve, so this is checked before any sweep.
+1. **1-epoch timing run** — replaces the §10.5 cost estimate with a measurement.
+2. **N=1 gate** (`m3_plucker_image_abs_n1.yaml`, square) — must roughly
+   reproduce M1/L1's az_0 result. If it does not, the Plücker or AdaGN path is
+   corrupting the image path, and that must be found before ~15 h of runs.
+3. **Square 2×2 → sweep → read it** before spending the remaining ~7 h.
+
+Evaluation: `azimuth_interp` (11 viewpoints, ±75°, all 9 checkpoints — az_0/±30
+coincide with M1, keeping the comparison exact) plus `elevation_az0` (3
+viewpoints, 0/±15°). **Elevation, not azimuth, is how extrapolation is tested:
+azimuth past ±90° was rejected because those views "can hardly see robot and
+table", matching §7.1's montage finding.** The elevation viewpoints are an
+**orbit** about the look-at point, not the harness's existing `elevation_deg`
+pitch — the pitch swings the scene out of frame, which is the opposite of the
+requirement. ±30° elevation was considered and dropped for the same reason.
+
+`eval_novel_view.py --m3-slots 7` reduces the env-side `shape_meta` to the single
+renderable key and serves the perturbed pose into slot 0, i.e. an **N=1**
+inference — M5's setting, and in distribution because N was randomized during
+training.
+
+Stated follow-ups, deferred so the headline 2×2 stays L1-comparable: a **±60°
+training pool** (how much does view *quality* alone buy?) and a **smaller K**
+(PROPOSAL §7's "how much view diversity is needed", one config line).

@@ -22,19 +22,30 @@ import click
 # test/<viewpoint>/<metric>
 LOG_KEY_PATTERN = re.compile(r'^test/(?P<vp>[^/]+)/(?P<metric>mean_score|success_rate)$')
 # azimuth_sweep5 names: az_0, az_p15, az_m15, az_p30, az_m30
+# azimuth_sweep5 names: az_0, az_p15, az_m15, az_p30, az_m30
 AZ_PATTERN = re.compile(r'^az_(?P<sign>[pm])?(?P<deg>\d+)$')
+# elevation_az0 names: el_0, el_p15, el_m15
+EL_PATTERN = re.compile(r'^el_(?P<sign>[pm])?(?P<deg>\d+)$')
 
 
 def viewpoint_sort_key(name):
-    """az_0 first, then by |angle|, negatives before positives at equal angle."""
-    match = AZ_PATTERN.match(name)
-    if match is None:
-        return (1, 0.0, 0, name)
-    deg = float(match.group('deg'))
-    sign = match.group('sign')
-    if sign is None:
-        return (0, 0.0, 0, name)
-    return (0, abs(deg), 0 if sign == 'm' else 1, name)
+    """az_* by |angle|, then el_* by |elevation|, then anything else.
+
+    Within a group the zero offset comes first, then increasing magnitude, and
+    negatives before positives at equal magnitude. Without the el_ branch the
+    elevation rows fall into the catch-all and sort alphabetically
+    (el_0, el_m15, el_p15), which reads as noise rather than a sweep.
+    """
+    for group, pattern in enumerate((AZ_PATTERN, EL_PATTERN)):
+        match = pattern.match(name)
+        if match is None:
+            continue
+        deg = float(match.group('deg'))
+        sign = match.group('sign')
+        if sign is None:
+            return (group, 0.0, 0, name)
+        return (group, abs(deg), 0 if sign == 'm' else 1, name)
+    return (2, 0.0, 0, name)
 
 
 def load_log(path):

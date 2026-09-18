@@ -38,9 +38,19 @@ env_runner:
   dataset_path: *hdf5_path
   shape_meta: *shape_meta
   # NOTE: this runner builds obs from shape_meta and the live env only renders
-  # `agentview_image`, so it cannot serve `view_06_image`. Rollouts are
-  # therefore disabled (training.rollout_every > num_epochs) and evaluation
-  # goes through:
+  # `agentview_image`, so it CANNOT serve `view_06_image`. Setting
+  # rollout_every above num_epochs does NOT disable rollouts: the workspace
+  # tests `epoch % rollout_every == 0`, which is true at epoch 0, so the first
+  # rollout fires and the env dies with KeyError on `view_06_image`.
+  #
+  # Superseded by config/task/m3_plucker_image_abs_n1.yaml, which runs the same
+  # single-view gate through the M3 encoder with a runner that CAN serve the
+  # slots. To use THIS config as-is, disable rollouts on the command line --
+  # both flags are needed, because the topk manager does an unguarded
+  # `data[monitor_key]` lookup and would KeyError once no rollout runs:
+  #   training.rollout_every=1000000 \
+  #   checkpoint.topk.monitor_key=val_loss checkpoint.topk.mode=min
+  # Evaluation then goes through:
   #   python eval_novel_view.py -c <ckpt> -o <out> --serve-obs-key view_06_image
   # which aliases the rendered camera image under the key the policy expects.
   n_train: 6
