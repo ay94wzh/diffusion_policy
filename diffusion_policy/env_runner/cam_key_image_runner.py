@@ -74,6 +74,15 @@ class CamKeyImageWrapper(RobomimicImageWrapper):
                 low=-np.inf, high=np.inf,
                 shape=(self.m3_slots, EEF_HIST_STEP_DIM * self.eef_hist_steps),
                 dtype=np.float32)
+            # ...and now DROP the render key, which exists only so create_env
+            # can build robomimic's obs-modality mapping. It must not reach the
+            # policy: predict_action normalizes every key of the obs dict and
+            # the M3 normalizer has no entry for it, so leaving it in would
+            # raise on the first rollout. Deleting from the *space* (not from
+            # the returned dict) is what stops MultiStepWrapper collecting it.
+            # render_cache -- and therefore video -- is unaffected: the base
+            # class sets it from raw_obs before it walks the space keys.
+            del self.observation_space.spaces[self.render_obs_key]
 
     def _cam_name(self):
         # the render key is `<camera>_image`

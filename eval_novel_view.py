@@ -37,6 +37,7 @@ if ROOT_DIR not in sys.path:
 
 import click
 import hydra
+from omegaconf import OmegaConf
 import torch
 import dill
 import numpy as np
@@ -268,6 +269,16 @@ class ViewpointImageWrapper(RobomimicImageWrapper):
                 low=-np.inf, high=np.inf,
                 shape=(self.m3_slots, EEF_HIST_STEP_DIM * self.eef_hist_steps),
                 dtype=np.float32)
+            # ...and now DROP the render key (`agentview_image`), which the
+            # reduced shape_meta carries only so create_env can build
+            # robomimic's obs-modality mapping. It must not reach the policy:
+            # predict_action normalizes every key of the obs dict and an M3
+            # checkpoint's normalizer has no entry for it. Deleting from the
+            # *space* (not the returned dict) is what stops MultiStepWrapper
+            # collecting it; render_cache/video read raw_obs, so they are
+            # unaffected. Guarded by m3_slots > 0, so the M1/L1 sweeps -- whose
+            # policy key IS the render key -- are untouched.
+            del self.observation_space.spaces[self.render_obs_key]
 
     def get_observation(self, raw_obs=None):
         # A policy trained on a multi-view dataset expects a `view_XX_image`
@@ -757,6 +768,12 @@ def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs
         # rgb key in it, so the ENV side must carry exactly one rgb key -- the
         # rendered one. The wrapper registers and supplies the slots itself.
         env_shape_meta = copy.deepcopy(env_shape_meta)
+        # The checkpoint's cfg is unpickled from the training run's dill
+        # payload, so its DictConfigs are in struct mode -- where both `del`
+        # and assignment of a new key raise, and deepcopy preserves the flag.
+        # Unlock the node we mutate. The in-training rollout runner never hits
+        # this because hydra.utils.instantiate hands it an unlocked copy.
+        OmegaConf.set_struct(env_shape_meta['obs'], False)
         slot_keys = [k for k, a in env_shape_meta['obs'].items()
                      if a.get('type', 'low_dim') == 'rgb']
         assert len(slot_keys) == m3_slots, (
@@ -768,6 +785,7 @@ def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs
             shape=render_shape, type='rgb')
     elif serve_obs_key is not None and er.render_obs_key not in env_shape_meta['obs']:
         env_shape_meta = copy.deepcopy(env_shape_meta)
+        OmegaConf.set_struct(env_shape_meta['obs'], False)   # see note above
         env_shape_meta['obs'][er.render_obs_key] = dict(
             shape=env_shape_meta['obs'][serve_obs_key]['shape'], type='rgb')
 
