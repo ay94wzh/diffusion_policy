@@ -283,6 +283,22 @@ class ViewConditionedObsEncoder(ModuleAttrMixin):
 
     # ---------------------------------------------------------------- forward
     def forward(self, obs_dict):
+        """Drop-in contract, unchanged: ``(N, fused_dim + low-dim)``."""
+        out = self.forward_full(obs_dict)
+        return torch.cat(
+            [out['z_global']] + [obs_dict[k] for k in self.low_dim_keys], dim=-1)
+
+    def forward_full(self, obs_dict) -> Dict[str, torch.Tensor]:
+        """`forward`'s computation, plus the per-view latents M4 needs.
+
+        Returns ``{'z_global': (N, D), 'z_views': (N, K, D),
+        'view_active': (N, K) bool}``. `z_views` is the very tensor the fusion
+        already builds (`tokens`), so this adds no compute and no allocation --
+        `forward` is this function plus the final concatenation, and the two are
+        asserted bit-identical (torch.equal) in
+        tests/test_aux_action_heads.py. Rows of inactive slots are exactly zero,
+        which is the invariant M4's loss mask relies on.
+        """
         img_keys = self.rgb_keys
         n = obs_dict[img_keys[0]].shape[0]
         train = self.training
@@ -342,8 +358,7 @@ class ViewConditionedObsEncoder(ModuleAttrMixin):
                              key_padding_mask=pad_mask, need_weights=False)
         z_g = z_g.reshape(n, self.fused_dim)
 
-        feats = [z_g] + [obs_dict[k] for k in self.low_dim_keys]
-        return torch.cat(feats, dim=-1)
+        return {'z_global': z_g, 'z_views': tokens, 'view_active': active}
 
     @torch.no_grad()
     def output_shape(self):

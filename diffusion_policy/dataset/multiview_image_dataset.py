@@ -91,6 +91,13 @@ def quat_wxyz_to_mat_batch(q):
 
 EEF_HIST_STEP_DIM = 11   # [pos(3), rot6d(6), gripper(2)] per step, camera frame
 
+ACTION_DIM = 10          # [pos(3), rot6d(6), gripper(1)] absolute, base frame
+# M4's camera-frame action target. Deliberately NOT a shape_meta key: it is
+# derived from the demonstrated future actions, which do not exist at rollout
+# time, so it must never be an obs key the policy normalizes / the env serves.
+# It rides at the TOP LEVEL of the sample dict, next to 'action'.
+AUX_ACTION_KEY = 'aux_action'
+
 
 def _identity_normalizer(dim: int):
     """An exact identity normalizer of width `dim`.
@@ -134,6 +141,57 @@ def eef_hist_to_cam(eef_pos, eef_quat_wxyz, gripper_qpos, cam_pos, cam_quat_wxyz
     rot6 = np.concatenate([R_rel[..., 0, :], R_rel[..., 1, :]], axis=-1)
     out = np.concatenate([pos_cam, rot6,
                           np.asarray(gripper_qpos, dtype=np.float64)], axis=-1)
+    return out.astype(np.float32)
+
+
+def rot6d_to_mat(d6):
+    """``(..., 6)`` -> ``(..., 3, 3)``, the inverse of pytorch3d's
+    ``matrix_to_rotation_6d`` (rows 0 and 1 of R, concatenated).
+
+    Gram-Schmidt exactly as pytorch3d's ``rotation_6d_to_matrix`` implements it.
+    Pinned to ``RotationTransformer('rotation_6d', 'matrix')`` in
+    tests/test_aux_action_heads.py, so this numpy copy cannot drift from the
+    convention that PRODUCED the stored actions (`_convert_actions`).
+    """
+    d6 = np.asarray(d6, dtype=np.float64)
+    a1, a2 = d6[..., :3], d6[..., 3:]
+    b1 = a1 / np.linalg.norm(a1, axis=-1, keepdims=True)
+    b2 = a2 - (b1 * a2).sum(-1, keepdims=True) * b1
+    b2 = b2 / np.linalg.norm(b2, axis=-1, keepdims=True)
+    b3 = np.cross(b1, b2)
+    return np.stack([b1, b2, b3], axis=-2)
+
+
+def action_to_cam(action, cam_pos, cam_quat_wxyz):
+    """Express a base-frame absolute action chunk in ONE camera's frame.
+
+    Per step::
+
+        [ R_c^T (p - cam_pos) (3) , R_c^T R_b as rot6d (6) , gripper (1) ]
+
+    `action` is ``(..., 10)`` = [pos(3), rot6d(6), gripper(1)]; the camera is
+    ``(3,)``/``(4,)``. Returns ``(..., 10)`` float32. Only EXTRINSICS enter --
+    fovy/intrinsics must never appear here.
+
+    The rotation MUST round-trip through the full 3x3 matrix. The 6d encoding
+    keeps only rows 0 and 1 of R, but ``rows01(R_c^T R_b)`` is a function of all
+    three rows of R_b -- so rotating the 6d vector with a 6x6 linear map is NOT
+    the transform. That shortcut is exactly right when ``R_c == I``, which is
+    why a test at an identity camera proves nothing
+    (tests/test_aux_action_heads.py asserts the shortcut fails elsewhere).
+
+    Sibling of `eef_hist_to_cam` (same convention, EE pose instead of action,
+    rot6d in instead of a quaternion); the two are pinned to each other in the
+    test.
+    """
+    a = np.asarray(action, dtype=np.float64)
+    R = quat_wxyz_to_mat(cam_quat_wxyz)                    # camera -> world
+    Rt = R.T
+    p = a[..., :3] - np.asarray(cam_pos, dtype=np.float64)
+    pos_cam = np.einsum('ij,...j->...i', Rt, p)
+    R_rel = np.einsum('ij,...jk->...ik', Rt, rot6d_to_mat(a[..., 3:9]))
+    rot6 = np.concatenate([R_rel[..., 0, :], R_rel[..., 1, :]], axis=-1)
+    out = np.concatenate([pos_cam, rot6, a[..., 9:]], axis=-1)
     return out.astype(np.float32)
 
 
@@ -183,6 +241,8 @@ class MultiViewImageDataset(BaseImageDataset):
             view_pool=None,
             view_count_range=None,
             eef_hist_steps=4,
+            emit_aux_action=False,
+            aux_n_steps=8,
             view_mask_key='view_mask',
             eef_hist_key='view_eef_hist',
             seed=42,
@@ -227,6 +287,10 @@ class MultiViewImageDataset(BaseImageDataset):
         self.eef_hist_steps = int(eef_hist_steps)
         self.view_count_range = None
         self.cam_table = None
+        # M4: emit the per-slot camera-frame action chunk alongside 'action'.
+        # Defaults off, so every pre-M4 config and dataset test is unchanged.
+        self.emit_aux_action = False
+        self.aux_n_steps = int(aux_n_steps)
         if view_pool is not None:
             view_pool = [int(v) for v in view_pool]
             if len(view_pool) == 0:
@@ -283,6 +347,31 @@ class MultiViewImageDataset(BaseImageDataset):
             self.view_count_range = (lo, hi)
             self.n_slots = n_slots
             self.slot_shape = tuple(obs_shape_meta[rgb_keys[0]]['shape'])
+
+            # M4's camera-frame target. Validated here rather than in
+            # __getitem__ so a bad combination fails at construction.
+            self.emit_aux_action = bool(emit_aux_action)
+            if self.emit_aux_action:
+                if not abs_action:
+                    raise ValueError(
+                        'emit_aux_action requires abs_action: the camera-frame '
+                        'transform assumes the 10-dim absolute action layout')
+                if n_obs_steps is None:
+                    raise ValueError(
+                        'emit_aux_action requires n_obs_steps (the target is '
+                        'per obs step)')
+                # Obs step `to` is supervised on action[to : to+C], so the last
+                # index touched is C + n_obs_steps - 2. Past `horizon - 1` the
+                # sampler's pad_after edge-repeats the final action -- fake
+                # supervision the head would happily fit.
+                span = self.aux_n_steps + int(n_obs_steps) - 1
+                if span > horizon:
+                    raise ValueError(
+                        f'aux_n_steps {self.aux_n_steps} with n_obs_steps '
+                        f'{n_obs_steps} reaches action index {span - 1}, past '
+                        f'horizon {horizon}: the tail of the chunk would be '
+                        f'pad_after edge-repeat, not real data. Need '
+                        f'aux_n_steps + n_obs_steps - 1 <= horizon.')
 
         key_first_k = dict()
         if n_obs_steps is not None:
@@ -366,6 +455,21 @@ class MultiViewImageDataset(BaseImageDataset):
     def view_key(view_idx: int) -> str:
         return f'view_{view_idx:02d}_image'
 
+    def aux_action_pooled(self) -> np.ndarray:
+        """``(V*T, 10)`` camera-frame actions, pooled over the training pool.
+
+        The statistics behind ``normalizer[AUX_ACTION_KEY]``. Built with the
+        SAME `action_to_cam` that `_m3_slots` emits, so the fit cannot drift
+        from the data it normalizes. Reads only the low-dim action array, so it
+        costs milliseconds even though it covers every view and timestep.
+        """
+        if not self.emit_aux_action:
+            raise RuntimeError('aux_action_pooled needs emit_aux_action=True')
+        actions = np.asarray(self.replay_buffer['action'], dtype=np.float64)
+        return np.concatenate([
+            action_to_cam(actions, self.cam_table[v][:3], self.cam_table[v][3:7])
+            for v in self.view_pool], axis=0)
+
     def get_validation_dataset(self):
         val_set = copy.copy(self)
         val_set.sampler = SequenceSampler(
@@ -428,6 +532,17 @@ class MultiViewImageDataset(BaseImageDataset):
             normalizer[self.view_mask_key] = _identity_normalizer(self.n_slots)
             normalizer[self.eef_hist_key] = _identity_normalizer(
                 self.n_slots * EEF_HIST_STEP_DIM * self.eef_hist_steps)
+            if self.emit_aux_action:
+                # FITTED, unlike the identity keys above: this is the aux
+                # head's regression target, and camera-frame pos axes have
+                # different extents from the base-frame action's, so reusing
+                # the action key's scale would be axis-mismatched. Sharing the
+                # abs-action normalizer keeps the aux term in the same
+                # normalized units as the diffusion target, which is what makes
+                # aux_loss_weight interpretable.
+                normalizer[AUX_ACTION_KEY] = \
+                    robomimic_abs_action_only_normalizer_from_stat(
+                        array_to_stats(self.aux_action_pooled()))
         return normalizer
 
     def get_all_actions(self) -> torch.Tensor:
@@ -481,7 +596,7 @@ class MultiViewImageDataset(BaseImageDataset):
             out.append(arr.reshape(n_obs, h, -1).astype(np.float32))
         return out
 
-    def _m3_slots(self, idx: int) -> Dict[str, np.ndarray]:
+    def _m3_slots(self, idx: int, action_chunk: np.ndarray):
         """All K view slots + camera vectors + activity mask + EE history.
 
         Every slot is always emitted: a ragged schema (only the drawn views)
@@ -489,6 +604,13 @@ class MultiViewImageDataset(BaseImageDataset):
         sample, and the encoder fuses only those. Masked slots are filled with
         zeros, so if the mask were ever ignored the result would be loudly wrong
         rather than subtly wrong.
+
+        Returns ``(obs_dict, aux_action)``. `aux_action` is ``(To, K, C*10)``
+        (M4), or None when `emit_aux_action` is off -- it is returned SEPARATELY
+        rather than placed in `obs_dict`, because it derives from demonstrated
+        future actions and must never reach the policy's obs normalizer. The
+        per-slot camera-frame chunk for obs step `to` is built from the SAME
+        view draw as that slot's image, so the pairing cannot drift.
         """
         n_slots = self.n_slots
         view_pool = self.view_pool
@@ -510,6 +632,11 @@ class MultiViewImageDataset(BaseImageDataset):
         hist = np.zeros(
             (n_obs, n_slots, EEF_HIST_STEP_DIM * self.eef_hist_steps),
             dtype=np.float32)
+        C = self.aux_n_steps
+        aux = (np.zeros((n_obs, n_slots, C * ACTION_DIM), dtype=np.float32)
+               if self.emit_aux_action else None)
+        # (n_obs, C) window starts: obs step `to` is supervised on action[to:to+C]
+        win = np.arange(n_obs)[:, None] + np.arange(C)[None, :]
         for slot in range(n_slots):
             key, cam_key = self.rgb_keys[slot], self.cam_keys[slot]
             if slot < k_active:
@@ -524,6 +651,12 @@ class MultiViewImageDataset(BaseImageDataset):
                 # must flatten in this same order
                 hist[:, slot] = eef_hist_to_cam(
                     pos, quat, grip, cam[:3], cam[3:7]).reshape(n_obs, -1)
+                if aux is not None:
+                    # raw stored action -> this slot's camera frame; the same
+                    # view `v` that supplied the image above
+                    aux[:, slot] = action_to_cam(
+                        action_chunk[win], cam[:3], cam[3:7]
+                        ).reshape(n_obs, C * ACTION_DIM)
             else:
                 obs_dict[key] = np.zeros(
                     (n_obs,) + self.slot_shape, dtype=np.float32)
@@ -532,7 +665,7 @@ class MultiViewImageDataset(BaseImageDataset):
             obs_dict[cam_key] = np.tile(cam, (n_obs, 1))
         obs_dict[self.view_mask_key] = mask
         obs_dict[self.eef_hist_key] = hist
-        return obs_dict
+        return obs_dict, aux
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         data = self.sampler.sample_sequence(idx)
@@ -544,9 +677,13 @@ class MultiViewImageDataset(BaseImageDataset):
         T_slice = slice(self.n_obs_steps)
 
         obs_dict = dict()
+        aux_action = None
         if self.view_pool is not None:
-            # M3: all slots, their camera vectors, the mask and the EE history
-            obs_dict.update(self._m3_slots(idx))
+            # M3: all slots, their camera vectors, the mask and the EE history.
+            # M4: plus the per-slot camera-frame action chunk, which comes back
+            # separately -- it must not enter `obs_dict` (see AUX_ACTION_KEY).
+            m3_obs, aux_action = self._m3_slots(idx, data['action'])
+            obs_dict.update(m3_obs)
         else:
             for key in self.rgb_keys:
                 if self.view_subset is None:
@@ -575,4 +712,6 @@ class MultiViewImageDataset(BaseImageDataset):
             'obs': dict_apply(obs_dict, torch.from_numpy),
             'action': torch.from_numpy(data['action'].astype(np.float32))
         }
+        if aux_action is not None:
+            torch_data[AUX_ACTION_KEY] = torch.from_numpy(aux_action)
         return torch_data

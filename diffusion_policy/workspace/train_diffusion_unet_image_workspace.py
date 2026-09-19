@@ -191,6 +191,14 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             'epoch': self.epoch,
                             'lr': lr_scheduler.get_last_lr()[0]
                         }
+                        # M4 seam: the auxiliary term, when the policy has one.
+                        # Guarded, so every policy without it (M1/L1/M3) logs
+                        # exactly as before. NOTE `train_loss` includes the aux
+                        # term when it is on, so it is not comparable across
+                        # runs with different aux_loss_weight.
+                        aux_loss_cpu = getattr(self.model, 'last_aux_loss', None)
+                        if aux_loss_cpu is not None:
+                            step_log['aux_loss'] = aux_loss_cpu
 
                         is_last_batch = (batch_idx == (len(train_dataloader)-1))
                         if not is_last_batch:

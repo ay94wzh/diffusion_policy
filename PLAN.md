@@ -66,7 +66,7 @@ Each step lands as new files, has an experiment gate before proceeding, and keep
   - Elevation is a partial extrapolation win: 0.18–0.34 at +15° elevation where M1 is 0.00–0.04, but square collapses at −15° (0.00–0.04). Unexplained asymmetry.
   - The 2×2's `m3off` cell carried the attribution exactly as §10.6 predicted — M3-on vs L1 alone would have produced the false claim "Plücker conditioning fixes square".
   - Full tables, the two fatal bugs found before any long run, and the stated limits (n=1/±0.05 noise; four confounded architectural changes): `PROGRESS.md` §11. **Next question is architectural, not conditioning — see `PROGRESS.md` §6.**
-- **M4 — Per-view aux heads.** New policy subclass (e.g. `DiffusionUnetImagePolicyAux`): encoder exposes per-view latents + fused latent (small interface extension, e.g. `forward_full`); per-view MLP head predicts the camera-frame action chunk; aux loss added in a `compute_loss` override. Workspace untouched (single optimizer covers all params). *Gate:* aux loss improves novel-view generalization; ablations: conditioning on/off, aux on/off. *(Its hooks exist: the encoder already keeps per-view latents separate before fusion, and the camera-frame action transform M4 needs is `eef_hist_to_cam` in `multiview_image_dataset.py`.)*
+- **M4 — Per-view aux heads.** ✅ **IMPLEMENTED AND CPU-VERIFIED (2026-09-19); NOT YET RUN.** New files: `policy/diffusion_unet_image_policy_aux.py` (`DiffusionUnetImagePolicyAux`), `model/vision/per_view_aux_head.py`, `config/task/m4_aux_image_abs_multiview.yaml`, `config/train_diffusion_unet_image_workspace_m4.yaml`, `tests/test_aux_action_heads.py`. The encoder gained `forward_full()` (a pure code move — `forward` is bit-identical, asserted with `torch.equal`) returning per-view latents; `multiview_image_dataset.py` gained `action_to_cam()` and emits the per-slot camera-frame action chunk as a **top-level** sample key. *Gate:* `m4on` vs `m4off` on square, then can — the pair is **RNG-locked** (same params, same draws, one scalar term different), so it is a cleaner A/B than M3's. *(See `PROGRESS.md` §12 for the implementation record and the two design points that decide whether this works: the chunk must be `n_action_steps`, not `horizon`, and the rot6d transform must round-trip through the full matrix.)*
 - **M5 — Single-novel-view inference (+ optional distillation).** Fusion already supports N=1 **and M3 is trained with randomized N precisely so this works**; at eval the novel camera pose is known from the sim, and `eval_novel_view.py --m3-slots K` already publishes the perturbed pose into the slot's cam key. Optional teacher→student distillation (single-view encoder regresses the multi-view fused latent). *Gate:* final sweep tables vs the Milestone 1 baseline curves.
 
 ## M3 design spec — ViewConditionedObsEncoder
@@ -229,9 +229,16 @@ ACT, and the mujoco pipeline (incl. the `mujoco_image_dataset.py` normalizer bug
 noted in `CLAUDE.md`).
 
 *(The line that used to sit here — "any M2–M5 coding until the baseline is done
-and reviewed" — is discharged: M1/L1/M2 are done and M3 is done and trained.
-M4 and M5 remain uncoded. **M3's results change what M4 and M5 are for, so both
-entries above should be re-read with `PROGRESS.md` §11 and §6 in hand** — the
-conditioning M4 would add aux losses to is measurably inert, and M5's
-distillation premise assumes a multi-view latent carries something a single view
-cannot, which M3's N=1 result has not yet demonstrated.)*
+and reviewed" — is discharged: M1/L1/M2 are done, M3 is done and trained, and M4
+is implemented and CPU-verified. **M5 remains uncoded.** M5's distillation
+premise assumes a multi-view latent carries something the single-view path cannot,
+which M3's N=1 result has not demonstrated.)*
+
+**M4's premise, restated against M3's result.** §11 found the conditioning inert
+and §6 read that as "M4 adds losses to an inert input". That reading is wrong in
+one specific way worth recording: nothing in M3's objective ever *required* the
+encoder to use the camera, because at a trained view the image alone predicts the
+action. The auxiliary heads are the supervision PROPOSAL §2.4 names as what
+forces `z_v` to be geometrically meaningful — so M4 is not an add-on to an inert
+input, it is the missing pressure. That is a hypothesis, not a result; the
+`m4on`/`m4off` pair is what tests it.

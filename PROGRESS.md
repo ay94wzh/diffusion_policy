@@ -36,6 +36,12 @@ fatal bugs were found and fixed (§11.1). §10.6's planned 9-run matrix was
 enough to establish both findings, so the four single-signal cells and lift were
 dropped as redundant (§11.6).
 
+**M4 (per-view auxiliary heads) is IMPLEMENTED and CPU-VERIFIED but NOT RUN**
+(§12, 2026-09-19). One part added, M3's model held fixed: the encoder gained
+`forward_full` (a pure code move, bit-identical), the dataset emits the per-slot
+camera-frame action chunk, and a new policy subclass adds the aux head and its
+loss. No results yet; the `m4on`/`m4off` square pair is the first gate.
+
 ---
 
 ## 1. Results — novel-view degradation curves
@@ -1158,3 +1164,165 @@ python eval_novel_view.py -c data/outputs/run_square_m3off_s42_200ep/checkpoints
 `--m3-slots` is **7 for all four cells including `m3off`** — the assert compares
 against the checkpoint's own `shape_meta`, and the cam/mask/history normalizer
 entries exist regardless of the flags.
+
+---
+
+## 12. M4 — per-view auxiliary heads (IMPLEMENTED, CPU-verified, NOT RUN)
+
+**Status: code complete and passing on CPU; zero GPU time spent.** This section
+is the implementation record, in the form of §10. There are no results yet.
+
+### 12.1 What this is for
+
+§11.3 measured M3's conditioning as inert. But **nothing in M3's objective ever
+required the encoder to use the camera** — the only supervision was action
+diffusion, and at a trained view the image alone predicts the action. PROPOSAL
+§2.4 names the per-view auxiliary heads as what "forces `z_v` to be geometrically
+meaningful rather than merely view-tagged": predicting an action *in camera k's
+frame* from a single view requires `z_v` to encode where the scene sits relative
+to that camera.
+
+So M4 is not an add-on to an inert input; it is the missing pressure. The user's
+framing for this milestone: **hold the M3 model fixed and add one part at a
+time.** The encoder's forward path is unchanged.
+
+### 12.2 Two design points that decide whether it works
+
+1. **The chunk must be `n_action_steps` (8), not `horizon` (16).** Obs step `to`
+   reads `action[to : to+C]`, so the last index touched is `C + n_obs_steps - 2`.
+   At `To=2` a full-horizon target reaches index 16, which does not exist — it is
+   `pad_after` **edge-repeat**, i.e. fake supervision the head would happily fit.
+   The dataset ctor rejects `C + n_obs_steps - 1 > horizon`.
+2. **The rot6d rotation must round-trip through the full 3×3 matrix.** The 6d
+   encoding keeps only rows 0 and 1 of `R`, but `rows01(R_cᵀ R_b)` depends on all
+   three rows, so rotating the 6d vector with a 6×6 linear map is **not** the
+   transform — **and is exactly right when `R_c == I`**, which is why a test at
+   the base camera would prove nothing. `action_to_cam` goes through
+   `rot6d_to_mat`, which the test pins to pytorch3d (the code path that
+   *produced* the stored actions).
+
+### 12.3 Files (all new except one seam)
+
+| File | |
+|---|---|
+| `diffusion_policy/policy/diffusion_unet_image_policy_aux.py` | `DiffusionUnetImagePolicyAux` + `masked_view_mean` |
+| `diffusion_policy/model/vision/per_view_aux_head.py` | `PerViewAuxActionHead` (151,888 params, 0.052% of the policy) |
+| `diffusion_policy/config/task/m4_aux_image_abs_multiview.yaml` | M3's task + `emit_aux_action`, `aux_n_steps` |
+| `diffusion_policy/config/train_diffusion_unet_image_workspace_m4.yaml` | policy `_target_` swap + `aux_loss_weight: 1.0` |
+| `tests/test_aux_action_heads.py` | the CPU suite |
+
+Edited: `multiview_image_dataset.py` (adds `action_to_cam`/`rot6d_to_mat`, emits
+the target as a **top-level** key, fits a normalizer entry),
+`view_conditioned_obs_encoder.py` (adds `forward_full`), and **one documented
+seam in the upstream workspace**
+(`train_diffusion_unet_image_workspace.py`: a `getattr`-guarded
+`step_log['aux_loss']`). `diffusion_unet_image_policy.py` is upstream and is
+**unmodified** — the new policy subclasses it.
+
+Design choices worth keeping:
+
+- **The target is a top-level sample key, never an obs key.** It derives from
+  demonstrated future actions, which do not exist at rollout, and the policy
+  normalizes every obs key.
+- **The aux head is built unconditionally**, including at weight 0, and consumes
+  no RNG. Combined with the encoder running exactly once per step in both arms
+  (`forward_full` vs `forward`, bit-identical), **the two ablation arms are
+  RNG-locked**: every crop, noise and timestep draw is identical for the whole
+  run, and they differ by exactly one scalar term and its gradient. That is
+  stronger than "aux-off reproduces M3 modulo RNG".
+- **Zero-init output layer** (this repo's pattern for added branches), so an
+  aux-on run starts as M3. This costs one step, not a permanent delay: the
+  head's own weights get gradient immediately, so the trunk sees the aux
+  gradient from step 1.
+- **One shared head for all slots** — a per-slot head could key off slot
+  identity, which the dataset deliberately randomizes away, and could not train
+  when a slot is inactive.
+
+### 12.4 What was verified on CPU
+
+`python tests/test_aux_action_heads.py` → **ALL AUX ACTION HEAD CHECKS PASSED**:
+
+- `rot6d_to_mat` == `RotationTransformer('rotation_6d','matrix')` to 3.3e-16 over
+  200 random rotations, and `action_to_cam` anchored to `quat_wxyz_to_mat` (the
+  numpy camera math M2's gate 2 validated against the simulator) and **pinned to
+  `eef_hist_to_cam` exactly (0.00e+00)** over 100 non-identity cameras.
+- **Mutation power on 7 mutations**, all caught > 1e-3: `R_c` instead of `R_cᵀ`,
+  dropped translation, rot6d or pos left in the base frame, first two *columns*
+  instead of rows, `R_e R_cᵀ` order, and the 6×6 shortcut — with the executable
+  assertion that the shortcut **passes at `R_c = I` and fails elsewhere**.
+- Dataset: the target's shape/mask/pairing, where **each live slot's view is
+  recovered from the renders** and its target recomputed independently (catches
+  an off-by-one cam table, the failure that trains happily and reads as "aux
+  didn't help"); inactive slots exactly zero; the flag consumes **no** RNG; the
+  ctor's boundary checked from both sides (accepts 15, rejects 16).
+- Policy: `forward == forward_full` **bit-for-bit**; `output_shape` still (521,);
+  **`aux_loss_weight=0` is bit-identical to the parent's loss and all 179
+  gradients** (the anti-drift pin on the copied body); `w=1` equals
+  `diff + w·aux`; inactive slots cannot affect the aux loss; the head is exactly
+  zero at init and, once non-zero, the aux gradient demonstrably reaches
+  `conv1`'s image **and** ray channels.
+- Configs: they compose, the encoder block is **byte-identical to M3's**, the
+  policy instantiates through the real hydra path with `kwargs` empty (an aux key
+  leaking into `**kwargs` would raise inside `scheduler.step` at **rollout**
+  time), and `dataset.aux_n_steps == policy.aux_n_steps`.
+
+**The suite caught one real bug**, and it is the exact failure mode §12.3's
+"copied body" note predicts: `_compute_loss_with_aux` originally fed the UNet
+`z_global` alone (512-wide) instead of the full `[z_g | low-dim]` concatenation
+`forward` performs (521-wide), so `global_cond` came out 1024 instead of 1042.
+The weight-0 arm could not catch it — that path calls the parent.
+
+### 12.5 The run matrix (gates, not yet executed)
+
+| # | run | why |
+|---|---|---|
+| 0 | the CPU suite **on the box** | cheap, and it is what caught the bug above |
+| 1 | square `m4on` (`weight=1.0`) | headline |
+| 2 | square `m4off` (`weight=0.0`) | the control |
+| 3 | can `m4on` / `m4off` | only after the square pair is read |
+
+```bash
+python train.py --config-name=train_diffusion_unet_image_workspace_m4 \
+  task=m4_aux_image_abs_multiview task.task_name=square training.seed=42 \
+  training.num_epochs=201 training.device=cuda:0 dataloader.num_workers=14 \
+  val_dataloader.num_workers=2 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view \
+  hydra.run.dir=data/outputs/run_square_m4on_s42_200ep
+# control: add policy.aux_loss_weight=0.0, run dir ..._m4off_...
+
+python eval_novel_view.py -c data/outputs/run_square_m4on_s42_200ep/checkpoints/latest.ckpt \
+  -o data/eval_interp_square_m4on -d cuda:0 --preset azimuth_interp \
+  --m3-slots 7 --eef-hist-steps 4 --n-envs 14 --n-test-vis 0
+```
+
+`m4off` is a fresh run, not the committed `m3on`: the extra parameters shift the
+RNG stream, so `m3on` is not a control for this pair — it is a *validation* that
+`m4off` lands inside the ±0.05 noise band.
+
+**The readout that M3 lacked.** §11.5's problem was measurement: rollout noise is
+±0.05 and `val_loss` did not track rollout behaviour at all. The aux curve is a
+directly measured training-time quantity that is sensitive to whether `z_v`
+carries view information, and it now lands in `logs.json.txt` / wandb as
+`aux_loss`. An aux head plateauing near its init value means the task is
+unlearnable from one view and the mechanism is inert — M3's failure mode, caught
+in the first 50 steps instead of after 200 epochs. Watch `aux/diff` too
+(≈0.1–0.3 at init on real data) and check az_0 for regression before committing
+hours: too small a weight is an inert mechanism reading as a null result, too
+large over-writes `z_v`.
+
+Optional third cell, scientifically the sharpest: **`m4on` with
+`use_plucker=False`**. If the aux head only helps when the ray path is live, that
+is PROPOSAL §2.4's claim directly — and it is the cell M3 never had.
+
+### 12.6 Limits and risks, stated up front
+
+- **n=1 per cell, 50 paired episodes, ±0.05 noise** — the same resolution §11.5
+  flags, so a small effect remains invisible.
+- **`train_loss` and `val_loss` now include the aux term** when the weight is
+  non-zero, so they are not comparable to M3's; the separate `aux_loss` series is
+  what makes the decomposition readable.
+- **The weight is a guess** (1.0, PROPOSAL's literal "summed"). No sweep.
+- **M4 only removes the "nothing requires the pose" objection.** It does not
+  address §6's four-way architectural confound, the view-pool question (§7.1's
+  ±75/±90 are still trained on while ±15/±45 are still held out), or the
+  elevation asymmetry.
