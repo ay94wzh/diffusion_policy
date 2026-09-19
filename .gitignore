@@ -16,6 +16,11 @@ data/outputs/*
 !data/outputs/run_*_abs_single_s42_200ep/
 data/outputs/run_*_abs_single_s42_200ep/*
 !data/outputs/run_*_abs_single_s42_200ep/logs.json.txt
+# M3 runs: the per-batch train/val/rollout curves, same rationale as M1's above.
+# The 4.6 GB checkpoints stay out; only logs.json.txt (~9 MB/run) is published.
+!data/outputs/run_*_m3*_s42_200ep/
+data/outputs/run_*_m3*_s42_200ep/*
+!data/outputs/run_*_m3*_s42_200ep/logs.json.txt
 data_local
 .vscode
 _wandb

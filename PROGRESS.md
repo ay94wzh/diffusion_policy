@@ -1,6 +1,6 @@
 # PROGRESS
 
-Last updated: 2026-09-18. See `PROPOSAL.md` (research direction) and `PLAN.md`
+Last updated: 2026-09-19. See `PROPOSAL.md` (research direction) and `PLAN.md`
 (milestones M1–M5).
 
 **M1 is COMPLETE.** Single-view DP baselines were trained for can, lift, and
@@ -15,13 +15,26 @@ all three tasks (§8, 2026-09-17): its effect is task-dependent in *both*
 directions — it solves lift outright and destroys square/can — which is now M3's
 motivation.
 
-**M3 (view-conditioned encoder) is CODE COMPLETE AND CPU-VERIFIED, NOT YET
-TRAINED** (§10, 2026-09-18). The encoder, the dataset seam, the eval-harness
-seam, the rollout runner and the configs exist; a 16-section CPU test passes,
-including proof that the UNet stays shape-identical to the baseline's. **Nothing
-has been run against the simulator**: the rollout runner and the eval serving
-path have never executed (§10.5). The 9-run training matrix and its gates are
-§10.6.
+**M3 (view-conditioned encoder) is COMPLETE AND TRAINED** (§11, 2026-09-19).
+Two headline findings, and they point in opposite directions:
+
+1. **It solves square and can — the two tasks L1 destroyed.** At azimuths
+   *excluded from the training pool*, M3 scores 0.50–0.57 (square) and 0.74–0.77
+   (can) where M1 is 0.00–0.02 and L1 is at the noise floor *even on the poses it
+   trained on*. Beating L1 at trained poses is the load-bearing half: L1's failure
+   was never a failure to generalise, it was a failure to solve the task at all.
+2. **The conditioning does nothing.** The `m3off` cell — `use_plucker=False`,
+   `use_eef_hist=False` — matches or beats `m3on` on both tasks, at every
+   viewpoint, inside the ±0.05 rollout noise. The gain is **architectural**
+   (7 slots, per-sample N, attention fusion), not the pose conditioning this
+   milestone existed to test. §10.6 predicted that `m3off` "carries the
+   attribution"; it does, and the attribution is not the conditioning.
+
+§10.5's unverified list is now closed — both never-executed paths run, after two
+fatal bugs were found and fixed (§11.1). §10.6's planned 9-run matrix was
+**deliberately not completed**: the square 2×2 plus both can endpoints were
+enough to establish both findings, so the four single-signal cells and lift were
+dropped as redundant (§11.6).
 
 ---
 
@@ -79,13 +92,17 @@ Summarize any sweep with `python summarize_novel_view.py <dir>/eval_log.json`.
 ### 1.1 Weights and wandb
 
 - **Trained weights are NOT in git** (4.6 GB/checkpoint exceeds GitHub's
-  100 MB file limit). They exist only on the machine that trained them, at
-  `data/outputs/run_<task>_abs_single_s42_200ep/checkpoints/` (`latest.ckpt`
-  = epoch-200 model per task). To move them to another machine:
+  100 MB file limit) — only the numbers are. To move them between machines:
   ```bash
   rsync -av data/outputs <user>@<other>:/path/to/diffusion_policy/data/outputs
   ```
   or re-train from the runbook in §3 (~1–2.5 h per task).
+- ⚠️ **The M1 (`*_abs_single`) weights were DELETED on 2026-09-19** to free disk
+  for the M3 runs — the root volume was at 97–100% and nine M3 runs need ~83 GB.
+  Their `logs.json.txt`, `media/` and `.hydra/` survive; only `checkpoints/`
+  went. Every number derived from them is committed (the §1 sweeps) and their
+  elevation curve was captured first (§11.2). Recovery is a ~1–2.5 h retrain per
+  task from §3. The L1 weights and both M3 runs' weights are still present.
 - **Training curves and rollout videos are on wandb**: project
   `diffusion_policy_view` (account zihan-wa23-tsinghua-university) — square
   `runs/1h4oj5p6`, can `runs/q95ylpsc`, lift `runs/poearmxq`.
@@ -144,6 +161,21 @@ Timings on this box (idle; fp32, no AMP — the workspace has none):
   re-check before starting. `/data` (15 TB) exists but is owned by another user
   and not writable.
 
+**M3 timings (measured 2026-09-19, §11.1)** — the M3 encoder runs a shared
+resnet18 over N∈[1,7] views instead of 1, so it costs ~1.9× M1 per step:
+- raw step cost at B=64: **94 ms** (min 92, max 98), 6.9 GB peak GPU
+- square **43 s/epoch** (440 batches) at `num_workers=14` — **compute-bound**:
+  8 workers still gave 41 s/epoch under 2-GPU contention, while 4 workers fell
+  to **81 s/epoch** (decode-bound). So ≥8 workers, and ~2 concurrent runs is the
+  practical ceiling on 24 cores.
+- N=1 gate (K=1 ⇒ 1 view) **23 s/epoch**; can ~30 s/epoch (335 batches)
+- rollout ~6 min (n_envs=14, 56 episodes) — 5 per run
+- `azimuth_interp` (11 vp × 50 episodes) **~40 min**; ~46 min when two sweeps
+  share the box. `azimuth_sweep3` / `elevation_az0` ~12 min.
+- **2 GPUs give ~1.7×, not 2×**, on a 3-run tail: independent processes run at
+  full speed in parallel (36–41 s/epoch each), but the last run has no partner.
+  CPU, not GPU memory (7 GB of 32 GB), is the limit on concurrency.
+
 ## 4. Verified environment facts (all checked by running)
 
 - `robodiff` env: torch **2.8.0+cu128** (the `conda_environment.yaml` pin
@@ -183,30 +215,60 @@ Timings on this box (idle; fp32, no AMP — the workspace has none):
 - `TopKCheckpointManager` state is in-memory only: on resume its map starts
   empty, so existing topk files on disk are never evicted by the new run (and
   delete stale ones yourself if space is tight).
+- **The topk file is often a byte-identical duplicate of `latest.ckpt`.** The
+  workspace calls `save_checkpoint()` (latest) and `save_checkpoint(path=topk)`
+  back-to-back in the same block with the same in-memory state
+  (`train_diffusion_unet_image_workspace.py:260-280`), so whenever the topk
+  epoch equals the final epoch the two files are the same model. Freeing those
+  bought 23 GB in the M3 session with zero information loss. Check
+  `ls checkpoints/` — a topk named `epoch=0200-*` on a 201-epoch run is the
+  duplicate case; `epoch=0150-*` is genuinely distinct.
+- **To re-plan a running `setsid` batch without killing the job:** the driver
+  is `bash -c 'for ...; do python train.py ...; done'`; `kill -TERM <bash pid>`
+  stops the loop while the running `python` child survives (verified — the loop
+  exits, the child is reparented to init and keeps training). Progress markers
+  are appended to `data/m3_campaign.log` so a hand-over is auditable rather than
+  looking like the loop finished normally.
+- Two Claude-session lessons worth keeping: `preview_viewpoints.py`'s render
+  path and both M3 runtime paths went from "import-checked, never executed" to
+  working only by *running* them, and each failure was silent-degradation class
+  (§11.1). Budget for a probe phase before any long run.
 
 ## 6. Not yet done / next
 
-- **M3 — view-conditioned encoder + fusion. CODE COMPLETE, CPU-VERIFIED, NOT
-  YET TRAINED** (§10, 2026-09-18). Design in PROPOSAL.md §2 implemented as a
-  drop-in obs encoder injected via `cfg.policy.obs_encoder`, so
-  `DiffusionUnetImagePolicy` and the training loop are untouched and M3 adds
-  **no new loss**. Two scope additions were decided after PLAN.md's spec was
-  written: the camera-frame EE history is conditioned via **AdaGN/FiLM**
-  (PROPOSAL §2.1's "modulated by two conditions", read literally), and **N is
-  randomized per sample** so the N=1 setting M5 needs is in distribution.
-- **Next: the 9-run training matrix and its gates** (§10.6). Square 2×2 + can
-  2×2 + lift M3-on, seed 42. The conditioning-off cell (`use_plucker=False`,
-  `use_eef_hist=False`) is the control that carries the attribution — M3-on vs
-  L1 alone conflates "variable multi-view" with "conditioning".
+**The live question changed.** M3's conditioning is inert (§11.3), so the
+proposal's central claim — that Plücker maps + camera-frame history buy view
+generalization — is **not supported**. What *is* supported is that the M3
+**architecture** fixes square and can. The next experiment should therefore
+attack the architecture, not add more conditioning.
+
+- **Which ingredient?** Four things changed at once relative to L1: (a) 7 slots
+  instead of 1, (b) per-sample N∈[1,7] instead of a fixed 1, (c) MHA fusion with
+  a learnable query, (d) a shared backbone whose `conv1` is widened 3→9. The 2×2
+  cannot separate them and neither can any run so far. The cheapest informative
+  split is variable-N vs fixed-N=1 at 7 slots — that is one CLI line
+  (`task.dataset.view_count_range=[1,1]`), and it tests the "N is randomized so
+  N=1 is in distribution" design decision directly.
+- **Lift is untested for M3.** §10.6 called it a regression check, and it was
+  dropped along with the redundant cells (§11.6). It is the one task where L1
+  already wins (0.76–0.96), so M3-on there is a genuine "did we break it"
+  question, not a result. ~1 h: lift is 127 batches/epoch.
+- **can's two single-signal cells** were skipped because both endpoints agreed;
+  if the conditioning question is revisited, they are the cheap way back in.
+- **A second seed** on one M3 cell would materially strengthen §11 — every M3
+  number is n=1, 50 paired episodes, ±0.05 noise. The conditioning-null in
+  particular is "indistinguishable at this resolution", not "proven identical".
 - **M4 (per-view aux heads)** and **M5 (single-novel-view inference +
-  distillation)** are not started. The encoder's per-view interface and the
-  eval harness's pose-publishing path (§10.1) are the hooks they need, and both
-  exist.
-- Open questions M3 must answer once trained: whether *either* conditioning
-  signal suffices or both are needed (PROPOSAL §7's own question — the 2×2's two
-  single-signal rows answer it), and how far the method extrapolates off the
-  training manifold (the elevation sweep, since azimuth past ±90° is useless —
-  see §10.6).
+  distillation)** remain uncoded. Their hooks exist (the encoder keeps per-view
+  latents separate before fusion; `eval_novel_view.py --m3-slots K` publishes the
+  perturbed pose). **But M5's premise should be re-examined**: M3 already does
+  N=1 novel-view inference well (§11.2), so distillation is only worth it if the
+  fused latent is shown to carry something the single-view path cannot.
+- **Restate the elevation axis in any follow-up.** M3 holds 0.18–0.34 at ±15°
+  elevation where M1 is 0.00, but collapses at −15° (0.00–0.04 on square). The
+  extrapolation claim currently holds on azimuth and half-holds on elevation;
+  the `elevation_az0` preset (an orbit about the look-at point, not the pitch)
+  is the tool.
 
 ## 7. M2 — multi-view data (DONE 2026-09-15)
 
@@ -670,12 +732,15 @@ stronger form.)*
 
 ---
 
-## 10. M3 — view-conditioned encoder (CODE COMPLETE, CPU-VERIFIED, NOT YET TRAINED)
+## 10. M3 — view-conditioned encoder (implementation record)
 
-**Status: written and verified on CPU; nothing has run against the simulator.**
-The distinction is the whole point of this section: §9 recorded a session whose
-draft code did not work and was deleted. This one works — but "works on CPU" is
-not "works", and §10.5 lists exactly what remains unproven.
+**Status: implementation + CPU verification. Superseded by §11, which records
+what happened when it was actually run.** This section is kept as the design
+record: §10.1 what was built, §10.2 the 16-section CPU test and what it bought,
+§10.3 the design decisions and *why*, §10.4 the eight silent-degradation bugs
+caught before any run. §10.5 and §10.6 are the two sections the run overtook —
+both are now annotated rather than deleted, because *why* the pre-run verification
+was insufficient is the useful part.
 
 ### 10.1 What was built
 
@@ -800,24 +865,39 @@ None of these crashed. Each would have produced a plausible-looking number.
    already produced committed results costs comparability for no measurable gain.)
 8. **The M2 N=1 gate config's false claim** that rollouts were disabled (§7.4).
 
-### 10.5 What is NOT verified — read before the run
+### 10.5 What was NOT verified before the run — and how each one turned out
+
+**All four items below are now closed (§11.1). Kept because the list was
+accurate and the outcome vindicates it: three of the four were hiding something,
+and none of them could be caught without the simulator.**
 
 - **The rollout runner (`cam_key_image_runner.py`) and the eval-harness serving
-  path have never executed.** There is no robosuite, no zarr and no checkpoint on
-  the dev laptop. They are import-checked and the structural requirements are
-  verified (`CamKeyImageWrapper.__mro__` confirms the `isinstance` asserts in
-  `init_fn` hold; `spaces.Dict.__setitem__` exists on gym 0.21; gym's
-  shared-memory writer does not clip or validate Box bounds, so only shape and
-  dtype matter) — but **no rollout has ever run through them**. This is the top
-  risk in the milestone, and it is why step 0 of §10.6 is what it is.
-- All dataset verification used the **synthetic** zarr of
-  `tests/test_multiview_dataset.py`, not a real generated store.
-- `preview_viewpoints.py`'s render path is likewise unexecuted (it imports
-  cleanly; its pure helpers — viewpoint resolution, `scene_coverage` — are
-  tested).
-- The **epoch cost is an estimate**, not a measurement (§10.6).
+  path had never executed.** → **Two fatal bugs.** Both would have killed every
+  M3 run at epoch 0 (§11.1). Import checks and `__mro__` assertions passed and
+  proved nothing about the obs-key contract at runtime.
+- **All dataset verification used the synthetic zarr**, not a real store. →
+  **Held.** The real zarrs load, sample, and vary N per sample as designed; the
+  only correction is that `numcodecs 0.10.2` has no `jpeg2k`, so anything
+  opening these zarrs must import the dataset module first (`register_codecs()`).
+- **`preview_viewpoints.py`'s render path was unexecuted.** → **Held** — it ran
+  first try, and its montages are what licensed the elevation sweep.
+- **The epoch cost was an estimate.** → **2.1× optimistic** in the doc's "~15 h
+  for nine runs"; measured 43 s/epoch for square, ~1.9× M1 (§3).
+
+The generalisable lesson: a CPU test can verify *shape* and *convention*
+contracts (§10.2 did, thoroughly), but not the *wiring* between independently
+written components. The obs-key mismatch was a wiring bug between three modules
+each individually correct.
 
 ### 10.6 The training matrix and its gates
+
+> **What was actually run (2026-09-19):** 7 of the 9 cells, then stopped
+> deliberately. Square 2×2 (all four), can `m3off` + `m3on` (the two endpoints),
+> and the N=1 gate. **Skipped: can `m3plucker`/`m3eef` and lift `m3on`.** The
+> square 2×2 showed conditioning is inert and both can endpoints agreed, so the
+> four single-signal cells could not change any conclusion (§11.6). Lift remains
+> a genuine open question (§6). The gates below were followed as written; gate
+> ordering is what made the stop cheap.
 
 Nine runs, seed 42, batch 64, 201 epochs, identical shape/optimiser settings to
 M1/L1. Cells differ only by CLI override, so the only variable is conditioning.
@@ -860,3 +940,221 @@ training.
 Stated follow-ups, deferred so the headline 2×2 stays L1-comparable: a **±60°
 training pool** (how much does view *quality* alone buy?) and a **smaller K**
 (PROPOSAL §7's "how much view diversity is needed", one config line).
+
+---
+
+## 11. M3 — RESULTS (2026-09-19, training box, seed 42)
+
+**Headline: M3 solves square and can — the two tasks L1 destroyed — and its
+conditioning contributes nothing measurable to that.** §10.6 predicted `m3off`
+would carry the attribution; it does, and the attribution is **architectural**,
+not the Plücker map and not the camera-frame history.
+
+All numbers are strict `EnvRobosuite.is_success()` `success_rate`, 50 paired
+episodes per viewpoint, seed 42, read from `latest.ckpt` (the epoch-200 model) —
+the same convention as every M1/L1 number.
+
+### 11.1 What the run cost, and what it caught first
+
+Two bugs, both **fatal at epoch 0**, both in the paths §10.5 listed as
+never-executed. Fixed in `44b975a`, before any long run — the probe phase is
+what found them, and §10.5's ordering is why that cost ~35 min instead of ~15 h.
+
+1. **Normalizer key mismatch** (rollout runner *and* eval harness). Both build
+   an env-side `shape_meta` carrying one rgb key, `agentview_image`, so
+   `create_env` can build robomimic's obs-modality mapping. That key reaches the
+   obs dict via `MultiStepWrapper._get_obs`, and `predict_action` normalizes
+   every key with no fallback — while an M3 normalizer has entries only for the
+   slots, cam, mask, history and low-dim keys. Fix: drop the render key from the
+   observation **space** (not the returned dict) once the M3 keys are registered;
+   `render_cache` reads `raw_obs`, so video is unaffected. Guarded by
+   `m3_slots > 0`, leaving M1/L1 (whose policy key *is* the render key) untouched.
+2. **Struct-mode `DictConfig`** (eval harness only). `eval_novel_view.py` loads
+   its cfg from the checkpoint's dill payload, where DictConfigs are in struct
+   mode, so `del shape_meta['obs'][k]` raises `ConfigTypeError`. `deepcopy`
+   preserves the flag. The runner escaped this because `hydra.utils.instantiate`
+   hands it an unlocked copy — **which is exactly why probe 3a passed while 3b
+   failed, and why running both was necessary.**
+
+Verification after the fix: the obs key set matches the normalizer's **exactly**
+— 19 keys at K=7, 7 at K=1, zero difference in either direction. The rollout
+runner completed all 4 chunks and logged `test/mean_score` at epoch 0; the
+`--m3-slots 7` eval wrote metrics for all three elevation viewpoints.
+
+**Gate 2, the N=1 fidelity control** (`task=m3_plucker_image_abs_n1`, single
+slot, `view_pool=[6]` = az_0) — a *fidelity* control, not a result:
+
+| viewpoint | N=1 gate | M1 (hdf5, 1 view) | L1 (7 views) |
+|---|---|---|---|
+| az_0 | **0.94** | 0.82 | 0.02 |
+| az_p30 | 0.00 | 0.00 | 0.00 |
+| az_m30 | 0.00 | 0.00 | 0.00 |
+
+It reproduces M1's **whole curve**, not just its az_0 point — §8.5's standard.
+0.94 is *above* M1's 0.82, which §10.6 flagged as a possible leak; it is not one
+(`view_pool=[6]` with `view_count_range=[1,1]` admits no other view) and the
+same +0.08–0.12 pattern appeared in §8.5's lift gate. Treat the generated zarr as
+a slightly cleaner source than the hdf5 pipeline.
+
+### 11.2 The result: novel-view success on square and can
+
+`*` = pose IS in the training pool (the ring's even indices, every 30°).
+**Unmarked columns are never trained on** and are the actual test.
+
+**Square** — `azimuth_interp` (11 vp) + `elevation_az0` (3 vp):
+
+| cell | m75 | m60* | m45 | m30* | m15 | 0* | p15 | p30* | p45 | p60* | p75 | el_0 | el_p15 | el_m15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| m3off | 0.40 | 0.78* | 0.60 | 0.78* | 0.68 | 0.78* | 0.42 | 0.70* | 0.58 | 0.78* | 0.62 | 0.88 | 0.30 | 0.04 |
+| m3plucker | 0.34 | 0.78* | 0.50 | 0.66* | 0.56 | 0.80* | 0.56 | 0.78* | 0.50 | 0.78* | 0.54 | 0.76 | 0.24 | 0.02 |
+| m3eef | 0.48 | 0.84* | 0.66 | 0.66* | 0.68 | 0.80* | 0.48 | 0.74* | 0.50 | 0.80* | 0.64 | 0.82 | 0.18 | 0.02 |
+| m3on | 0.50 | 0.72* | 0.56 | 0.72* | 0.66 | 0.76* | 0.52 | 0.74* | 0.58 | 0.74* | 0.46 | 0.78 | 0.18 | 0.00 |
+| *L1 s42* | 0.02 | 0.02* | 0.00 | 0.00* | 0.00 | 0.02* | 0.02 | 0.00* | 0.02 | 0.06* | 0.04 | 0.02 | 0.02 | 0.00 |
+| *M1* | — | — | — | 0.00 | 0.02 | 0.82 | 0.00 | 0.00 | — | — | — | 0.88 | 0.00 | 0.00 |
+
+**Can**:
+
+| cell | m75 | m60* | m45 | m30* | m15 | 0* | p15 | p30* | p45 | p60* | p75 | el_0 | el_p15 | el_m15 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| m3off | 0.70 | 0.88* | 0.76 | 0.86* | 0.74 | 0.92* | 0.80 | 0.92* | 0.80 | 0.90* | 0.64 | 0.90 | 0.34 | 0.22 |
+| m3on | 0.84 | 0.86* | 0.74 | 0.86* | 0.74 | 0.86* | 0.82 | 0.92* | 0.82 | 0.84* | 0.64 | 0.88 | 0.28 | 0.22 |
+| *L1* | 0.02 | 0.00* | 0.06 | 0.02* | 0.02 | 0.02* | 0.02 | 0.02* | 0.02 | 0.04* | 0.00 | 0.02 | 0.00 | 0.06 |
+| *M1* | — | — | — | 0.00 | 0.08 | 0.98 | 0.00 | 0.00 | — | — | — | 0.98 | 0.04 | 0.00 |
+
+Means, split by whether the pose was trained:
+
+| model | square trained | square **held out** | can trained | can **held out** |
+|---|---|---|---|---|
+| m3off | 0.764 | **0.550** | 0.896 | **0.740** |
+| m3plucker | 0.760 | **0.500** | — | — |
+| m3eef | 0.768 | **0.573** | — | — |
+| m3on | 0.736 | **0.547** | 0.868 | **0.767** |
+| *L1* | *0.02* | *0.00–0.06* | *0.02* | *0.00–0.06* |
+
+**Read this carefully, because it is easy to overstate.** There *is* a real
+trained/held-out gap (square 0.76 → 0.55, can 0.90 → 0.74). But the held-out
+**floor is 0.40–0.84, not 0.00**, where M1 is 0.00–0.02 off-axis and L1 is at the
+noise floor.
+
+**The load-bearing comparison is L1 at trained poses.** L1 was trained on the
+same pool and still scores ~0.02 at ±30° — poses it saw constantly. So L1's
+failure was never a failure to *generalise*; it failed to solve the task at all.
+"M3 generalises to novel views" is therefore the weaker of the two claims on
+offer; the stronger one is that **per-slot fusion turns view diversity from
+harmful into sufficient**.
+
+### 11.3 The conditioning null
+
+`m3off` — `use_plucker=False`, `use_eef_hist=False` — matches or beats `m3on` on
+both tasks at every viewpoint, and `m3on` is never the best square cell:
+
+- square held-out means span **0.500–0.573** across all four cells
+- square trained means span **0.736–0.768**
+- can: `m3off` 0.740 held-out vs `m3on` 0.767 — the *wrong* direction for the
+  hypothesis, and inside ±0.05 noise either way
+
+All inside the documented ±0.05 rollout noise, with no systematic sign. The
+ablation is genuine, not a flag that failed to apply — verified in the EMA
+weights: the six ray channels are non-zero **only** in the two `use_plucker=True`
+cells, exactly zero in `m3off`/`m3eef` as the zero-gradient design predicts, and
+all four checkpoints' `conv1` and `fusion_query` hashes are distinct.
+
+**So the proposal's central claim is not supported.** PROPOSAL §7 asked whether
+the aux heads need the camera-frame history *as well as* the Plücker map, or
+whether one suffices; the answer here is that **neither** moved the number. What
+moved it was 7 slots, per-sample N∈[1,7], and attention fusion — three changes
+that came in as plumbing for the conditioning rather than as the hypothesis.
+
+### 11.4 Elevation — a partial extrapolation result
+
+The `elevation_az0` orbit is the off-manifold test (§10.6 chose it over azimuth
+past ±90°, which §7.1's montages showed is dominated by the table edge).
+
+M3 holds **0.18–0.34 at el_p15** on both tasks where M1 is 0.00–0.04 — and
+**0.22 at el_m15 on can**, where M1 is 0.00 and L1 is 0.06. But on **square,
+el_m15 collapses to 0.00–0.04** for every M3 cell. So extrapolation holds going
+up and not down, on one of two tasks. That asymmetry is unexplained and is a
+concrete follow-up, not a rounding error.
+
+### 11.5 Limits — what these results do not show
+
+- **n = 1 per cell, 50 paired episodes, ±0.05 noise.** The conditioning null is
+  "indistinguishable at this resolution", **not** "proven identical". A real
+  effect below ~0.1 would be invisible here, and §11.3 should be quoted with
+  that bound attached.
+- **The architecture is confounded four ways.** Relative to L1, four things
+  changed at once (§6). Nothing here says *which* one matters.
+- **Only square and can.** Lift is untested for M3 (§11.6) — and lift is the
+  task where L1 already wins, so it is the one place M3 could regress.
+- **`mean_score` in-training rollouts hide things.** All M3 cells sit at
+  0.76–0.94 there while differing by up to 0.12 in the strict sweep; §8.6's
+  warning holds. Worse, **`val_loss` does not track rollout behaviour at all**:
+  all four square cells sit at 0.0568–0.0602 — essentially L1's 0.060 — while
+  rolling out like M1. §8.4 kept "L1 fits worse, so it fails" as an *inferred*
+  mechanism; this is direct evidence against it.
+- **M3 costs a little in-distribution.** az_0 0.76–0.80 vs M1's 0.82. Small,
+  but it is not a free lunch.
+
+### 11.6 What was and was not run
+
+Ran: N=1 gate; square `m3off`/`m3plucker`/`m3eef`/`m3on`; can `m3off`/`m3on`;
+full `azimuth_interp` + `elevation_az0` on all six. Plus the M1/L1 elevation
+baselines (§11.7). All 201 epochs, seed 42, batch 64.
+
+**Not run, deliberately:** can `m3plucker`/`m3eef` and lift `m3on`. The square
+2×2 established the conditioning null across the full 2×2, and both can
+endpoints agreed with it, so the two remaining can cells could not have changed
+a conclusion. Lift is a real open question and is listed in §6.
+
+### 11.7 The elevation baselines (M1 and L1), captured before the M1 weights were deleted
+
+§10.6 added `elevation_az0` to the evaluation protocol, but M1 and L1 had never
+been swept on it, and the M1 checkpoints were deleted to make room for M3. These
+were captured first. `el_0` is the same camera pose as `az_0`, which is the
+internal check:
+
+| task | model | el_0 | el_p15 | el_m15 |
+|---|---|---|---|---|
+| square | M1 | 0.88 | 0.00 | 0.00 |
+| square | L1 | 0.02 | 0.02 | 0.00 |
+| can | M1 | 0.98 | 0.04 | 0.00 |
+| can | L1 | 0.02 | 0.00 | 0.06 |
+| lift | M1 | 0.74 | 0.00 | 0.02 |
+| lift | L1 | **0.96** | **0.36** | **0.26** |
+
+`el_0` reproduces each model's committed §1/§8.3 `az_0` value, which validates
+the orbit's zero-point. The lift row is a genuine extension of §8.3's 2–1 task
+split onto a second axis: **L1's lift advantage survives into elevation**
+(0.96/0.36/0.26 vs M1's 0.74/0.00/0.02) — degraded from its azimuth
+performance, but far above M1 everywhere. One more task-side datapoint for §8.4's
+unresolved "what separates lift" question.
+
+### 11.8 Artifacts
+
+| what | where | in git |
+|---|---|---|
+| sweeps (all of the above) | `data/eval_{gate,el,interp}_*/eval_log.json` | ✅ `5ee979b`, `cc0696e` |
+| training curves | `data/outputs/run_*m3*/logs.json.txt` | ✅ (this commit) |
+| code fixes | `44b975a` | ✅ |
+| weights (4.6 GB each) | `data/outputs/run_*m3*/checkpoints/latest.ckpt` | ❌ rsync only |
+| campaign log (ordered, timestamped) | `data/m3_campaign.log` | ❌ on the box |
+
+Reproduce any cell:
+
+```bash
+python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
+  task=m3_plucker_image_abs_multiview task.task_name=square \
+  policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false \
+  training.seed=42 training.num_epochs=201 training.device=cuda:0 \
+  dataloader.num_workers=14 val_dataloader.num_workers=2 \
+  checkpoint.topk.k=1 logging.project=diffusion_policy_view \
+  hydra.run.dir=data/outputs/run_square_m3off_s42_200ep
+
+python eval_novel_view.py -c data/outputs/run_square_m3off_s42_200ep/checkpoints/latest.ckpt \
+  -o data/eval_interp_square_m3off -d cuda:0 --preset azimuth_interp \
+  --m3-slots 7 --eef-hist-steps 4 --n-envs 14 --n-test-vis 0
+```
+
+`--m3-slots` is **7 for all four cells including `m3off`** — the assert compares
+against the checkpoint's own `shape_meta`, and the cam/mask/history normalizer
+entries exist regardless of the flags.

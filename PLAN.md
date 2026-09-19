@@ -60,18 +60,33 @@ Each step lands as new files, has an experiment gate before proceeding, and keep
 
 - **M2 — Multi-view data with camera poses.** ✅ **DONE (2026-09-15) — all three tasks rendered and verified; see `PROGRESS.md` §7** (results, verification, and two findings that change M3's design). New files: `generate_multiview_dataset.py`, `diffusion_policy/dataset/multiview_image_dataset.py`, `tests/test_multiview_dataset.py` (CPU-only, passes locally), `config/task/{square,can,lift}_image_abs_multiview.yaml`. Original plan: re-renders each demo (subsampled steps) at N camera poses via stored mujoco `states` + `env.reset_to({'states': s})` + camera move + render; stores per-view images + per-view camera params (pose, fovy → intrinsics; extrinsics from pose) + per-view camera-frame actions (base-frame actions transformed by extrinsics) in a new zarr. New dataset class mirroring `RobomimicReplayImageDataset`. *Seam:* new shape_meta obs types (e.g. `camera`) need small branches in dataset + encoder key-classification loops (currently `rgb`/`low_dim` only). *Gate:* rendered views look right; N=1 training reproduces the single-view baseline. Verified locally (no rendering): dataset schema/sampling/normalizers/camera-parameter round-trip and config composition. To verify on the render box, each generation run prints gate 1 (az_0 re-render vs the hdf5's stored image — catches a wrong `[::-1]` flip), gate 2 (gripper projection through the derived intrinsics/extrinsics) and gate 3 (ring montage).
 - **L1 — view-randomized single-slot baseline ("view diversity only").** ✅ **DONE, all three tasks (2026-09-17).** M1's *exact* architecture with its one camera slot filled per sample from a randomly drawn training view (7 of the 13 ring poses; the odd azimuths ±15/±45/±75 are never trained on). **The effect is task-dependent in both directions:** on **lift** it *solves* the problem — 0.76–0.96 success at every viewpoint out to ±75° where M1 collapses to 0.08/0.00 — while on **square and can** it is catastrophic (≤0.08 everywhere, including poses it trained on, where M1 scores 0.82/0.98). What separates lift from square/can is **not identified**; the leading hypothesis (lift needs no goal-directed placement, so less precise visual localization) has one task per side, and a scene-complexity confound can't be ruled out. Full tables and stated limits in `PROGRESS.md` §8. **Consequence for M3: it must win on square/can, and explain why lift didn't need it.**
-- **M3 — View-conditioned encoder + fusion.** 🟡 **CODE COMPLETE, CPU-VERIFIED, NOT YET TRAINED (2026-09-18).** `ViewConditionedObsEncoder` in `model/vision/` (same dict-in → 1-D-out contract as `MultiImageObsEncoder`, so it swaps in through config and the policy and training loop are untouched — M3 adds **no new loss**): one shared resnet18 whose `conv1` is widened 3→9 to take the image ‖ Plücker map, per-view **AdaGN/FiLM** modulation from the camera-frame EE-pose history, and fusion by `nn.MultiheadAttention` with a learnable query over the view tokens (supports N=1). Also new: the dataset's M3 mode, the eval-harness key-serving path, `CamKeyImageRunner` for rollouts, and `preview_viewpoints.py`. **Two scope additions beyond the spec below, decided after it was written:** the EE history is conditioned via AdaGN (PROPOSAL §2.1's "modulated by two conditions", read literally), and **N is randomized per sample** so the N=1 setting M5 needs is in distribution. `output_shape() == (521,)` is unchanged and now enforced against the stock encoder, with all 148 UNet parameter tensors verified shape-identical. Full state, the 16-section CPU test, the eight bugs caught, and what remains unproven: `PROGRESS.md` §10. **The 9-run matrix and its gates are §10.6.** **Required ablation: conditioning-off** — now a 2×2 over both signals, parameter-identical between cells.
+- **M3 — View-conditioned encoder + fusion.** ✅ **DONE (2026-09-19).** Trained and swept on square and can. **Two findings, pointing opposite ways:**
+  - ✅ **It solves square and can** — the two tasks L1 destroyed. At azimuths **excluded from the training pool**, M3 scores 0.50–0.57 (square) and 0.74–0.77 (can) where M1 is 0.00–0.02 and L1 is at the noise floor. The load-bearing half is that **L1 also fails at the poses it trained on** (~0.02 at ±30°, which it saw constantly), so L1's failure was never a failure to generalise — it never solved the task. Per-slot fusion turns view diversity from harmful into sufficient.
+  - ❌ **The conditioning contributes nothing.** `m3off` (`use_plucker=False`, `use_eef_hist=False`) matches or beats `m3on` on both tasks at every viewpoint, inside the ±0.05 noise. **PROPOSAL §2/§7's central claim is not supported** — neither signal moved the number. What moved it was 7 slots, per-sample N∈[1,7], and attention fusion, which arrived as plumbing *for* the conditioning rather than as the hypothesis.
+  - Elevation is a partial extrapolation win: 0.18–0.34 at +15° elevation where M1 is 0.00–0.04, but square collapses at −15° (0.00–0.04). Unexplained asymmetry.
+  - The 2×2's `m3off` cell carried the attribution exactly as §10.6 predicted — M3-on vs L1 alone would have produced the false claim "Plücker conditioning fixes square".
+  - Full tables, the two fatal bugs found before any long run, and the stated limits (n=1/±0.05 noise; four confounded architectural changes): `PROGRESS.md` §11. **Next question is architectural, not conditioning — see `PROGRESS.md` §6.**
 - **M4 — Per-view aux heads.** New policy subclass (e.g. `DiffusionUnetImagePolicyAux`): encoder exposes per-view latents + fused latent (small interface extension, e.g. `forward_full`); per-view MLP head predicts the camera-frame action chunk; aux loss added in a `compute_loss` override. Workspace untouched (single optimizer covers all params). *Gate:* aux loss improves novel-view generalization; ablations: conditioning on/off, aux on/off. *(Its hooks exist: the encoder already keeps per-view latents separate before fusion, and the camera-frame action transform M4 needs is `eef_hist_to_cam` in `multiview_image_dataset.py`.)*
 - **M5 — Single-novel-view inference (+ optional distillation).** Fusion already supports N=1 **and M3 is trained with randomized N precisely so this works**; at eval the novel camera pose is known from the sim, and `eval_novel_view.py --m3-slots K` already publishes the perturbed pose into the slot's cam key. Optional teacher→student distillation (single-view encoder regresses the multi-view fused latent). *Gate:* final sweep tables vs the Milestone 1 baseline curves.
 
 ## M3 design spec — ViewConditionedObsEncoder
 
-Implements PROPOSAL.md §2 steps 1–2. **Status: IMPLEMENTED and CPU-verified, not
-yet trained** — this spec is now the design record; `PROGRESS.md` §10 has the
-implementation state, the parameter counts, the eight bugs caught before the run,
-and what remains unproven. Two deviations from the text below were decided after
-it was written and are marked inline: the EE history is conditioned by **AdaGN**,
-and **N is randomized per sample**.
+Implements PROPOSAL.md §2 steps 1–2. **Status: IMPLEMENTED, CPU-verified, and
+TRAINED — see `PROGRESS.md` §11 for the results and §10 for the implementation
+record (parameter counts, the eight bugs caught before the run, the CPU test).**
+Two deviations from the text below were decided after it was written and are
+marked inline: the EE history is conditioned by **AdaGN**, and **N is randomized
+per sample**.
+
+> **Outcome note (2026-09-19):** the ablation below was designed to answer "does
+> *either* conditioning signal suffice, or are both needed". The measured answer
+> is **neither**: all four cells are indistinguishable (`PROGRESS.md` §11.3). The
+> spec's other predictions held — matched capacity, the exact zero-gradient
+> ablation, and the N=1 path. The architectural changes that came in as plumbing
+> (7 slots, per-sample N, MHA fusion) are what produced the view-robustness gain,
+> which the spec did not anticipate and did not test for. Anyone extending this
+> should treat "which architectural ingredient" as the open question, not
+> "which conditioning signal".
 
 ### Interface contract (why this is a small change)
 
@@ -169,13 +184,19 @@ multi-view" with "conditioning".
 1. **N=1 sanity**: one view + its pose should roughly reproduce the M1/L1 single
    view result. A large gap means the Plücker or FiLM path is corrupting the
    image path. Run **before** the bulk — it is the cheapest way to avoid
-   spending ~15 h on a broken encoder.
+   spending ~15 h on a broken encoder. → ✅ **PASSED** (az_0 0.94 vs M1's 0.82,
+   collapse to 0.00 at ±30 — M1's whole curve, §11.1).
 2. **The headline**: 7 views on **square** (where view randomization alone fails,
    ≤0.08). Conditioning-on must beat conditioning-off there, and the square 2×2
-   is read *before* committing to the can and lift runs.
+   is read *before* committing to the can and lift runs. → ⚠️ **The prediction
+   was wrong.** M3-on reaches 0.50–0.57 at held-out views, so the gate's first
+   half passes; but conditioning-on does **not** beat conditioning-off — the two
+   are indistinguishable, and `m3off` is nominally ahead (§11.3). The gate read
+   *before* committing to can is what made the remaining cells cheap to skip.
 3. **Lift control**: lift is already solved by the conditioning-free baseline
    (0.76–0.96 across ±75°), so M3 should *not* be headlined on lift — one M3-on
-   run there is a regression check, not a result.
+   run there is a regression check, not a result. → ⏸ **NOT RUN**; still open
+   (`PROGRESS.md` §6).
 
 Full ordering, the preflight, and the elevation sweep: `PROGRESS.md` §10.6.
 
@@ -208,5 +229,9 @@ ACT, and the mujoco pipeline (incl. the `mujoco_image_dataset.py` normalizer bug
 noted in `CLAUDE.md`).
 
 *(The line that used to sit here — "any M2–M5 coding until the baseline is done
-and reviewed" — is discharged: M1/L1 are done, M2 is done, and M3 is coded.
-M4 and M5 remain uncoded and are staged behind M3's results.)*
+and reviewed" — is discharged: M1/L1/M2 are done and M3 is done and trained.
+M4 and M5 remain uncoded. **M3's results change what M4 and M5 are for, so both
+entries above should be re-read with `PROGRESS.md` §11 and §6 in hand** — the
+conditioning M4 would add aux losses to is measurably inert, and M5's
+distillation premise assumes a multi-view latent carries something a single view
+cannot, which M3's N=1 result has not yet demonstrated.)*
