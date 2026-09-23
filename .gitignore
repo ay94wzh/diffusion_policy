@@ -21,6 +21,11 @@ data/outputs/run_*_abs_single_s42_200ep/*
 !data/outputs/run_*_m3*_s42_200ep/
 data/outputs/run_*_m3*_s42_200ep/*
 !data/outputs/run_*_m3*_s42_200ep/logs.json.txt
+# M4 runs: same rationale. logs.json.txt carries the aux_loss curve, which is the
+# primary evidence that the aux mechanism is learnable (see PROGRESS section 13).
+!data/outputs/run_*_m4*_s42_200ep/
+data/outputs/run_*_m4*_s42_200ep/*
+!data/outputs/run_*_m4*_s42_200ep/logs.json.txt
 data_local
 .vscode
 _wandb

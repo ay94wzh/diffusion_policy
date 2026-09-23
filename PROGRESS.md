@@ -1,6 +1,6 @@
 # PROGRESS
 
-Last updated: 2026-09-19. See `PROPOSAL.md` (research direction) and `PLAN.md`
+Last updated: 2026-09-23. See `PROPOSAL.md` (research direction) and `PLAN.md`
 (milestones M1–M5).
 
 **M1 is COMPLETE.** Single-view DP baselines were trained for can, lift, and
@@ -36,11 +36,20 @@ fatal bugs were found and fixed (§11.1). §10.6's planned 9-run matrix was
 enough to establish both findings, so the four single-signal cells and lift were
 dropped as redundant (§11.6).
 
-**M4 (per-view auxiliary heads) is IMPLEMENTED and CPU-VERIFIED but NOT RUN**
-(§12, 2026-09-19). One part added, M3's model held fixed: the encoder gained
-`forward_full` (a pure code move, bit-identical), the dataset emits the per-slot
-camera-frame action chunk, and a new policy subclass adds the aux head and its
-loss. No results yet; the `m4on`/`m4off` square pair is the first gate.
+**M4 (per-view auxiliary heads) is COMPLETE** (§13, 2026-09-22). The pair is run and
+the verdict has two halves that must be quoted together: the **mechanism is real** —
+`aux_loss` falls 52× and the head provably uses per-view information (6.4% of a
+mean-collapsing predictor's floor) — and the **behavioural effect is null**
+(`m4on` − `m4off` = +0.02 trained / +0.04 held-out, inside the ±0.05 noise). M4 also
+**did not** revive the conditioning: it sits inside M3's band on every axis.
+
+**§6's four-way architectural confound is RESOLVED** (§14, 2026-09-23). M3's gain
+comes from **multi-view sampling (N>1)**: M3-off with `view_count_range=[1,1]` —
+one randomly drawn view per sample, everything else identical — scores 0.04 trained /
+0.05 held-out, indistinguishable from L1 (0.02/0.02) and nowhere near `m3off`
+(0.76/0.55). This session therefore closed all three candidates in the order they
+looked most promising: pose conditioning (§11.3), aux pressure (§13), encoder
+architecture (§14). PROPOSAL §2.2's fusion is what stands.
 
 ---
 
@@ -248,7 +257,10 @@ generalization — is **not supported**. What *is* supported is that the M3
 **architecture** fixes square and can. The next experiment should therefore
 attack the architecture, not add more conditioning.
 
-- **Which ingredient?** Four things changed at once relative to L1: (a) 7 slots
+- **Which ingredient?** → ✅ **ANSWERED (§14, 2026-09-23): it is (b), multi-view
+  sampling (N>1).** M3-off with `view_count_range=[1,1]` scores 0.04/0.05, i.e. L1's
+  floor, where `m3off` scores 0.76/0.55. The encoder architecture alone reproduces
+  nothing. Four things changed at once relative to L1: (a) 7 slots
   instead of 1, (b) per-sample N∈[1,7] instead of a fixed 1, (c) MHA fusion with
   a learnable query, (d) a shared backbone whose `conv1` is widened 3→9. The 2×2
   cannot separate them and neither can any run so far. The cheapest informative
@@ -1326,3 +1338,282 @@ is PROPOSAL §2.4's claim directly — and it is the cell M3 never had.
   address §6's four-way architectural confound, the view-pool question (§7.1's
   ±75/±90 are still trained on while ±15/±45 are still held out), or the
   elevation asymmetry.
+
+---
+
+## 13. M4 — per-view auxiliary heads (RESULTS, 2026-09-22)
+
+**Headline: the mechanism is real and the behavioural effect is null.** `aux_loss`
+falls **52×** and the head provably uses per-view information — but `m4on` − `m4off`
+is **+0.02 trained / +0.04 held-out**, inside the ±0.05 noise floor, and M4 sits
+inside M3's band on every axis. It did **not** revive the conditioning.
+
+The pair is the project's only **RNG-locked** A/B: same architecture (the aux head is
+built unconditionally), same seed, batch order and worker count, one scalar term
+different. M3's four cells were parameter-identical; these two are *draw*-identical.
+
+### 13.1 What was run
+
+| | |
+|---|---|
+| runs | `run_square_m4on_s42_200ep`, `run_square_m4off_s42_200ep` |
+| cell | M3's model (`plucker`+`eef` on) + per-view camera-frame aux head |
+| variable | `policy.aux_loss_weight` **1.0** vs **0.0** |
+| protocol | 201 epochs, seed 42, batch 64, `num_workers` 10/2, `topk.k=1`, exit 0 both |
+| records | 88,440 per run = 440 batches × 201 epochs (no truncation) |
+
+**The weight was checked before committing hours, and the config's own comment was
+wrong.** It predicted `aux/diff ≈ 0.1` at init; the measured batch-0 value is
+**0.316** (diff 1.0816, aux 0.3415), and the CPU suite independently says 0.301 on
+synthetic data. The reason is that `robomimic_abs_action_only_normalizer_from_stat`
+range-normalizes only the 3 position dims — the rot6d (6) + gripper (1) dims sit at
+scale 1, so the target is ~3× larger in normalized units than the comment assumed.
+A rule was fixed in advance (proceed unless the ratio exceeded 1.0), so 1.0 stayed —
+PROPOSAL §2.4's literal "summed", with no post-hoc tuning.
+
+### 13.2 The A/B is a null
+
+Strict `EnvRobosuite.is_success()`, 50 paired episodes, `azimuth_interp` + `elevation_az0`:
+
+| model | trained\* | **held-out** | el_0 | el_p15 | el_m15 |
+|---|---|---|---|---|---|
+| m3off | 0.76 | **0.55** | 0.88 | 0.30 | 0.04 |
+| m3plucker | 0.76 | 0.50 | 0.76 | 0.24 | 0.02 |
+| m3eef | 0.77 | 0.57 | 0.82 | 0.18 | 0.02 |
+| m3on | 0.74 | 0.55 | 0.78 | 0.18 | 0.00 |
+| **m4on** | **0.76** | **0.56** | 0.70 | 0.00 | 0.00 |
+| **m4off** | **0.74** | **0.52** | 0.80 | 0.14 | 0.00 |
+| *delta* | *+0.02* | *+0.04* | *−0.10* | *−0.14* | *0.00* |
+
+Per-viewpoint deltas run −0.12 to +0.18 with the sign flipping freely: at ±15°, ±45°
+and ±75° `m4on` is **behind**, at −45°/+45° well ahead. The means (+0.02, +0.04) are
+the noise floor. **The aux term buys nothing measurable**, and M4 does not regress
+either — it is inside M3's 0.50–0.57 held-out band.
+
+The RNG lock was verified **exactly**, not statistically: `m4on`'s batch-0
+`train_loss − aux_loss` = **1.081642270**, identical to `m4off`'s `train_loss` =
+1.081642270, difference `0.000e+00`. The two arms saw identical batches, crops, noise
+draws and timesteps.
+
+### 13.3 The mechanism is alive — the part that is new
+
+`aux_loss` collapses, which is the opposite of M3's failure mode:
+
+| epoch | 0 (mean) | 5 | 15 | 25 | 50 | 200 |
+|---|---|---|---|---|---|---|
+| `aux_loss` | 0.2389 | 0.0304 | 0.0206 | 0.0173 | 0.0147 | **0.0066** |
+
+A **52×** reduction from the 0.3415 batch-0 value. Flatness at the init value would
+have meant "unlearnable from one view" — M3's failure mode caught in 50 steps. It is
+not flat.
+
+**And it is not a collapse to the mean.** The aux loss is mean-over-active-views then
+mean-over-frames MSE in normalized camera-frame action space, so a **constant** head
+scores the pooled target variance. Measured on 1024 real dataset samples
+(frames × active views, 80 dims): that floor is **0.2692**, and the epoch-25 loss
+(0.0173) is **6.4% of it** — the head is 15.6× below what a mean-collapsing predictor
+can reach. Since the floor already pools over *rotated* per-view targets, beating it
+that hard means the head reads view-relative geometry out of `z_v`. Pipeline check:
+the same script's zero-predictor estimate (0.3469) matches the actual batch-0 value
+(0.3415) to 1.6%, comparing 1024 samples against 64.
+
+### 13.4 The trunk was reshaped as much as a re-seed
+
+A weight-space diagnostic on the EMA weights (what rollouts use), relative L2:
+
+| module | params | aux effect (on vs off @200) | **RNG-only reference** |
+|---|---|---|---|
+| `obs_encoder` | 12,532,928 | 0.596 | **0.471** |
+| `model` (UNet) | 277,632,138 | 0.856 | **0.824** |
+| `aux_head` | 151,888 | 1.167 | — |
+| `normalizer` | 2,526 | **0.00000** | 0.00000 |
+
+The reference column is `m4off` vs the committed `m3on`: same seed, same shapes,
+**different RNG stream only** (§12.5's note that a fresh `m4off` is not an RNG
+control for `m3on` — which is exactly what makes it a clean *scale* here).
+
+The aux term moves the weights **about as much as re-seeding does**. So the null is
+**not** explained by "the gradient was too weak to move anything" — that hypothesis
+is dead. Two controls confirm the comparison is sound: `m4off`'s aux head drifts
+1e-5 over 50 epochs (provably never touched, as the weight-0 path predicts), and
+`normalizer` differs by *exactly* zero.
+
+Caveat, stated because the metric invites over-reading: weight-space distance is
+crude — SGD accumulates drift along directions that need not matter functionally. The
+defensible claim is "a perturbation of the same order as run-to-run variation,
+producing no behavioural change".
+
+### 13.5 What the null means
+
+The surviving explanation is the one §12.1 did not consider: **the information the aux
+head needs is already in `z_v`.** M3 reaches 0.55 held-out with *no* aux supervision
+at all, and a 151,888-param head (0.052% of the policy) can fit camera-frame targets
+post hoc from a latent that already encodes the scene. The aux pressure then adds
+nothing the diffusion objective had not already produced — which is why it can reshape
+the weights substantially while changing no behaviour.
+
+§12.6 flagged that the weight is a guess with no sweep. That stands as a limit, but it
+is no longer the leading explanation.
+
+### 13.6 Elevation — a caveat that cuts both ways
+
+At face value M4 is *worse* than M3 at elevation (`m4on` 0.00 vs `m3on` 0.18 at
+`el_p15`). **That reading does not survive its own internal check.** `el_0` is the
+*same camera pose* as `az_0`; for `m4on` they read **0.70 and 0.84** — a **0.14**
+spread on an identical pose from two separate sweeps. §1 documents unseeded diffusion
+sampling giving ~0.08 spread on repeat evals of one checkpoint, so the effective noise
+on these 50-episode sweeps **exceeds the ±0.05 the plan assumed**.
+
+Both directions of over-claiming are blocked by the same measurement: the elevation
+dip is not established, and §13.2's null is correspondingly less precise than
+"+0.04 vs ±0.05" makes it sound.
+
+One more caution from this session: `val_loss` **rises ~3×** after epoch ~50 for every
+model (`m3off` 0.0190→0.0602, the N=1 gate 0.0189→0.0499, L1 0.0198→0.0599) —
+overfitting on the 2% val split, and M3 and L1 end statistically identical while
+rolling out 0.55 vs 0.02. **Compare `val_loss` only at matched epochs.** `m4on`'s
+`val_loss` is not comparable to `m4off`'s at all: it includes the aux term
+(0.0186 diff + 0.017 aux = 0.037 = observed 0.0372).
+
+### 13.7 Limits
+
+- **n = 1 per cell**, 50 paired episodes. The null is "indistinguishable at this
+  resolution", and §13.6 shows the resolution is worse than ±0.05.
+- **The aux weight is a guess** (1.0, unswept) — though §13.4 removes "too weak" as
+  the explanation.
+- **Square only.** Can and lift were not run; §12.5's gate said can only after the
+  square pair was read, and the readout made the *mechanism* question the live one.
+- The elevation arms differ by 0.14 — same order as the noise, so no attribution.
+
+### 13.8 Artifacts
+
+| what | where | in git |
+|---|---|---|
+| sweeps | `data/eval_{interp,el}_square_m4{on,off}/eval_log.json` | ✅ |
+| training curves (+ the `aux_loss` series) | `data/outputs/run_square_m4{on,off}_s42_200ep/logs.json.txt` | ✅ |
+| probe evidence | `data/probe_m4_square_logs.json.txt` | ✅ |
+| campaign log (ordered, timestamped) | `data/m4_campaign.log` | ❌ on the box |
+| weights (4.6 GB each) | `.../checkpoints/latest.ckpt` | ❌ rsync only |
+
+Reproduce:
+
+```bash
+python train.py --config-name=train_diffusion_unet_image_workspace_m4 \
+  task=m4_aux_image_abs_multiview task.task_name=square policy.aux_loss_weight=1.0 \
+  training.seed=42 training.num_epochs=201 training.device=cuda:0 \
+  dataloader.num_workers=10 val_dataloader.num_workers=2 \
+  checkpoint.topk.k=1 logging.project=diffusion_policy_view \
+  hydra.run.dir=data/outputs/run_square_m4on_s42_200ep
+# control: policy.aux_loss_weight=0.0
+
+python eval_novel_view.py -c .../latest.ckpt -o data/eval_interp_square_m4on \
+  -d cuda:0 --preset azimuth_interp --m3-slots 7 --eef-hist-steps 4 --n-envs 14 --n-test-vis 0
+```
+
+Four config traps cost time if the CLI overrides are dropped: `checkpoint.topk.k` is
+**5** (up to ~23 GB/run), `dataloader.num_workers` is **4** (measured 81 s/epoch vs 43
+at 14), `logging.project` is `diffusion_policy_debug`, and `training.resume: True`
+**silently resumes** an existing run dir.
+
+---
+
+## 14. §6's architectural confound — RESOLVED (2026-09-23)
+
+**Headline: M3's gain comes from multi-view sampling (N>1).** §6 listed four things
+that changed at once between L1 and M3 and called the variable-N-vs-fixed-N split "the
+cheapest informative one". It is now run, and the answer is unambiguous.
+
+### 14.1 The cell
+
+`run_square_m3fixedn1_s42_200ep`: **M3-off's exact model**, with one CLI line changed —
+`task.dataset.view_count_range=[1,1]`. In `_m3_slots` that forces `k_active = 1`, and
+the single view is drawn `np.random.choice(view_pool, size=1)` from the **same 7-pose
+pool**. So it is L1's training distribution routed through the M3 encoder (7 slots, 1
+active, widened `conv1` fed zeros, MHA fusion degenerating on one token).
+
+Not RNG-locked to `m3off` (the N draw consumes RNG differently) — a between-run
+comparison, which is why the effect size matters more than the third decimal. Cost:
+**21 s/epoch**, 201 epochs, exit 0.
+
+### 14.2 The prediction, registered before the run
+
+Written down while the run was at epoch 0: *this cell fails like L1, therefore N>1
+fusion is the load-bearing ingredient*. The competing outcome — it still solves square
+— would have meant the gain lives in the encoder path itself and invited a further
+ablation. Stating this first is what keeps the result from being read post hoc.
+
+### 14.3 Result
+
+In-training rollouts (`az_0` `mean_score`), against the two committed references:
+
+| epoch | m3off (N∈[1,7]) | L1 (1 view) | **fixed-N=1** |
+|---|---|---|---|
+| 0 | 0.00 | 0.00 | 0.00 |
+| 50 | 0.38 | 0.02 | 0.06 |
+| 100 | 0.56 | 0.04 | 0.06 |
+| 150 | 0.74 | 0.00 | 0.04 |
+| 200 | 0.80 | 0.02 | 0.00 |
+
+**Five of five checkpoints track L1's floor, not `m3off`.** The strict sweep agrees;
+per-viewpoint, `m3fixedn1` never exceeds 0.06 at any of the eleven azimuths:
+
+| model | trained\* | **held-out** | el_0 | el_p15 | el_m15 |
+|---|---|---|---|---|---|
+| m3off | 0.76 | **0.55** | 0.88 | 0.30 | 0.04 |
+| L1 s42 | 0.02 | 0.02 | 0.02 | 0.02 | 0.00 |
+| L1 s43 | 0.04 | 0.02 | — | — | — |
+| **m3fixedn1** | **0.04** | **0.05** | 0.02 | 0.02 | 0.04 |
+
+Gap to `m3off`: **0.72 trained / 0.50 held-out** — an order of magnitude beyond noise.
+Gap to L1: **+0.02 / +0.03** — zero. The `el_0` = 0.02 is the sharpest single number:
+on the *trained* camera pose this model cannot do the task at all.
+
+### 14.4 What this establishes
+
+**Multi-view training samples are necessary.** Of §6's four confounded changes, the one
+that matters is N>1. Combined with §11.3 (conditioning inert) and §13 (aux pressure
+inert), every other candidate is closed:
+
+| candidate | verdict | where |
+|---|---|---|
+| Plücker rays + camera-frame history conditioning | inert | §11.3 |
+| per-view auxiliary heads | learnable, behaviourally inert | §13 |
+| encoder architecture at N=1 (widened conv1, fusion query, per-view path) | reproduces nothing | §14 |
+| **multi-view sampling (N>1)** | **load-bearing** | §14 |
+
+This is the first *positive* identification in the project. It also reframes the
+story: PROPOSAL §2.2's fusion is what works, while §2.1's geometric conditioning and
+§2.4's aux heads are both inert — so the honest summary is that a *plumbing change*
+(variable-N fusion), not the proposal's stated mechanism, produced the gain.
+
+### 14.5 What it does **not** establish
+
+- **It does not say N=1 inference fails.** M3 trains with N∈[1,7] and infers at N=1
+  well (0.55 held-out). The capability lives in the multi-view *training* signal and
+  the inference path rides on it. That distinction is M5's premise, and this result
+  does not settle it either way.
+- **It does not separate "N>1 needed" from "variable N needed"** — the cell never sees
+  N>1 at all, so both remain consistent. `view_count_range=[2,7]` would separate them.
+- **It does not say how much diversity is enough.** `[2,2]` answers PROPOSAL §7's
+  "2 demo views, or many poses?" directly — one config line, ~2 h.
+- n=1, and the same noise caveats as §13.6.
+
+### 14.6 Operational and doc corrections from this session
+
+- **`CLAUDE.md` is wrong about `data/robomimic_image.zip`.** It claims the 84.75 GB
+  archive "is present locally" (holds transport/tool_hang/all MH splits). It does not
+  exist on this box; a filesystem search returns only source files. Anything sized
+  against that archive needs re-checking.
+- **§12.5's run matrix had no disk gate**, unlike §10.6's preflight. Disk was the
+  binding constraint all session (98% used; 47.8 GB free at start).
+- **The top-k duplicate rule is narrower than §5 implies.** A size heuristic is
+  *wrong*: of 19 checkpoints, exactly **one** was byte-identical to its `latest.ckpt`
+  (`run_square_randview_s43/epoch=0200-*`); six others were the same size and
+  genuinely different models. Compare with `cmp`, never by size.
+- **Epoch cost is load-dependent, so re-measure it every campaign.** The same M4
+  config ran at **373 ms/step** while another user held both GPUs and **84 ms/step**
+  once they finished — a 4× swing, bracketing M3's 94 ms. Two claude-session lessons
+  from §5 are now three: budget for a probe phase, measure rather than estimate, and
+  *re-measure when the box changes*.
+- `wandb` is unattended-safe here via `~/.netrc` (v0.15.12, proven: detached runs
+  reach `logging synced files` with no TTY).
