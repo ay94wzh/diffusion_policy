@@ -841,6 +841,32 @@ large jump, per the stop-rule resolution, rather than a crawl.
 simultaneously locate where collapse ends. The two phenomena have come apart, which is what
 makes the second failure mode an open question rather than a restatement of the first.
 
+### Stage 3 — `[1,5]` (mean N 3.0) breaks the floor, and the ladder is graded after all
+
+Per the stop-rule resolution, a large jump rather than a crawl. In-training rollouts
+(az_0, `mean_score`, the same protocol throughout):
+
+| epoch | `[1,1]` | `[1,2]` | `[1,3]` | **`[1,5]`** | `[1,7]` |
+|---|---|---|---|---|---|
+| 0 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| 50 | 0.06 | 0.00 | 0.06 | 0.08 | 0.38 |
+| 100 | 0.06 | 0.04 | 0.08 | **0.30** | 0.56 |
+| 150 | 0.04 | 0.02 | 0.08 | **0.44** | 0.74 |
+| 200 | 0.00 | 0.04 | 0.08 | **0.40** | 0.80 |
+| **mean** | 0.03 | 0.02 | 0.06 | **0.24** | **0.50** |
+
+**`[1,5]` leaves the floor and plateaus at roughly half of `[1,7]`.** So the ladder is *both*
+things at once, which is a correction to how the previous stage read it:
+
+- a **knee** between mean-N 2.0 and 3.0, where three rungs pinned at 0.04–0.08 break open, and
+- a **graded rise** above it — 0.24 at mean-N 3.0 against 0.50 at 4.0, on both the mean and
+  the plateau value.
+
+"How much diversity is enough" therefore has a two-part answer: below mean-N 3 it is not
+enough at all, and above it, more still buys more. The strict 50-episode sweep is what the
+pre-registered table reads; the numbers above are the free in-training read, and `mean_score`
+saturates.
+
 ### The second failure mode is downstream of the encoder
 
 **The hypothesis this tests.** A healthy *spread* is not information — an encoder can vary
