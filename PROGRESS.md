@@ -950,6 +950,15 @@ resists — it is the task whose actions depend least on precise spatial localis
 conflicting view information costs it least. Both statements are hypotheses on this evidence,
 not measurements.
 
+**When the collapse happens, as far as existing runs can say.** `m3v12` keeps two checkpoints,
+so both were screened: it is already fully collapsed at **epoch 100** (6.3e-07) and unchanged
+at epoch 200 (5.4e-07). Collapse is therefore not a late-training artefact — it is established
+by a third of the way through and stable after. **What cannot be established from any existing
+run is whether collapse *precedes* the behavioural failure**, because the workspace saves only
+`topk` and `latest` per run — there is no per-epoch series to order the two against. Answering
+that needs a run configured to checkpoint periodically, and recording it as a limitation here
+is the honest alternative to inferring an ordering the data does not contain.
+
 **Limits.** `random init` is per-architecture and must never be borrowed across families
 (5.1e-03 vs 1.3e-02 here). `m3fixedn1` — the cell that would have tested "N=1 varying view"
 directly — cannot be screened: its weights were deleted before this question existed (see
