@@ -17,6 +17,8 @@ Last updated 2026-09-24.
 | **M3** | view-conditioned encoder: per-view latents, Plücker + camera-frame-history conditioning, K=7 slots, per-sample N∈[1,7], MHA fusion | **solves square and can at held-out views**; its conditioning contributes nothing |
 | **M4** | per-view camera-frame auxiliary action heads | mechanism is real (`aux_loss` falls 52×), behaviour is null (+0.02/+0.04) |
 | **N>1** | M3's model with one CLI line changed so every sample sees a single view | **the load-bearing ingredient** — reproduces L1, not M3 |
+| **1a** | relational probe on frozen checkpoints: what geometry does `z_v` already carry? | geometry is there *without* conditioning; **Plücker is live in the latent, inert in the behaviour** |
+| **`[1,2]`** | N-diversity ladder, first rung: `view_count_range=[1,2]` instead of `[1,7]` | **floor** — 0.028/0.043, indistinguishable from `[1,1]`; the N>1 gain is not reachable at max-N = 2 |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -710,8 +712,84 @@ inconsistent (it allowed `[2,2]`, which strands the same five slots). It evaluat
 for both committed cells, so removing it is inert for every number published above; pinned by
 a new regression test that cannot even construct its first dataset against the old code.
 
-**Results.** *(Stage 1 launched 2026-09-24; to be filled in against the pre-registration
-above — in-training curve first, then the strict sweep.)*
+### Stage 1 — `[1,2]` lands at the floor, indistinguishable from `[1,1]`
+
+**The prediction above was falsified, in the direction that carries information.** `[1,2]`
+was pre-registered as *partial* (trained mean 0.15–0.40), on the reasoning that mean active
+N = 1.5 would capture part of the dose-response. It captured none of it and fell on the
+**floor branch**.
+
+In-training rollouts (az_0, `mean_score`, the N>1 section's protocol):
+
+| epoch | `m3off` `[1,7]` | `m3fixedn1` `[1,1]` | **`m3v12` `[1,2]`** |
+|---|---|---|---|
+| 0 | 0.00 | 0.00 | 0.00 |
+| 50 | 0.38 | 0.06 | **0.00** |
+| 100 | 0.56 | 0.06 | **0.04** |
+| 150 | 0.74 | 0.04 | **0.02** |
+| 200 | 0.80 | 0.00 | **0.04** |
+| **mean** | **0.50** | **0.03** | **0.02** |
+
+Strict `success_rate`, 50 paired episodes, `azimuth_interp`:
+
+| viewpoint | `m3off` `[1,7]` | `m3fixedn1` `[1,1]` | **`m3v12` `[1,2]`** | |
+|---|---|---|---|---|
+| az_m75 | 0.40 | 0.02 | 0.00 | held out |
+| az_m60 | 0.78 | 0.02 | 0.06 | trained |
+| az_m45 | 0.60 | 0.06 | 0.04 | held out |
+| az_m30 | 0.78 | 0.00 | 0.02 | trained |
+| az_m15 | 0.68 | 0.02 | 0.04 | held out |
+| az_0 | 0.78 | 0.04 | 0.02 | trained |
+| az_p15 | 0.42 | 0.06 | 0.04 | held out |
+| az_p30 | 0.70 | 0.06 | 0.00 | trained |
+| az_p45 | 0.58 | 0.06 | 0.06 | held out |
+| az_p60 | 0.78 | 0.06 | 0.04 | trained |
+| az_p75 | 0.62 | 0.06 | 0.08 | held out |
+| **trained mean** | **0.764** | 0.036 | **0.028** | |
+| **held-out mean** | **0.550** | 0.047 | **0.043** | |
+
+| model | trained | held-out | el_0 | el_p15 | el_m15 |
+|---|---|---|---|---|---|
+| `m3off` `[1,7]` | 0.764 | 0.550 | 0.88 | 0.30 | 0.04 |
+| `m3fixedn1` `[1,1]` | 0.036 | 0.047 | 0.02 | 0.02 | 0.04 |
+| **`m3v12` `[1,2]`** | **0.028** | **0.043** | 0.02 | 0.04 | 0.06 |
+
+**The two nulls are exact, not approximate.** `[1,2]` against `[1,1]`: **Δ trained 0.008,
+Δ held-out 0.004** — an order of magnitude inside the 0.15 noise floor, and below the ±0.05
+that the original plan *assumed* was noise. Against `m3off`: **0.736 trained / 0.507
+held-out**, five to ten times the floor. The rung is not a weakened version of the effect;
+it is the same floor as a single view, on both axes.
+
+**Gates.** `|el_0 − az_0| = 0.00` on the identical camera pose (the internal check passes
+exactly); the 50 episode-seed keys are **set-identical to `m3off`'s**, the mechanical proof
+the episodes are paired across cells; the sampling gate read **mean 1.510 / max 2** on 100
+real draws, where a silently-ignored override would read ~4.0; epoch-0 `val_loss` **0.0844**
+sits between `m3fixedn1`'s 0.0822 and `m3off`'s 0.0862, in the same order as their mean
+active view counts, confirming identical initialisation.
+
+**What it establishes.** The `[1,1] → [1,7]` gain is **not reachable by allowing a second
+view**. Combined with the N>1 section, the ingredient is therefore neither "any N>1" nor a
+smooth dose in the low-N regime. Two limits, stated because they bound the claim: mean active
+N moved only 1.0 → 1.5, so this says nothing about where between 1.5 and 4.0 the effect turns
+on — which is what Stage 2 is for; and the smoke shows the failure is *not* view confusion —
+at the **trained** pose the model scores 0.02, so it never learned the task, L1's failure mode
+rather than "generalises badly".
+
+**Secondary result, and it is free.** This rung **trains at N=1** and still fails, so the
+out-of-distribution explanation for a `[2,2]`-style floor is dead: a floor no longer needs
+"N=1 inference was never trained on" to be explained. That is what the pre-registered table
+predicted this branch would buy.
+
+**Follow-ups.** Per the pre-registration, Stage 2 = `[1,3]` (mean N = 2.0), launched
+2026-09-24; if that is also floor, `[1,5]` and bisect rather than crawl. The `[2,7]` cell
+(~4 h) remains the only one that answers "N>1 vs *variable* N" directly.
+
+**Protocol note.** `m3v12`'s checkpoints dir holds two *different* models — `latest.ckpt`
+(epoch 200, swept here and the runbook default) and an `epoch=0100` topk, which `cmp` shows
+is not byte-identical. The epoch-100 topk scored 0.04 on the same in-training protocol, so
+the choice cannot move the conclusion, but note that the reference sweeps record no
+provenance at all (`data/eval_interp_square_*/` holds only `eval_log.json`), so which
+checkpoint produced a committed number is recoverable only from the runbook convention.
 
 ## Open questions
 

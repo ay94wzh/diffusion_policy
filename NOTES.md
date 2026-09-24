@@ -365,6 +365,8 @@ failed gate (see the runbook).
 | training logs (`logs.json.txt`) | `data/outputs/run_*/` | ✅ for M1/L1/M3/M4 runs |
 | aux-probe evidence | `data/probe_m4_square_logs.json.txt` | ✅ |
 | relational-probe (step 1a) results | `data/probe_relpose_square_{m3on,m3off}/probe_relpose.json` | ✅ |
+| N-diversity ladder sweeps | `data/eval_{interp,el}_square_m3v12/` (and `m3v13…` as rungs land) | ✅ |
+| ladder failure-mode videos | `data/eval_smoke_square_m3v12/media/<viewpoint>/*.mp4` | ✅ |
 | weights (4.6 GB each) | `data/outputs/run_*/checkpoints/latest.ckpt` | ❌ — rsync only |
 | campaign logs (ordered, timestamped) | `data/m3_campaign.log`, `data/m4_campaign.log` | ❌ on the box |
 | multi-view zarrs | `data/multiview/<task>_ph_ring13.zarr` (819k images, 4.5 GB) | ❌ n/a |
