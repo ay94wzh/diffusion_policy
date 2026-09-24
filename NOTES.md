@@ -198,6 +198,35 @@ compared, which is what makes the pairing checkable rather than assumed.
 **`[1,2]` and `[1,4]` grid entries carry `zv_pair_ratio: null` by construction** — a full
 draw needs every slot, so only `[1,7]` and `[7,7]` can carry it. That is why the grid exists
 rather than a single range.
+
+### Collapse screen (`screen_collapse.py`)
+
+**Run this before believing any training run is healthy, and always with `--random-init`.**
+
+Every cell in this project that fails, fails the same way: the encoder outputs a
+near-constant vector, so the policy acts open-loop and fails at the TRAINED pose rather than
+only off-axis. That is what separates the tasks L1 solves from the tasks it destroys, and
+what the ladder's floor is (PROGRESS.md *Collapse is the unifying failure mode*).
+
+```bash
+python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0               # trained
+python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0 --random-init # baseline
+```
+
+- **The baseline is per-architecture and must be measured, never borrowed.** It is 1.3e-02
+  for L1's `MultiImageObsEncoder` and **5.1e-03** for M3's `ViewConditionedObsEncoder` — so
+  a threshold taken from one family is wrong for the other. Compare a cell only against a
+  `--random-init` run of *its own* checkpoint.
+- Anchors (relative spread): M3 encoders — random init 5.1e-03, `m3off` (works) **3.3e-02**,
+  `m3v12` (floor) **5.4e-07**. L1 encoders — random init 1.3e-02, lift (works) 2.5e-02,
+  square (fails) 1.5e-04, can (fails) 3.1e-05.
+- Read the **ordering**, not the absolute value: ~1e-02 healthy, ~1e-04 and below degenerate.
+- It is a screen (16 consecutive frames), not a measurement, and it is **correlation, not
+  causation** — collapse may be a symptom of something deeper. Seed-robust on L1 square
+  (s42 1.5e-04, s43 2.0e-04) and control-backed (random-init baselines match to 1.6%
+  within the L1 family).
+- It works on any image encoder, which is why it is separate from `probe_relpose.py` (that
+  one needs M3's per-slot cam keys).
 ```
 
 Cost: ~2000 dataset reads + one encoder pass each (~30 s), ridge fits (a few seconds), the

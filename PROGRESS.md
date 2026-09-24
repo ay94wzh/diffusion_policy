@@ -19,6 +19,7 @@ Last updated 2026-09-24.
 | **N>1** | M3's model with one CLI line changed so every sample sees a single view | **the load-bearing ingredient** — reproduces L1, not M3 |
 | **1a** | relational probe on frozen checkpoints: what geometry does `z_v` already carry? | geometry is there *without* conditioning; **Plücker is live in the latent, inert in the behaviour** |
 | **`[1,2]`** | N-diversity ladder, first rung: `view_count_range=[1,2]` instead of `[1,7]` | **floor** — 0.028/0.043, indistinguishable from `[1,1]`; the N>1 gain is not reachable at max-N = 2 |
+| **collapse** | measuring the encoder's output spread across failing and working cells | **the unifying failure mode** — every failing cell is collapsed, every working one is not; answers the L1 task split |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -870,6 +871,49 @@ on disk for a direct read.
 not traced to a layer or a cause; "collapse" here is a description of the representation, not
 a mechanism.
 
+### Collapse is the unifying failure mode — and it answers the L1 task split
+
+**The question this closes.** Since L1 this document has said, and repeated through M3, M4
+and the N>1 section, that *"what separates lift from square/can is not identified"*. L1's
+three runs are the controlled comparison the question always needed: **identical architecture,
+identical procedure, identical hyperparameters — only the task differs.** Measuring the
+encoder's relative output spread (std across states, normalised by mean norm) on 16 frames:
+
+| cell | behaviour | relative spread | vs random init |
+|---|---|---|---|
+| random init (architecture baseline) | — | **1.27e-02 / 1.25e-02** | — |
+| L1 **lift** | works, 0.76–0.96 | **2.49e-02** | 1.9× *above* |
+| `m3off` `[1,7]` | works, 0.764/0.550 | 3.31e-02 | 2.5× above |
+| L1 **square** s42 / s43 | fails, ~0.02 | **1.49e-04 / 1.99e-04** | 65–84× *below* |
+| L1 **can** | fails, ~0.02 | **3.05e-05** | 408× below |
+| `m3v12` `[1,2]` | floor, 0.028/0.043 | 5.4e-07 | 24,000× below |
+
+**Every failing cell is a collapsed encoder; every working cell is not.** The random-init
+control rules out the trivial explanation — both tasks' random encoders sit at 1.27e-02 and
+1.25e-02, so this is not "the architecture always looks like that". Training **collapsed**
+square and can while **enriching** lift.
+
+**What it unifies.** L1's task split and the N-ladder's floor are the *same* failure mode, and
+it explains the detail that never fit anywhere else: why these cells fail at the **trained**
+pose. A constant `z_g` means the policy acts **open-loop** — it is not generalising badly, it
+has nothing to condition on. That single fact accounts for M1's collapse-at-±15°, L1's uniform
+~0.02 on square/can, and `[1,2]`'s 0.02 at az_0.
+
+**Caveats, and they matter.** The metric is crude: 16 consecutive frames, `std` across states
+normalised by mean norm, so read the **ordering** as the finding and the absolute values as
+indicative. This is **correlation, not causation** — collapse may be a symptom of something
+deeper rather than the proximate cause, and no layer or cause is identified here. It is one
+metric on one view of the data. What makes it worth acting on is that it is **seed-robust**
+(s42 and s43 agree to 26%), **control-backed** (random-init baselines match to 1.6%), and it
+separates works from fails across **two independently trained families** — L1's three tasks
+and the ladder's two poles.
+
+**Immediate consequence for the ladder.** The pre-registered reading of the invariance probe
+is now moot for the floor cell: there is no representation to ask about invariance of. The
+open question is not canonicity but **what makes training collapse**, and it is testable at
+`[1,3]` (probing it is ~11 min and free) and by screening any new run at epoch ~25, since
+`z_v` variance is a direct and cheap collapse detector.
+
 ## Open questions
 
 - **How much diversity is enough?** `view_count_range=[2,2]` answers PROPOSAL §7's "2
@@ -883,8 +927,11 @@ a mechanism.
   "indistinguishable at this resolution", not "proven identical".
 - **The elevation asymmetry.** Square collapses at `el_m15` for every M3 cell while can
   holds 0.22. Unexplained.
-- **What separates lift from square/can** — the question L1 opened and nothing since has
-  closed. One task per side of the hypothesis, with a scene-complexity confound.
+- ~~**What separates lift from square/can**~~ — **answered**: the encoder **collapses** on the
+  two tasks L1 destroys and not on the one it solves (L1 lift 2.49e-02 vs square 1.49e-04 and
+  can 3.05e-05, against an identical random-init baseline of 1.3e-02; seed-robust). See
+  *Collapse is the unifying failure mode*. The follow-up it opens is the better question:
+  **what makes training collapse**, and is collapse a cause or a symptom?
 - **M5's premise.** M3 already does N=1 novel-view inference well, so distillation is only
   worth it if the fused latent demonstrably carries something the single-view path cannot,
   which no result so far shows.
