@@ -3,8 +3,8 @@
 Why this exists
 ---------------
 A bad viewpoint set does not crash -- it produces a plausible-looking degradation
-curve. `PROGRESS.md` section 7.3 records that M2's gates only ran at the *end* of
-an 8-hour job, and that the `--limit-demos 5` pilot became the mitigation. This is
+curve. `NOTES.md` records that M2's gates only ran at the *end* of an 8-hour job,
+and that the `--limit-demos 5` pilot became the mitigation. This is
 the same idea for evaluation viewpoints, which are cheap to render and expensive
 to get wrong: it takes about a minute instead of an evening.
 
@@ -209,7 +209,7 @@ def main(dataset, preset, azimuths, camera, demo, n_states, montage, min_coverag
 
     if bad:
         print(f'WARNING: low scene coverage at {bad}; those views likely cannot '
-              f'support the task (see PROGRESS.md 7.1 on the +-90 ring views)')
+              f'support the task (see the M2 section of PROGRESS.md on the +-90 ring views)')
     else:
         print('all viewpoints clear the coverage floor')
 

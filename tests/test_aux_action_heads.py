@@ -7,9 +7,10 @@ Run from the repo root:
 Four things are checked, in rough order of how much they buy:
 
 1. `action_to_cam`'s rotation convention, WITH mutation power. The repo has
-   twice shipped a convention check that could not fail (PROGRESS.md sections
-   9.2 and 10.2), so every mutation below must produce a large, quantified
-   error -- including the one a wrong implementation is most likely to ship.
+   twice shipped a convention check that could not fail (NOTES.md, "A check
+   that cannot fail proves nothing" and "Silent degradation"), so every mutation
+   below must produce a large, quantified error -- including the one a wrong
+   implementation is most likely to ship.
 2. The dataset emits and pairs the target correctly, recoverable from the
    renders alone (a swapped cam table would train happily and read as "aux
    didn't help").
@@ -84,7 +85,8 @@ def test_action_to_cam_convention():
 
     Every fixture camera is NON-IDENTITY and every fixture pose is a real
     rotation: at an identity camera all of these conventions agree, which is
-    precisely how a broken check passes (PROGRESS.md section 9.2).
+    precisely how a broken check passes (NOTES.md, "A check that cannot fail
+    proves nothing").
     """
     rng = np.random.default_rng(1)
     worst_anchor = 0.0

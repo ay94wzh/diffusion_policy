@@ -4,8 +4,8 @@ Verifies, in order:
   1. the Pluecker ray-map convention, anchored to the M2-validated numpy
      projector `project_world_to_pixel` -- *including* mutation power checks,
      because a convention check that cannot fail under a wrong convention
-     proves nothing (PROGRESS.md section 9.2 records that the deleted draft's
-     check was itself wrong);
+     proves nothing (NOTES.md, "A check that cannot fail proves nothing", records
+     that the deleted draft's check was itself wrong);
   2. crop alignment between the image and its Pluecker map;
   3. the matched-latent-dimension invariant: output_shape is (521,) under every
      ablation flag, and the UNet's 148 parameter tensors are shape-identical to
@@ -219,9 +219,9 @@ def test_plucker_convention():
 def test_convention_mutation_power():
     """Every wrong convention must FAIL the check -- otherwise it proves nothing.
 
-    A check that cannot fail is worse than no check: PROGRESS.md section 9.2
-    records that the deleted draft's convention check was itself wrong, so its
-    apparent failure told us nothing about the code.
+    A check that cannot fail is worse than no check: NOTES.md ("A check that
+    cannot fail proves nothing") records that the deleted draft's convention
+    check was itself wrong, so its apparent failure told us nothing about the code.
     """
     rng = np.random.default_rng(1)
     pose = (np.asarray(POSES[1][0]), _unit(POSES[1][1]))

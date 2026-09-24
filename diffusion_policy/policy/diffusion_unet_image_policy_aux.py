@@ -9,7 +9,7 @@ bit-identical, gradients included, in tests/test_aux_action_heads.py).
 
 Why this is the milestone that makes the conditioning matter
 ------------------------------------------------------------
-M3's conditioning measured inert (`PROGRESS.md` section 11.3): the camera reaches
+M3's conditioning measured inert (the M3 conclusion in `PROGRESS.md`): the camera reaches
 the model only through the Pluecker channels of `conv1`, and nothing in the
 objective required the encoder to use it -- at a trained view the image alone
 predicts the action. PROPOSAL.md section 2.4 names the per-view auxiliary heads

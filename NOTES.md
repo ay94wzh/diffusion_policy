@@ -1,0 +1,245 @@
+# NOTES — environment, runbooks, operations
+
+Practical material for running this project on the remote training box. Results and
+methods live in `PROGRESS.md`; the milestone plan in `PLAN.md`.
+
+## Environment
+
+- conda env **`robodiff`**: torch **2.8.0+cu128** (sm_120), robosuite 1.2.0, robomimic
+  0.2.0, mujoco_py 2.0.2.13, numcodecs 0.10.2, wandb 0.15.12.
+  **Do not recreate the env from `conda_environment.yaml`** — its `pytorch=1.12.1` pin is
+  stale and unusable on the RTX 5090s. The live env was upgraded in place.
+- `sudo apt install -y libosmesa6-dev libgl1-mesa-glx libglfw3 patchelf`, or robosuite
+  fails to import. Offscreen rendering works with osmesa, EGL, and the default backend.
+- **Camera control** (no `CameraMover` in robosuite 1.2): `sim.model.cam_pos/cam_quat`
+  plus `sim.forward()`. `cam_quat` is **wxyz**; `robosuite.utils.transform_utils` is
+  **xyzw** — convert explicitly. `hard_reset=False` (set by the stock runner) makes camera
+  moves persist across soft resets, so the harness re-applies the viewpoint at every reset
+  from a base pose captured on first use — it never compounds.
+- **The zarr cache (`<hdf5>.zarr.zip`) is keyed only by hdf5 path**, not by `shape_meta`.
+  A single-view run caches one camera; a later two-camera run on the same path `KeyError`s
+  on the wrist key. Delete the cache to switch.
+- Dropping the wrist camera from `shape_meta` removes encoder FLOPs but **not** render
+  cost: `camera_names` comes from the hdf5 `env_args`, so robosuite still renders both
+  cameras every step.
+- **`numcodecs 0.10.2` has no `jpeg2k`**, so anything opening the multi-view zarrs must
+  import `diffusion_policy.dataset.multiview_image_dataset` first (`register_codecs()`).
+- `wandb` is unattended-safe here via `~/.netrc` — proven with detached runs reaching
+  `logging synced files` with no TTY.
+
+## Runbook
+
+All commands run from the repo root. **201 epochs, not 200**: checkpoint and rollout fire
+on `epoch % 50 == 0` and there is no save at the end of training, so 201 makes epoch 200
+fire (200 would stop at 150).
+
+### Training
+
+```bash
+# M1 single-view baseline
+python train.py --config-dir=. --config-name=train_diffusion_unet_image_workspace.yaml \
+  task=<task>_image_abs_single training.seed=42 training.device=cuda:0 \
+  training.num_epochs=201 dataloader.num_workers=8 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view \
+  hydra.run.dir=data/outputs/run_<task>_abs_single_s42_200ep
+
+# L1 view diversity (7-view pool, M1's architecture)
+#   task=randview_image_abs_multiview  training.rollout_every=50  dataloader.num_workers=10
+
+# M3 view-conditioned encoder (flags select the 2x2 cell; both false = m3off)
+python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
+  task=m3_plucker_image_abs_multiview task.task_name=square \
+  policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false \
+  training.seed=42 training.num_epochs=201 training.device=cuda:0 \
+  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view \
+  hydra.run.dir=data/outputs/run_square_m3off_s42_200ep
+#   N=1 fidelity gate: task=m3_plucker_image_abs_n1
+#   single-view cell:  task.dataset.view_count_range=[1,1]
+
+# M4 aux heads (control: policy.aux_loss_weight=0.0)
+python train.py --config-name=train_diffusion_unet_image_workspace_m4 \
+  task=m4_aux_image_abs_multiview task.task_name=square policy.aux_loss_weight=1.0 \
+  training.seed=42 training.num_epochs=201 training.device=cuda:0 \
+  dataloader.num_workers=10 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view \
+  hydra.run.dir=data/outputs/run_square_m4on_s42_200ep
+```
+
+Multi-seed on a multi-GPU box: `ray start --head --num-gpus=3` then
+`ray_train_multirun.py --config-dir=. --config-name=<cfg> --seeds=42,43,44
+--monitor_key=test/mean_score -- multi_run.run_dir='...' multi_run.wandb_name_base='...'`.
+
+### Evaluation
+
+```bash
+# novel-view sweep (M3-era flags; omit --m3-slots for M1/L1)
+python eval_novel_view.py -c <run>/checkpoints/latest.ckpt -o data/eval_interp_square_m3off \
+  -d cuda:0 --preset azimuth_interp --m3-slots 7 --eef-hist-steps 4 --n-envs 14 --n-test-vis 0
+#   presets: azimuth_sweep5 / azimuth_interp / azimuth_sweep3 / elevation_az0
+#   fast smoke: --preset azimuth_sweep3 --n-test 4 --n-test-vis 2 --n-envs 4
+
+python summarize_novel_view.py <dir>/eval_log.json     # degradation table
+python eval.py -c <run>/checkpoints/latest.ckpt -o data/eval_orig -d cuda:0   # sanity
+```
+
+`--m3-slots` is **7 for all M3 cells including `m3off`** — the assert compares against the
+checkpoint's own `shape_meta`, and the cam/mask/history normalizer entries exist
+regardless of the flags. `eval_log.json` is a flat dict keyed
+`test/<viewpoint>/{mean_score,success_rate,sim_max_reward_<seed>}`, so any number can be
+re-derived without re-running. `test_start_seed: 100000` in the env_runner config is what
+makes the episodes **paired** across viewpoints.
+
+### Resume and long campaigns
+
+Resume with the same run dir and `training.num_epochs=<epochs still wanted>`; the loop runs
+`num_epochs` iterations from the restored counter (from epoch 150, `num_epochs=51` → 200),
+and the cosine LR schedule is re-based to the new `num_epochs`. `TopKCheckpointManager`
+state is in-memory only, so on resume its map starts empty and stale topk files on disk are
+never evicted — delete them yourself.
+
+- **Long jobs die with the Claude Code session.** Launch anything that must outlive it
+  disowned: `setsid bash -c '<cmd> > log 2>&1' &`.
+- **To re-plan a running batch without killing the job:** the driver is
+  `bash -c 'for ...; do python train.py ...; done'`; `kill -TERM <bash pid>` stops the loop
+  while the running `python` child survives and is reparented to init. Append progress
+  markers to `data/m3_campaign.log` so a hand-over is auditable.
+- `training.resume: True` **silently resumes** an existing run dir — set it deliberately.
+- **Disabling rollouts takes two flags, not one.** The workspace tests
+  `epoch % rollout_every == 0`, which is true at epoch 0, so a large `rollout_every` alone
+  still fires the first rollout — and on the multi-view configs that dies with
+  `KeyError: 'view_06_image'`. Set `training.rollout_every=1000000` **and**
+  `checkpoint.topk.monitor_key=val_loss checkpoint.topk.mode=min`, the second because
+  `TopKCheckpointManager` does an unguarded `data[monitor_key]` lookup.
+- Four config defaults that cost time if the CLI overrides above are dropped:
+  `checkpoint.topk.k` is **5** (up to ~23 GB/run), `dataloader.num_workers` is **4**
+  (81 s/epoch vs 43 at 14), `logging.project` is `diffusion_policy_debug`, and
+  `training.resume` is `True`.
+
+### Data generation (M2)
+
+```bash
+python tests/test_multiview_dataset.py                      # CPU-only, no render
+python generate_multiview_dataset.py \
+  --dataset data/robomimic/datasets/square/ph/image_abs.hdf5 \
+  --output data/multiview/square_ph_ring13.zarr --montage data/multiview/square_ring13.png
+```
+
+- Use `--workers 4`: `max_inflight = workers*5` and each in-flight future pins a whole
+  `(T,13,84,84,3)` buffer, so the default 24 can reach ~8 GB of RAM.
+- **The `--limit-demos 5` pilot (~5 min) is not optional.** The gates run only at the very
+  end of a full run, so a broken render loop surfaces after hours; the pilot reproduces the
+  full run's gate values exactly.
+- **There is no resume**; `--overwrite` is the only recovery and it wipes the store. Wipe
+  each output before starting, and abort the batch if gate 1 does not PASS (`grep -aq
+  "gate 1.*PASS" data/gen_$task.log`).
+- A killed run is **silent** — zarr returns fill-value 0 for unwritten chunks and the gates
+  never read the zarr back. Check for all-zero *frames* (not zero pixels; square and can
+  legitimately contain 3 and 1 pure-black pixels per 84,672).
+
+## Machine and timing
+
+2× RTX 5090 (32 GB each), 24 cores, 125 GB RAM, shared with other users — load spikes from
+~5 to ~25 and gives 2× slowdowns. `n_envs: 28` is fine here (the old 6 GB-laptop warning
+is moot).
+
+| run | cost |
+|---|---|
+| M1 square / can / lift | ~22 / ~16 / ~7 s per epoch (440/335/127 batches @ bs 64) |
+| M1 rollout | ~2–3 min (28 envs, 56 episodes) |
+| M3 step (B=64) | **94 ms** (min 92, max 98), 6.9 GB peak GPU — ~1.9× M1 per step, since the shared resnet runs over N∈[1,7] views instead of 1 |
+| M3 square | **43 s/epoch** at `num_workers=14` — **compute-bound**: 8 workers still gave 41 s under 2-GPU contention; **4 workers fell to 81 s** (decode-bound) |
+| M3 N=1 gate / can | 23 / ~30 s per epoch |
+| M3 rollout | ~6 min (n_envs=14, 56 episodes) |
+| `azimuth_interp` sweep | ~40 min (11 viewpoints × 50 episodes); ~46 min with two sweeps sharing the box |
+| `azimuth_sweep3` / `elevation_az0` | ~12 min |
+| fixed-N=1 cell | 21 s/epoch |
+
+- **≥8 dataloader workers**; ~2 concurrent runs is the practical ceiling on 24 cores. The
+  limit is CPU, not GPU memory (7 GB of 32 GB used).
+- **2 GPUs give ~1.7×, not 2×**, on a 3-run tail: independent processes run at full speed
+  in parallel, but the last run has no partner.
+- **Epoch cost is load-dependent — re-measure it every campaign.** The same M4 config ran
+  at **373 ms/step** while another user held both GPUs and **84 ms/step** once they
+  finished — a 4× swing that brackets M3's 94 ms.
+
+## Disk
+
+Chronic constraint: the root volume ran at 97–100% during M1 and was still ~98% (47.8 GB
+free) at the start of the N>1 session. `/data` (15 TB) exists but is **owned by another
+user and not writable**. Check `df -h` as step 0 of any campaign — the M4 run matrix
+originally had no disk gate and that was the binding constraint all session.
+
+- A checkpoint is **4.62 GB** (policy + EMA + Adam state); `topk.k=1` plus `latest.ckpt`
+  ≈ **9.2 GB per run**. Nine M3 runs needed ~83 GB.
+- **The top-k file is often byte-identical to `latest.ckpt`** — the workspace saves both
+  back-to-back from the same in-memory state, so a topk named `epoch=0200-*` on a 201-epoch
+  run is a duplicate. **Compare with `cmp`, never by size**: of 19 checkpoints, exactly one
+  was byte-identical while six others were the same size and genuinely different models.
+- **The M1 (`*_abs_single`) weights were deleted on 2026-09-19** to make room for M3. Their
+  `logs.json.txt`, `media/` and `.hydra/` survive and every number derived from them is
+  committed. Recovery is a 1–2.5 h retrain per task from the runbook above.
+- **`data/robomimic_image.zip` (84.75 GB) does not exist on this box** — only the three
+  `ph` tasks (`square`, `can`, `lift`) are available, with both `image.hdf5` and
+  `image_abs.hdf5`. Anything sized against that archive needs re-checking.
+- No cleanup was needed for M2: the full run consumed 4.5 GB and left 23 GB free.
+
+## Traps
+
+### A check that cannot fail proves nothing
+
+Twice in this project a convention check was written that could not fail, and both times it
+was caught only by writing a *mutation* test alongside it. The deleted M3 draft's Plücker
+check compared a camera-frame ray direction against a world-frame expected direction
+without applying the rotation `R`, so its wrong output (dots of −0.85, −0.18, −0.60 instead
+of ≈1.0) said nothing about the code. A test at an **identity** camera is equally vacuous
+(`R == Rᵀ == I`). `tests/test_view_conditioned_obs_encoder.py` therefore pins the
+convention against an independent numpy projector at **non-identity** poses and adds five
+mutation power checks; `tests/test_aux_action_heads.py` does the same for the rot6d
+transform, including the executable assertion that the wrong 6×6 shortcut *passes* at
+`R_c == I` and fails everywhere else.
+
+### Silent degradation
+
+The expensive failures in this project produced no error and no implausible number. Eight
+were caught before M3 ran (a `keepdim=True` that yielded a `(3,3,1)` rotation matrix; a
+`reshape` that folded a view dim into channels; a shadowed loop variable that broke the
+row-major slot-to-history correspondence; two crop-offset desynchronisations between image
+and ray map), and two more were fatal at epoch 0 and found only by *running*
+(a normalizer key mismatch between the rollout runner, the eval harness and the policy —
+`predict_action` normalizes every obs key with no fallback — and a struct-mode `DictConfig`
+that raises on `del shape_meta['obs'][k]` only when the cfg comes from a checkpoint's dill
+payload). The positive half: the M2 gate-1 flip check exists precisely because an
+upside-down dataset looks plausible in a montage.
+
+### Verify by running, not by importing
+
+`preview_viewpoints.py`'s render path and both M3 runtime paths went from
+"import-checked, never executed" to working only by execution; import checks and `__mro__`
+assertions passed and proved nothing about the obs-key contract at runtime. **Budget for a
+probe phase before any long run** — the M3 probe cost ~35 min and saved ~15 h.
+
+### M2-specific
+
+The generator's gates are computed only at the end of a run; `--limit-demos 5` is the
+mitigation. The driver should wipe each output before starting and abort the batch on a
+failed gate (see the runbook).
+
+## Artifacts
+
+| what | where | in git |
+|---|---|---|
+| novel-view sweeps + viewpoint videos | `data/eval_*/eval_log.json`, `media/<viewpoint>/*.mp4` | ✅ |
+| training logs (`logs.json.txt`) | `data/outputs/run_*/` | ✅ for M1/L1/M3/M4 runs |
+| aux-probe evidence | `data/probe_m4_square_logs.json.txt` | ✅ |
+| weights (4.6 GB each) | `data/outputs/run_*/checkpoints/latest.ckpt` | ❌ — rsync only |
+| campaign logs (ordered, timestamped) | `data/m3_campaign.log`, `data/m4_campaign.log` | ❌ on the box |
+| multi-view zarrs | `data/multiview/<task>_ph_ring13.zarr` (819k images, 4.5 GB) | ❌ n/a |
+| robomimic PH datasets | `data/robomimic/datasets/<task>/ph/{image,image_abs}.hdf5` | ❌ n/a |
+
+Move weights between machines with
+`rsync -av data/outputs <user>@<other>:/path/to/diffusion_policy/data/outputs`.
+
+Training curves and rollout videos are on wandb, project **`diffusion_policy_view`**
+(account `zihan-wa23-tsinghua-university`); the M1 runs are square `runs/1h4oj5p6`, can
+`runs/q95ylpsc`, lift `runs/poearmxq`.
