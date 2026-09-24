@@ -1038,7 +1038,16 @@ matched draws*: healthy ~1e-02 and above, collapsed ~1e-07, with nothing between
 sits in the healthy band and still fails, so the band predicts collapse, not failure.
 
 **`m3n1gate` is the cell that sharpens the mechanism: it trains at N=1 and is perfectly
-healthy.** So collapse is *not* caused by "too few views". The contrast is with `m3v12` — both
+healthy (5.93e-02).** So collapse is *not* caused by "too few views".
+
+> **Caveat on that contrast, found while trying to match it.** `m3n1gate` is a **K=1** model
+> (`n_slots=1`) with a **singleton** `view_pool=[6]`, so a `[7,7]` override is structurally
+> impossible for it — `_apply_range` correctly refuses, and its only measurable setting is its
+> own `[1,1]`. Its number therefore cannot be matched to the K=7 cells on either the draw or
+> the slot count, and the contrast above carries both confounds. It remains suggestive — the
+> view *count* is nearly matched to `m3v12` (1 versus 1–2) while the *variability* differs,
+> which is the axis in question — but it is not a matched comparison and should not be quoted
+> as one. The contrast is with `m3v12` — both
 have N ≤ 2 samples, but `m3n1gate` always sees the **same** view while `m3v12` sees a **random**
 one from a 7-view pool, and L1 (random single view, collapsed on square/can) fits the same
 pattern. The destabiliser is therefore **view variation the encoder cannot yet reconcile**:

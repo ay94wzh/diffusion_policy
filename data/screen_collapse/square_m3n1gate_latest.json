@@ -1,0 +1,17 @@
+{
+  "n_states": 16,
+  "feature_dim": 512,
+  "mean_norm": 0.5854729413986206,
+  "max_spread": 0.03473088890314102,
+  "relative_spread": 0.0593210831284523,
+  "random_init": false,
+  "cell_view_count_range": [
+    1,
+    1
+  ],
+  "effective_range": [
+    1,
+    1
+  ],
+  "checkpoint": "data/outputs/run_square_m3n1gate_s42_200ep/checkpoints/latest.ckpt"
+}

@@ -11,6 +11,9 @@ data/*
 # measurement artifact -- every number is re-derivable from it without re-running.
 !data/probe_relpose_*/
 !data/probe_relpose_*/**
+# collapse screens (screen_collapse.py): one small JSON per checkpoint, ditto.
+!data/screen_collapse/
+!data/screen_collapse/**
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*
