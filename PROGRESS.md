@@ -914,6 +914,49 @@ open question is not canonicity but **what makes training collapse**, and it is 
 `[1,3]` (probing it is ~11 min and free) and by screening any new run at epoch ~25, since
 `z_v` variance is a direct and cheap collapse detector.
 
+### The whole table, screened — and `m3n1gate` sharpens the mechanism
+
+Every surviving checkpoint, screened with `screen_collapse.py` (~2 min each, no training):
+
+| cell | views per sample | behaviour | relative spread |
+|---|---|---|---|
+| random init, `ViewConditionedObsEncoder` | — | — | 5.1e-03 |
+| random init, `MultiImageObsEncoder` | — | — | 1.3e-02 |
+| **`m3n1gate`** | **1, FIXED (`view_pool=[6]`)** | **works at az_0 (0.94), view-tied** | **5.93e-02** |
+| `m3on` square / can | [1,7] random | works | 4.26e-02 / 4.45e-02 |
+| `m3off` square / can | [1,7] random | works | 3.31e-02 / 2.04e-02 |
+| L1 lift | 1, random of 7 | works | 2.49e-02 |
+| L1 square s42 / s43 | 1, random of 7 | fails | 1.49e-04 / 1.99e-04 |
+| L1 can | 1, random of 7 | fails | 3.05e-05 |
+| `m3v12` | [1,2] random | floor | 5.4e-07 |
+
+**The separation is clean across both architectures**: healthy 2e-02–6e-02, collapsed 1e-04
+and below, with an empty middle two to three orders of magnitude wide. Nothing lands between.
+
+**`m3n1gate` is the cell that sharpens the mechanism: it trains at N=1 and is perfectly
+healthy.** So collapse is *not* caused by "too few views". The contrast is with `m3v12` — both
+have N ≤ 2 samples, but `m3n1gate` always sees the **same** view while `m3v12` sees a **random**
+one from a 7-view pool, and L1 (random single view, collapsed on square/can) fits the same
+pattern. The destabiliser is therefore **view variation the encoder cannot yet reconcile**:
+with a fixed view the image→action mapping is learnable and the encoder stays healthy; with a
+randomly varying view at low N, the same scene arrives from different angles carrying the
+same action label, and if the encoder cannot build a view-invariant representation from too
+few views, ignoring the input entirely is the loss-minimising degenerate solution. Many views
+supply enough signal to build the invariant instead.
+
+That reframes the N>1 headline once more: the ingredient is not "more than one view" but
+**enough views to make the varying-view objective solvable**. It also gives a reason lift
+resists — it is the task whose actions depend least on precise spatial localisation, so
+conflicting view information costs it least. Both statements are hypotheses on this evidence,
+not measurements.
+
+**Limits.** `random init` is per-architecture and must never be borrowed across families
+(5.1e-03 vs 1.3e-02 here). `m3fixedn1` — the cell that would have tested "N=1 varying view"
+directly — cannot be screened: its weights were deleted before this question existed (see
+`NOTES.md`'s rule). M1's baselines cannot either, for the same reason; re-training one would
+establish whether *the original single-view baseline was itself collapsed*, which would make
+this one story from M1 onward rather than two.
+
 ## Open questions
 
 - **How much diversity is enough?** `view_count_range=[2,2]` answers PROPOSAL §7's "2
