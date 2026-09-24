@@ -426,10 +426,23 @@ def build_probe_sets(Zs, ACTs, CAMs, EEFs, args, seed=42):
                 pair_X.append(torch.cat([Zs[f, i], Zs[f, j], Zs[f, i] - Zs[f, j]]))
                 pair_t.append(torch.from_numpy(t))
                 pair_R.append(torch.from_numpy(R))
+    def _t3(xs, ts, Rs):
+        """``None`` -- absent -- when a target has no rows, rather than crashing.
+
+        A collect range whose `hi` is 1 produces no view PAIRS, so `rel_pose` is
+        empty; `torch.stack([])` raises a message that says nothing about the cause,
+        which is how this was found. Absent has to be distinguishable from a
+        placeholder, here as everywhere else in this probe.
+        """
+        if len(xs) == 0:
+            return None
+        return (torch.stack(xs), torch.stack(ts),
+                torch.stack(Rs) if Rs is not None else None)
+
     return dict(
-        abs_pose=(torch.stack(abs_X), torch.stack(abs_t), torch.stack(abs_R)),
-        cam_eef=(torch.stack(eef_X), torch.stack(eef_t), None),
-        rel_pose=(torch.stack(pair_X), torch.stack(pair_t), torch.stack(pair_R)),
+        abs_pose=_t3(abs_X, abs_t, abs_R),
+        cam_eef=_t3(eef_X, eef_t, None),
+        rel_pose=_t3(pair_X, pair_t, pair_R),
     )
 
 
@@ -545,6 +558,23 @@ def _stability_entry(policy, dataset, device, args, To, rng):
                     _rel_dist(zv[p], zv[q])
                     for p in range(len(idx)) for q in range(p + 1, len(idx)))
 
+    # --- does the FUSION pass the geometry through? -------------------------------
+    # The policy never sees z_v: `forward` hands the UNet `z_g` alone. So a healthy,
+    # decodable z_v does NOT imply a decodable z_g, and that gap is exactly the
+    # "is the failure downstream of the encoder?" question -- which is unanswerable
+    # from the per-view latents alone. Measured at draws with ONE active view, since
+    # that is both the inference condition and the case where z_g is an unambiguous
+    # function of a single view's z_v.
+    zg_X, zg_t, zg_R = [], [], []
+    for per in draws:
+        for (zg, _z, _act, pairs) in per:
+            if len(pairs) != 1:
+                continue
+            cam = np.asarray(dataset.cam_table[pairs[0][1]], dtype=np.float64)
+            zg_X.append(zg[0])                       # first obs step's fused latent
+            zg_t.append(torch.from_numpy(cam[:3]))
+            zg_R.append(torch.from_numpy(quat_wxyz_to_mat(cam[3:7])))
+
     entry = dict(
         n_states=n_states,
         n_repeats=int(args.stability_repeats),
@@ -563,6 +593,15 @@ def _stability_entry(policy, dataset, device, args, To, rng):
             zg_by_size.get(f'{int(dataset.n_slots)}|{int(dataset.n_slots)}', [])),
     )
     entry.update(_full_draw_block(dataset, draws, n_slots=int(dataset.n_slots)))
+    # decode the camera pose from the FUSED latent, to be compared against the same
+    # decode from z_v (`targets.abs_pose`). `None` when the range never produces a
+    # single-view draw -- absent, never a placeholder.
+    entry['zg_abs_pose'] = None
+    if len(zg_X) >= 50:
+        sub = {}
+        report_target(torch.stack(zg_X), torch.stack(zg_t), torch.stack(zg_R),
+                      'zg_abs_pose', args, device, sub)
+        entry['zg_abs_pose'] = sub['zg_abs_pose']
     return entry
 
 
@@ -694,7 +733,12 @@ def main(checkpoint, output_dir, device, n_samples, pairs_per_sample,
                use_plucker=bool(enc_cfg.use_plucker),
                use_eef_hist=bool(enc_cfg.use_eef_hist), targets={})
     for name in ('abs_pose', 'cam_eef', 'rel_pose'):
-        X, t, R = sets[name]
+        got = sets[name]
+        if got is None:
+            print(f'  {name}: no rows at collect range {collect_range}, skipped')
+            out['targets'][name] = None
+            continue
+        X, t, R = got
         report_target(X, t, R, name, args, device, out['targets'])
 
     t0 = time.time()
