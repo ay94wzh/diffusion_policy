@@ -704,6 +704,18 @@ short of 0.764. Registered as such, with the competing outcomes named in advance
 remains on a **second seed** on the most interesting rung, since every null in this document
 is n=1 and this ladder has no RNG-locked null.
 
+**Resolution of a conflict between that stop rule and the follow-up rule — recorded 2026-09-25
+*before* `[1,3]`'s number was read.** If `[1,3]` lands at the floor, both rules fire and they
+disagree: the stop rule says two consecutive within-noise rungs mean saturation, while the
+follow-up says bisect with `[1,5]`. **The stop rule governs the *working* regime, not the
+floor regime.** Its purpose is to stop chasing noise once rungs stop differing *at a level
+worth having*; here every rung sits at the floor, the effect is known to exist above mean
+N = 2.0, and the open question is *where* it turns on rather than *how much* it is worth.
+Bisecting with a large jump serves the stop rule's intent — do not spend GPU-hours on a crawl
+— rather than violating it. The second seed is therefore spent on whichever rung first
+*works*, where a null would actually mean something. Written down and committed ahead of the
+number so it cannot be read as a post-hoc rescue.
+
 **The one code change it needed.** `MultiViewImageDataset.__init__` rejected any
 non-degenerate range whose `hi` was below the slot count, so `[1, 2]` at K=7 raised. That
 guard was redundant (`n_slots <= len(view_pool)` plus `hi <= n_slots` already give
