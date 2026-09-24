@@ -44,6 +44,8 @@ import torch
 from omegaconf import OmegaConf
 
 from diffusion_policy.common.pytorch_util import dict_apply
+# reuse the probe's tested override rather than writing a second one
+from probe_relpose import _apply_range
 
 # train.py registers this; a config loaded outside it needs it too
 OmegaConf.register_new_resolver('eval', eval, replace=True)
@@ -62,7 +64,7 @@ def load_policy(checkpoint, device):
     return policy, cfg
 
 
-def measure(policy, cfg, device, n_states, random_init):
+def measure(policy, cfg, device, n_states, random_init, view_count_range=None):
     """Relative spread of the encoder's features across states.
 
     `std` is taken across STATES and maxed over dims, then divided by the mean feature
@@ -79,6 +81,12 @@ def measure(policy, cfg, device, n_states, random_init):
                       if hasattr(m, 'reset_parameters') else None)
     try:
         dataset = hydra.utils.instantiate(cfg.task.dataset)
+        cell_range = tuple(int(x) for x in dataset.view_count_range)
+        # WITHOUT this, the screen is not comparable across cells: each draws from its own
+        # training range, so a [1,2] cell sees 1-2 active views while a [1,7] cell sees up
+        # to 7, and the number of live views affects the fused output's spread. Same
+        # confound the probe's grid removes, and it must be removed here too.
+        _apply_range(dataset, view_count_range)
         Z = []
         for i in range(min(n_states, len(dataset))):
             obs = dict_apply(dataset[i]['obs'],
@@ -94,7 +102,9 @@ def measure(policy, cfg, device, n_states, random_init):
                     mean_norm=float(Z.norm(dim=-1).mean()),
                     max_spread=float(Z.std(dim=0).max()),
                     relative_spread=float(Z.std(dim=0).max() / Z.norm(dim=-1).mean()),
-                    random_init=bool(random_init))
+                    random_init=bool(random_init),
+                    cell_view_count_range=[int(x) for x in cell_range],
+                    effective_range=[int(x) for x in dataset.view_count_range])
     finally:
         if saved is not None:
             encoder.load_state_dict(saved)
@@ -111,8 +121,15 @@ def main():
     ap.add_argument('--random-init', action='store_true',
                     help='discard the weights and re-measure -- THE control: without it '
                          'the number cannot distinguish collapse from architecture')
+    ap.add_argument('--view-count-range', default=None,
+                    help='LO,HI draw override. Use the SAME value across cells being '
+                         'compared -- a cell drawing from its own training range sees a '
+                         'different number of live views, which moves the very number '
+                         'this screen reports')
     ap.add_argument('--num-threads', type=int, default=4)
     args = ap.parse_args()
+    vcr = (tuple(int(x) for x in args.view_count_range.split(','))
+           if args.view_count_range else None)
 
     torch.set_num_threads(args.num_threads)
     device = torch.device(args.device)
@@ -122,11 +139,13 @@ def main():
     print(f'  encoder={cfg.policy.obs_encoder._target_.split(".")[-1]} '
           f'use_plucker={use_plucker}')
 
-    out = measure(policy, cfg, device, args.n_states, args.random_init)
+    out = measure(policy, cfg, device, args.n_states, args.random_init, vcr)
     out['checkpoint'] = args.checkpoint
     print(f"  relative spread = {out['relative_spread']:.3e}  "
           f"(mean |z| {out['mean_norm']:.4f}, spread {out['max_spread']:.3e}, "
           f"n={out['n_states']})")
+    print(f"  draw: cell {out['cell_view_count_range']} -> effective "
+          f"{out['effective_range']}")
     if args.random_init:
         print('  ^ RANDOM INIT -- this is the architecture baseline to compare against')
     else:

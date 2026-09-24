@@ -28,7 +28,7 @@ Operational detail: `NOTES.md`. Last updated 2026-09-24.
 | **M5** — single-novel-view inference | ⬜ not coded | — | below |
 | **relational supervision** (`z_v`, `z_g`) | ⬜ retired by 1a's result — not cost | 1a measured the geometry 1b would supervise is *already* in `z_v` | *Next* above |
 | **N-diversity ladder** | 🟡 Stage 1 `[1,2]` **floor**; Stage 2 `[1,3]` running | the pre-registered prediction was falsified — max-N = 2 buys nothing over N = 1 (0.028/0.043 vs 0.036/0.047), and the floor is an **encoder collapse**, not a generalisation failure | PROGRESS *N-diversity ladder* |
-| **collapse** | measuring encoder output spread across failing vs working cells | ✅ **the unifying failure mode** — every failing cell is collapsed, every working one is not; answers the L1 task split that had been open since L1 | PROGRESS *Collapse is the unifying failure mode* |
+| **collapse** | measuring encoder output spread across failing vs working cells | ⚠️ **a failure mode, not the failure mode** — explains `[1,2]`'s floor and answers the L1 task split (open since L1), but `[1,3]` is at the floor with a *healthy* encoder, so a second failure mode exists | PROGRESS *Collapse is a failure mode* |
 
 ## Next: what makes training collapse? (opened 2026-09-25)
 

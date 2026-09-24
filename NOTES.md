@@ -209,14 +209,25 @@ only off-axis. That is what separates the tasks L1 solves from the tasks it dest
 what the ladder's floor is (PROGRESS.md *Collapse is the unifying failure mode*).
 
 ```bash
-python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0               # trained
-python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0 --random-init # baseline
+# ALWAYS pass the SAME --view-count-range when comparing cells
+python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0 --view-count-range 7,7
+python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0 --random-init \
+  --view-count-range 7,7                                                    # baseline
 ```
 
+- **Pass a matched `--view-count-range`, or the screen is not comparable across cells.** By
+  default each cell draws from its OWN training range, so a `[1,2]` cell sees 1–2 live views
+  while a `[1,7]` cell sees up to 7 — and live-view count moves the fused spread. This is the
+  *same* confound the probe's grid removes, and it was reproduced here once already: without
+  the flag `[1,3]` read **above** `m3off` (4.13e-02 vs 3.31e-02), which was the tell.
 - **The baseline is per-architecture and must be measured, never borrowed.** It is 1.3e-02
   for L1's `MultiImageObsEncoder` and **5.1e-03** for M3's `ViewConditionedObsEncoder` — so
   a threshold taken from one family is wrong for the other. Compare a cell only against a
   `--random-init` run of *its own* checkpoint.
+- **A screen is not a verdict on failure.** `m3v13` `[1,3]` is at the floor with a *healthy*
+  encoder (1.36e-02 at `[7,7]` against `m3off`'s 1.72e-02), so a healthy reading does not
+  mean a cell will work and collapse is not necessary for failure. Screen for collapse, do
+  not screen for success.
 - Anchors (relative spread): M3 encoders — random init 5.1e-03, `m3off` (works) **3.3e-02**,
   `m3v12` (floor) **5.4e-07**. L1 encoders — random init 1.3e-02, lift (works) 2.5e-02,
   square (fails) 1.5e-04, can (fails) 3.1e-05.
