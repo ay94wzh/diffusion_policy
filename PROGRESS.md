@@ -841,6 +841,45 @@ large jump, per the stop-rule resolution, rather than a crawl.
 simultaneously locate where collapse ends. The two phenomena have come apart, which is what
 makes the second failure mode an open question rather than a restatement of the first.
 
+### The second failure mode is downstream of the encoder
+
+**The hypothesis this tests.** A healthy *spread* is not information — an encoder can vary
+richly along directions carrying nothing about the scene. So the natural account of `[1,3]`
+was "it varies, but uselessly". The grid probe measures decodable content directly, so the
+hypothesis is falsifiable either way.
+
+**It is refuted.** Ridge readouts (closed-form, so they cannot diverge — see the anomaly
+below), same grid and seed for every cell:
+
+| target | `m3off` `[1,7]` WORKS | `m3v12` `[1,2]` collapsed | **`m3v13` `[1,3]` floor** | mean-predictor floor |
+|---|---|---|---|---|
+| `abs_pose` | 24.45 cm / 12.53° | 41.45 cm / 38.49° | **23.98 cm / 13.44°** | 42.19 cm / 37.94° |
+| `cam_eef` | 19.19 cm | 22.78 cm | **16.62 cm** | 22.85 cm |
+| `rel_pose` | 51.23 cm / 31.07° | 55.13 cm / 64.77° | **44.16 cm / 29.71°** | 55.75 cm / 65.35° |
+
+`m3v12` sits at the floor on every column, which is what a collapsed encoder must look like —
+a useful confirmation that the probe tracks the collapse it was built alongside. But
+**`m3v13` beats the working cell on every single column** while scoring 0.080. So `[1,3]`'s
+representation is healthy *and* more linearly decodable than the cell that works, and it still
+fails.
+
+**Therefore the failure is entirely downstream of the encoder** — in the fusion, or in whether
+the policy uses its conditioning at all. This is the first time in this document that a
+failure has been localised *past* the encoder, and it redirects the question the ladder
+created: the second failure mode is not a representation problem.
+
+**Consistency check.** The grid run reproduces the earlier step-1a probe on `m3off` exactly
+(`abs_pose` ridge 24.45 cm / 12.53° in both), so the `--view-count-range` override and the
+schema-2 changes did not perturb what is collected — the numbers in this table are the same
+quantity as the ones in the step-1a section.
+
+**An anomaly, flagged rather than explained.** The MLP readout *diverged* on `m3v13`'s
+translation dims — 727 cm against a 42 cm floor, i.e. **worse than predicting the mean** —
+while its rotation dims were fine (4.04°). A fit landing worse than the mean predictor
+indicates divergence, not absent information, so it is an artefact; but it is unexplained, and
+the MLP column should not be quoted for this cell until it is. The ridge columns are
+authoritative here precisely because a closed-form fit cannot diverge.
+
 ### The floor is an encoder collapse, not a generalisation failure
 
 **Why this was measured at all.** Every evaluation here is N=1 inference, and at N=1 the
