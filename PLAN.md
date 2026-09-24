@@ -26,9 +26,18 @@ Operational detail: `NOTES.md`. Last updated 2026-09-24.
 | **M4** — per-view aux action heads | ✅ done | `aux_loss` 52× down; `m4on − m4off` +0.02/+0.04 | PROGRESS *M4* |
 | **architectural confound** | ✅ resolved | fixed-N=1 scores 0.04/0.05 → **N>1** is load-bearing | PROGRESS *N>1* |
 | **M5** — single-novel-view inference | ⬜ not coded | — | below |
-| **relational supervision** (`z_v`, `z_g`) | 🟡 step 1a done; 1b/1c not coded | `m3off` already reads `rel_pose` at 9.34° (floor 65.35°); `m3on` 2.02° | *Next* above |
+| **relational supervision** (`z_v`, `z_g`) | ⬜ retired by 1a's result — not cost | 1a measured the geometry 1b would supervise is *already* in `z_v` | *Next* above |
+| **N-diversity ladder** | 🟡 Stage 1 `[1,2]` running | pre-registered: trained mean 0.15–0.40 | PROGRESS *N-diversity ladder* |
 
-## Next: relational supervision on `z_v` (opened 2026-09-24)
+## Next: relational supervision on `z_v` (opened 2026-09-24, **retired 2026-09-24**)
+
+> **Retired on reading 1a, not on cost.** 1a measured that the geometry 1b would supervise is
+> *already* in `z_v` — the exact shape of intervention M4 found behaviourally null. And the
+> action head never sees `z_v`: `forward` hands the UNet `z_g` alone, so any per-view
+> supervision must reach behaviour through the fusion bottleneck. 1c is worse structurally:
+> fusion is a single learnable query, so there is no view-to-view term to bias, and at N=1
+> there is no pair at all. The section is kept for the reasoning, not as pending work. What
+> replaced it is the *N-diversity ladder* (PROGRESS.md).
 
 **The governing fact.** The scene is static, so the camera pose is recoverable from the
 RGB itself and a better-injected Plücker map carries no information the image lacks. That
@@ -127,8 +136,9 @@ add information per GPU-hour; full rationale in `PROGRESS.md`'s open questions.
 
 | run | answers | cost |
 |---|---|---|
-| `view_count_range=[2,2]` | how much diversity is enough (PROPOSAL §7's own question) | ~2 h |
-| `view_count_range=[2,7]` | "N>1 needed" vs "*variable* N needed" | ~2 h |
+| ~~`view_count_range=[2,2]`~~ | superseded — now a conditional Stage 2 *confound probe* (it never trains at N=1, so a floor is unreadable on its own) | ~3 h |
+| `view_count_range=[2,7]` | "N>1 needed" vs "*variable* N needed" — the only cell that answers it directly | **~4 h, not ~2 h** (mean active N = 4.5 exceeds `m3off`'s 4.0) |
+| `view_count_range=[1,2]` / `[1,3]` / `[1,4]` | how much diversity is enough (PROPOSAL §7), with N=1 in-distribution at every rung | ~2.8 / ~3.0 / ~3.2 h all-in |
 | lift + `m3on` | do we regress the one task L1 already solves | ~1 h |
 | second seed on one M3/M4 cell | whether the nulls hold at a resolution better than n=1 | ~1 h each |
 | ±60° training pool | how much view *quality* alone buys | one render + run |

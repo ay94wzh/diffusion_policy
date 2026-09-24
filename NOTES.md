@@ -70,6 +70,46 @@ Multi-seed on a multi-GPU box: `ray start --head --num-gpus=3` then
 `ray_train_multirun.py --config-dir=. --config-name=<cfg> --seeds=42,43,44
 --monitor_key=test/mean_score -- multi_run.run_dir='...' multi_run.wandb_name_base='...'`.
 
+### View count (N per sample)
+
+`view_count_range` is drawn in **one place**, `multiview_image_dataset.py` `_m3_slots`:
+`k_active = np.random.randint(lo, hi + 1)` (uniform over the range, inclusive) then
+`np.random.choice(view_pool, size=k_active, replace=False)` (uniform over *subsets*, and the
+order within a draw is random too, which is what stops the encoder keying off slot identity).
+Redrawn every `__getitem__`, so N and the subset move each epoch. Active slots are always a
+prefix (`0..k_active-1`); the rest are zero with mask 0.
+
+- **A guard that rejected `[1, 2]` was removed on 2026-09-24.** It raised for any
+  non-degenerate range whose `hi` was below the slot count — so `[1, 2]` at K=7 failed while
+  `[2, 2]` was allowed, though both strand the same slots. Redundant (`n_slots <= len(view_pool)`
+  plus `hi <= n_slots` already give `hi <= len(view_pool)`, all `np.random.choice(..., replace=False)`
+  needs) and inert for every committed cell (`[1, 7]` has `hi == n_slots`, `[1, 1]` has
+  `lo == hi`). Pinned by `tests/test_view_conditioned_obs_encoder.py::test_view_count_range_is_honoured`,
+  which cannot construct its first dataset against the old code. **Legal ranges now: any
+  `1 <= lo <= hi <= n_slots`.**
+- **The view draws are NOT the global numpy RNG leaking across workers — do not "fix" this.**
+  An earlier note in this project claimed torch does not re-seed numpy per worker, so every
+  worker replays one draw stream. That is **false for this torch version**. Torch seeds it
+  explicitly, in `torch/utils/data/_utils/worker.py`:
+  `np_seed = _generate_state(base_seed, worker_id); np.random.seed(np_seed)`, alongside
+  `random.seed(seed)` / `torch.manual_seed(seed)`. `base_seed` is redrawn for every new
+  iterator, and `persistent_workers: False` means a new iterator each epoch — so draw streams
+  differ **across workers and across epochs**. Adding a `worker_init_fn`, a `generator=`, or
+  `persistent_workers=True` would *change* the stream and break exact comparability with every
+  committed cell, for no benefit.
+- **Cost model: encoder cost tracks the MEAN active view count, not K.** Masked slots are
+  skipped in the encode loop (`view_conditioned_obs_encoder.py`), so K only sets the loop
+  length; parameters are K-independent. Measured ≈ **7.3 s/epoch per mean active view + ~14 s
+  fixed** — anchors: `[1,1]` (mean 1.0) 21 s/epoch, `[1,7]` (mean 4.0) 43 s/epoch, `[1,2]`
+  (mean 1.5) **24 s/epoch observed**. Use it as a launch gate: if a rung's epoch time matches
+  a different range's prediction, the override did not take.
+- **N is drawn per sample, so the eval N is a design decision, not a detail.** Every
+  evaluation here is **N=1** (`eval_novel_view.py::_serve_m3` puts the single live camera in
+  slot 0 and zeroes the rest). At N=1 the fusion softmax is over one unmasked key, so the
+  learnable query has *no effect* — that path is a degenerate corner of the module. M3
+  randomises N precisely so that corner stays in-distribution; a cell trained at `[2, 2]` or
+  `[k, k]` forfeits that, and a floor from it cannot be read as a diversity statement.
+
 ### Evaluation
 
 ```bash
@@ -238,6 +278,11 @@ originally had no disk gate and that was the binding constraint all session.
 
 - A checkpoint is **4.62 GB** (policy + EMA + Adam state); `topk.k=1` plus `latest.ckpt`
   ≈ **9.2 GB per run**. Nine M3 runs needed ~83 GB.
+- **Size a run with `du`, never by counting checkpoint files.** `topk.k=1` writes a second
+  file only when the best rollout is *not* the final epoch — `m3off`'s checkpoints dir is
+  8.7 GiB (topk byte-identical to `latest.ckpt`, see below) while `m3plucker`'s is 4.4 GiB
+  (no topk written). Estimating 3 × 4.4 GiB for a deletion that in fact released 17 GiB is
+  exactly the error this note exists to prevent.
 - **The top-k file is often byte-identical to `latest.ckpt`** — the workspace saves both
   back-to-back from the same in-memory state, so a topk named `epoch=0200-*` on a 201-epoch
   run is a duplicate. **Compare with `cmp`, never by size**: of 19 checkpoints, exactly one
@@ -245,6 +290,13 @@ originally had no disk gate and that was the binding constraint all session.
 - **The M1 (`*_abs_single`) weights were deleted on 2026-09-19** to make room for M3. Their
   `logs.json.txt`, `media/` and `.hydra/` survive and every number derived from them is
   committed. Recovery is a 1–2.5 h retrain per task from the runbook above.
+- **`run_square_{m3plucker,m3eef,m3fixedn1}_s42_200ep/checkpoints/` were deleted 2026-09-24**
+  (17 GiB, 20 → 37 GB free) for the N-diversity ladder. Delete **only** `checkpoints/` — the
+  git-tracked `logs.json.txt`, `media/` and `.hydra/` live beside it. All three cells' numbers
+  and sweeps are committed and their questions closed: `m3plucker`/`m3eef` by 1a's finding
+  that the conditioning is inert behaviourally, `m3fixedn1` by the resolved N>1 confound.
+  **`m3off` is never a deletion candidate** — it is the ladder's anchor and the only cheap
+  eval-path-drift check.
 - **`data/robomimic_image.zip` (84.75 GB) does not exist on this box** — only the three
   `ph` tasks (`square`, `can`, `lift`) are available, with both `image.hdf5` and
   `image_abs.hdf5`. Anything sized against that archive needs re-checking.

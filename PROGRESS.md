@@ -666,6 +666,53 @@ information is present"; it is not a claim about how the policy routes it. And `
 encoding of a *specific* scene, so the leak is about pose recovery in a static scene, which
 is the regime the whole argument was made in.
 
+## N-diversity ladder — how much multi-view signal is needed?
+
+**Opened 2026-09-24; Stage 1 launched the same day.** The N>1 section established that
+multi-view *sampling* is the load-bearing ingredient, and states plainly what it does not
+establish: *"It does not separate 'N>1 needed' from '*variable* N needed'"*. PROPOSAL §7 asks
+the same question from the other end — "2 demo views, or many poses?". This ladder answers
+both, and each answer points at a different fix for the 0.55-vs-0.82 held-out gap.
+
+**Why every rung keeps N=1 in the range.** Every published number here is an **N=1
+inference**: `eval_novel_view.py` serves the one live camera into slot 0 (`mask[0] = 1.0`,
+the rest zero and masked out), and at N=1 the fusion softmax is over a *single* unmasked key
+— the learnable query has no effect at all, so that path is a **degenerate corner** of the
+module rather than a scaled-down version of it. M3's stated rationale was that randomising N
+makes that corner in-distribution. A `[2,2]` cell never trains there, so its failure would be
+confounded three ways (≤2 views insufficient / N=1 inference out-of-distribution / no N=1
+samples at all). **So each rung varies only the upper end of the range**, and differs from
+`m3off` on exactly one axis.
+
+**Pre-registered 2026-09-24, before Stage 1 was launched.** Read on the **trained mean**
+`success_rate` (mean over `az_m60,m30,0,p30,p60`), held-out mean as a supporting read. Noise
+floor 0.15 on a mean (*Noise and resolution*). References: `m3off` `[1,7]` = 0.764 / 0.550;
+`m3fixedn1` `[1,1]` = 0.036 / 0.047.
+
+**Prediction: `[1,2]` lands partial — trained mean 0.15–0.40**, above the floor band and well
+short of 0.764. Registered as such, with the competing outcomes named in advance:
+
+| Stage 1 trained mean | pre-registered reading | Stage 2 |
+|---|---|---|
+| **≥ 0.40** | saturating — max-2 plus an N=1 component captures most of the gain | `[2,2]`: the confound probe at its cheapest point |
+| **≤ 0.15**, no trained viewpoint > 0.25 | floor — max-2 insufficient *even with N=1 in-distribution*, which also kills the out-of-distribution explanation for any future `[2,2]`-style floor | `[1,3]`, then `[1,5]` to bisect |
+| **0.15 < mean < 0.40** | graded dose-response | `[1,4]` to bracket the knee |
+
+**Stop rule:** two consecutive rungs within 0.15 → the ladder has saturated; spend what
+remains on a **second seed** on the most interesting rung, since every null in this document
+is n=1 and this ladder has no RNG-locked null.
+
+**The one code change it needed.** `MultiViewImageDataset.__init__` rejected any
+non-degenerate range whose `hi` was below the slot count, so `[1, 2]` at K=7 raised. That
+guard was redundant (`n_slots <= len(view_pool)` plus `hi <= n_slots` already give
+`hi <= len(view_pool)`, all `np.random.choice(..., replace=False)` needs) and internally
+inconsistent (it allowed `[2,2]`, which strands the same five slots). It evaluated **False**
+for both committed cells, so removing it is inert for every number published above; pinned by
+a new regression test that cannot even construct its first dataset against the old code.
+
+**Results.** *(Stage 1 launched 2026-09-24; to be filled in against the pre-registration
+above — in-training curve first, then the strict sweep.)*
+
 ## Open questions
 
 - **How much diversity is enough?** `view_count_range=[2,2]` answers PROPOSAL §7's "2
@@ -700,7 +747,9 @@ Every milestone lands as new files; these are them.
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE
-history, `action_to_cam`), `eval_novel_view.py` (`--m3-slots`, `--eef-hist-steps`, the
+history, `action_to_cam`; and the `view_count_range` guard removed 2026-09-24 so the
+N-diversity ladder can run `[1, 2]` — inert for both committed cells, see *N-diversity
+ladder*), `eval_novel_view.py` (`--m3-slots`, `--eef-hist-steps`, the
 elevation orbit), `summarize_novel_view.py` (sort key for `el_*` names), and one
 `getattr`-guarded `step_log['aux_loss']` line in the upstream
 `train_diffusion_unet_image_workspace.py`. No other upstream package file is modified.

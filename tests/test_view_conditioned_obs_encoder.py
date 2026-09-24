@@ -638,6 +638,88 @@ def test_dataset_plumbing():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_view_count_range_is_honoured():
+    """`view_count_range` must control the draw -- including a range the old guard
+    rejected, which is what makes this a regression test rather than decoration.
+
+    Until 2026-09-24 `__init__` raised for any non-degenerate range whose `hi` was
+    below the slot count, so `[1, 2]` at K=3 was rejected while `[2, 2]` was allowed
+    -- though both leave exactly the same slots permanently dead. The N-diversity
+    ladder needs `[1, 2]` at K=7 (PROGRESS.md *N-diversity ladder*), so the guard was
+    removed. **This test fails against the pre-change code**, by construction: the
+    first dataset below cannot even be constructed there.
+
+    The count assertions carry the mutation power. Checking "mean is 1.5" against a
+    hardcoded number would pass on a dataset that ignored the setting entirely; so
+    the range is varied and the two draws must *differ*, and the subset draw is
+    checked to actually cover the pool rather than re-serving one view.
+    """
+    import test_multiview_dataset as tmd
+    tmp = tempfile.mkdtemp(prefix='m3_range_')
+    try:
+        path = os.path.join(tmp, 'synth.zarr')
+        tmd.build_synthetic_zarr(path)
+        n_views, hw = tmd.N_VIEWS, tmd.H
+        slots = n_views
+        obs_meta = {f'view_slot_{k:02d}_image': {'shape': [3, hw, hw], 'type': 'rgb'}
+                    for k in range(slots)}
+        obs_meta['robot0_eef_pos'] = {'shape': [3]}
+        obs_meta['robot0_eef_quat'] = {'shape': [4]}
+        obs_meta['robot0_gripper_qpos'] = {'shape': [2]}
+        shape_meta = {'obs': obs_meta, 'action': {'shape': [10]}}
+
+        def build(rng_range):
+            return MultiViewImageDataset(
+                shape_meta=shape_meta, dataset_path=path, horizon=4,
+                pad_before=1, pad_after=7, n_obs_steps=2, abs_action=True,
+                view_pool=list(range(n_views)), view_count_range=rng_range,
+                eef_hist_steps=3, seed=0, val_ratio=0.0)
+
+        def draws(ds, n=400, seed=0):
+            """(active count, slot-0 view index) per fetch.
+
+            The draw happens per `__getitem__`, so re-fetching a 9-sample dataset
+            still yields independent draws -- which is why this needs no large store.
+            """
+            np.random.seed(seed)
+            expected = {(i, v): np.moveaxis(ds._view_obs_frames(i, v), -1, 1)
+                        .astype(np.float32) / 255.
+                        for i in range(len(ds)) for v in range(n_views)}
+            out = []
+            for i in range(n):
+                j = i % len(ds)
+                obs = ds[j]['obs']
+                m = obs['view_mask'].numpy()[0]
+                assert m[0] == 1.0, 'slot 0 must always be active'
+                assert np.all(np.diff(m) <= 0), 'active slots must form a prefix'
+                img = obs['view_slot_00_image'].numpy()[0]
+                hit = [v for v in range(n_views) if np.allclose(img, expected[(j, v)][0])]
+                assert len(hit) == 1, f'slot 0 image matches {hit} views'
+                out.append((int(m.sum()), hit[0]))
+            return out
+
+        small = draws(build([1, 2]))
+        counts = np.array([c for c, _ in small])
+        assert counts.min() >= 1 and counts.max() == 2, \
+            f'[1, 2] drew counts {counts.min()}..{counts.max()}'
+        assert abs(counts.mean() - 1.5) < 0.12, counts.mean()
+
+        big = draws(build([1, 3]))
+        bcounts = np.array([c for c, _ in big])
+        assert bcounts.max() == 3, bcounts.max()
+        assert abs(bcounts.mean() - 2.0) < 0.12, bcounts.mean()
+        assert abs(counts.mean() - bcounts.mean()) > 0.3, \
+            'the range was ignored: two different ranges produced the same draw'
+
+        seen = {v for _, v in small}
+        assert seen == set(range(n_views)), f'slot 0 only ever held views {sorted(seen)}'
+        print(f'view_count_range honoured: [1,2] mean {counts.mean():.3f}/max '
+              f'{counts.max()}, [1,3] mean {bcounts.mean():.3f}/max {bcounts.max()}, '
+              f'pool coverage {sorted(seen)}')
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test_m3_configs():
     """Resolve the real M3 configs and instantiate the encoder from them.
 
@@ -693,6 +775,7 @@ def test():
     test_stock_encoder_regression()
     test_unet_identical_to_stock()
     test_dataset_plumbing()
+    test_view_count_range_is_honoured()
     test_m3_configs()
     print('ALL VIEW-CONDITIONED ENCODER CHECKS PASSED')
 

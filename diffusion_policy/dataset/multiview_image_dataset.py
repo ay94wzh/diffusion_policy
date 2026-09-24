@@ -316,10 +316,15 @@ class MultiViewImageDataset(BaseImageDataset):
                 raise ValueError(
                     f'view_count_range {view_count_range} must satisfy '
                     f'1 <= lo <= hi <= n_slots ({n_slots})')
-            if lo != hi and hi != n_slots:
-                raise ValueError(
-                    'an active count drawn from [lo, hi] can only fill slots '
-                    'without replacement when hi == n_slots')
+            # A guard used to live here rejecting any non-degenerate range whose
+            # `hi` was not `n_slots` -- so `[1, 2]` raised at K=7 while `[2, 2]`
+            # was allowed, though both leave the same slots permanently dead.
+            # It was redundant: `n_slots <= len(view_pool)` above plus
+            # `hi <= n_slots` here already give `hi <= len(view_pool)`, which is
+            # all `np.random.choice(..., replace=False)` in `_m3_slots` needs.
+            # Removed 2026-09-24 to let the N-diversity ladder run `[1, 2]`
+            # (PROGRESS.md *N-diversity ladder*). Inert for every committed cell:
+            # `[1, 7]` has `hi == n_slots` and `[1, 1]` has `lo == hi`.
             # camera key per slot: `view_slot_03_image` -> `view_slot_03_cam`
             self.cam_keys = [
                 k[:-len('_image')] + '_cam' if k.endswith('_image') else k + '_cam'
