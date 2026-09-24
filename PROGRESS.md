@@ -880,6 +880,55 @@ indicates divergence, not absent information, so it is an artefact; but it is un
 the MLP column should not be quoted for this cell until it is. The ridge columns are
 authoritative here precisely because a closed-form fit cannot diverge.
 
+### Neither the fusion nor the action head ignores the image — so what fails in `[1,3]`?
+
+**The fused latent is fine too.** The policy never sees `z_v`; `forward` hands the UNet `z_g`
+alone, so a decodable `z_v` does not imply a decodable `z_g`, and the fusion was the obvious
+remaining suspect. It is refuted — decoding each frame's own camera pose from `z_g` at N=1
+(the inference condition), equal `n` for every cell:
+
+| cell | `z_g` rot err | gain over floor | `z_v` rot err (readable run) |
+|---|---|---|---|
+| `m3off` `[1,7]` works | 19.58° | 1.98× | 12.53° |
+| **`m3v13` `[1,3]` floor** | **18.68°** | **2.08×** | 13.44° |
+| `m3v12` `[1,2]` collapsed | 33.49° | 1.16× | 38.49° |
+
+`m3v13` beats the working cell at **both** stages and still scores 0.080. So the refutation
+chain is now: not the encoder's variance, not its decodability, and not the fusion.
+
+**Which leaves the action head — and it is not ignoring the image either.**
+`screen_conditioning.py` holds the diffusion sampling noise fixed and varies one input path at
+a time, so any change in the output is attributable to that input:
+
+| cell | image-only | proprio-only |
+|---|---|---|
+| `m3off` `[1,7]` works | 0.0068 | 0.0386 |
+| `m3v13` `[1,3]` floor | 0.0067 | **0.0674** |
+| `m3v12` `[1,2]` collapsed | **0.0000** | 0.0686 |
+
+**The `0.0000` is the cleanest single result in this document.** Changing `[1,2]`'s *entire*
+image leaves its action bit-identical: the image path is **severed**, which is exactly what an
+encoder collapsed to a constant must produce. The collapse finding, previously inferred from
+the representation, is now confirmed **end-to-end and behaviourally**.
+
+> **A confound worth recording, because it produced a wrong answer first.**
+> `global_cond` is `concat([z_global, low-dim])`, and the low-dim keys are 9 dims of
+> proprioception that vary across samples too. Measured without separating them, the collapsed
+> cell came out the **most** observation-sensitive of the three (0.0686) — its constant image
+> riding along with normally-varying proprioception. The naive version of this measurement
+> would have said the collapsed policy "uses its observation more", which is the opposite of
+> the truth.
+
+**So the two floor cells fail for different, now-measured reasons.** `[1,2]`: the image path is
+severed. `[1,3]`: the image path is intact and its sensitivity is *identical* to the working
+cell's (0.0067 vs 0.0068) — the only difference is balance, leaning ~1.75× harder on
+proprioception (0.0674 vs 0.0386), and proprioception cannot see where the nut is.
+
+**Caveats.** The image-sensitivity equality is 0.0067 vs 0.0068, which is no difference at all
+— so what is solid here is the `0.0000`, not the balance reading. n=8 observations, one seed,
+one crude ratio, `mean` over the action chunk. The balance reading is a hypothesis with a
+plausible mechanism, not a measurement.
+
 ### The floor is an encoder collapse, not a generalisation failure
 
 **Why this was measured at all.** Every evaluation here is N=1 inference, and at N=1 the

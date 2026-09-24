@@ -14,6 +14,9 @@ data/*
 # collapse screens (screen_collapse.py): one small JSON per checkpoint, ditto.
 !data/screen_collapse/
 !data/screen_collapse/**
+# conditioning screens (screen_conditioning.py): ditto.
+!data/screen_conditioning/
+!data/screen_conditioning/**
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*
