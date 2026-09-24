@@ -28,6 +28,39 @@ Operational detail: `NOTES.md`. Last updated 2026-09-24.
 | **M5** — single-novel-view inference | ⬜ not coded | — | below |
 | **relational supervision** (`z_v`, `z_g`) | ⬜ retired by 1a's result — not cost | 1a measured the geometry 1b would supervise is *already* in `z_v` | *Next* above |
 | **N-diversity ladder** | 🟡 Stage 1 `[1,2]` **floor**; Stage 2 `[1,3]` running | the pre-registered prediction was falsified — max-N = 2 buys nothing over N = 1 (0.028/0.043 vs 0.036/0.047), and the floor is an **encoder collapse**, not a generalisation failure | PROGRESS *N-diversity ladder* |
+| **collapse** | measuring encoder output spread across failing vs working cells | ✅ **the unifying failure mode** — every failing cell is collapsed, every working one is not; answers the L1 task split that had been open since L1 | PROGRESS *Collapse is the unifying failure mode* |
+
+## Next: what makes training collapse? (opened 2026-09-25)
+
+**The question the ladder was built to answer turned out to be downstream of this one.** The
+ladder asked how much view diversity the policy needs; the answer so far is that at mean-N ≤ 2
+the encoder *collapses* (output near-constant, `m3v12` at 5.4e-07 relative spread against its
+own architecture's 5.1e-03 random-init baseline), and at mean-N 4 it does not. So "how much
+diversity" is really "how much diversity is needed to avoid collapse". And the same failure
+mode explains L1's task split, which had been open since L1.
+
+**The cheapest decisive measurement is already nearly free.** `screen_collapse.py` needs only a
+checkpoint and ~2 minutes, so every existing run can be screened without training anything:
+
+| # | what | why |
+|---|---|---|
+| 1 | screen `m3v13` (`[1,3]`, mean N 2.0) | if it is collapsed, the collapse boundary and the behavioural boundary coincide between mean-N 2.0 and 4.0 — the mechanism closes |
+| 2 | screen the M1 baselines (if re-trained; their weights were deleted) | M1 collapses at ±15°, the same signature — is the *single-view baseline itself* collapsed, which would make this one story from M1 onward? |
+| 3 | screen `m3on` vs `m3off` | both work (0.76/0.55), so both should be healthy — a check that the screen separates on the axis it claims to, not just on task |
+| 4 | screen every remaining checkpoint | 10 minutes, and it turns the whole table into a collapse/no-collapse column |
+
+**Then the causal question, which is the real one.** Collapse is measured as a *correlation*
+and is explicitly not traced to a cause. Two designs would separate cause from symptom:
+(a) **does the collapse precede the behavioural failure?** — screen checkpoints at epochs
+0/50/100/150/200 of an existing run; if collapse is already present at epoch 25 while
+behaviour is still moving, collapse is upstream. (b) **can it be prevented?** — a run with an
+explicit anti-collapse term (or simply a wider range at the same mean-N) tests sufficiency.
+(a) is free if per-epoch checkpoints exist; (b) costs a run.
+
+**Ranked behind it.** `[1,5]` (the pre-registered bisect, mean N 3.0) locates the boundary in
+mean-N; `[2,7]` (~4 h) still answers "N>1 vs *variable* N" and is now *more* interesting, since
+`[2,7]` has min-N 2 yet mean-N 4.5 — if it works while `[1,2]` and `[1,3]` collapse, the
+ingredient is mean view count, not the presence of N=1.
 
 ## Next: relational supervision on `z_v` (opened 2026-09-24, **retired 2026-09-24**)
 
