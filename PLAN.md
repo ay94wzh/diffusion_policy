@@ -10,8 +10,10 @@ Operational detail: `NOTES.md`. Last updated 2026-09-24.
   documented seams and only when unavoidable.
 - Baselines first, then one part added at a time. Models are planned here, coded in their
   own milestone, and each milestone reads its result before the next one is committed to.
-- Every training run happens on the remote box (see `NOTES.md`); this checkout is for
-  code and documents.
+- Runs happen on the box, and **this checkout is the box** — verified 2026-09-24: 2× RTX
+  5090, the `run_square_m3*` checkpoints and `data/multiview/*_ring13.zarr` present
+  locally — so the runbooks in `NOTES.md` execute in place from the repo root. Disk is the
+  binding constraint: check `df -h` first, it has sat at 97–99%.
 
 ## Status
 
@@ -24,7 +26,7 @@ Operational detail: `NOTES.md`. Last updated 2026-09-24.
 | **M4** — per-view aux action heads | ✅ done | `aux_loss` 52× down; `m4on − m4off` +0.02/+0.04 | PROGRESS *M4* |
 | **architectural confound** | ✅ resolved | fixed-N=1 scores 0.04/0.05 → **N>1** is load-bearing | PROGRESS *N>1* |
 | **M5** — single-novel-view inference | ⬜ not coded | — | below |
-| **relational supervision** (`z_v`, `z_g`) | ⬜ step 1a coded, not run | — | *Next* above |
+| **relational supervision** (`z_v`, `z_g`) | 🟡 step 1a done; 1b/1c not coded | `m3off` already reads `rel_pose` at 9.34° (floor 65.35°); `m3on` 2.02° | *Next* above |
 
 ## Next: relational supervision on `z_v` (opened 2026-09-24)
 
@@ -47,14 +49,29 @@ pushes invariance: right for `z_g`, wrong for `z_v`, which would delete the geom
 
 | # | what | gate before it counts |
 |---|---|---|
-| 1a | **probe on frozen checkpoints** — is the geometry already decodable from `z_v`? | must beat the mean predictor *and* the shuffled-pair control |
+| 1a | **probe on frozen checkpoints** — is the geometry already decodable from `z_v`? | ✅ **done 2026-09-24** — beats both controls in all six cells |
 | 1b | a relative-pose head + loss; the target is derived from the in-batch cam keys, so **no dataset change** | loss must reach well below the M4-style mean-collapse floor *before* any rollout |
 | 1c | feed the **predicted** relation into fusion as an attention bias | stays permutation-invariant, degenerates correctly at N=1 |
 
-Cells: the probe on `m3on` vs `m3off` (does the ray path change what is decodable at all),
-then relpose-on/off (RNG-locked) and relpose-on + `use_plucker=False` — that last cell is
-the first *mechanistic* live-ness test the conditioning has had, independent of rollout
-success. Runbook: `NOTES.md`.
+**1a's answer, and what it does to 1b.** Yes — and *without any pose conditioning*. `m3off`
+(no Plücker, no EE history) recovers the relative pose between two views to **9.34° / 15.4 cm**
+against a 65.35° / 55.75 cm mean-predictor floor, and its own camera's absolute pose to
+**4.13°** against 37.94°. So the pre-registered rule fires: **a head alone would be a
+post-hoc fit**, and the objective is what has to change. But the probe also found the part
+the rule did not anticipate — `m3on` is **4.6× better** (2.02°) and its `z_v` is **2.1× more
+view-discriminative** (0.466 vs 0.224), so the Plücker path is **not inert in the latent**,
+only in the behaviour. Two consequences for 1b/1c:
+
+- The last cell of the original design — relpose-on + `use_plucker=False` — is no longer the
+  "first mechanistic live-ness test the conditioning has had"; 1a already supplied that, and
+  supplied it *positively*. 1c's attention bias is the more interesting target now, because
+  the model still has no explicit **view-to-view** geometry (each slot is encoded alone).
+- 1b's claimed value has to shift from "supplies information" to "organizes information the
+  encoder already has into a frame the policy can use". A head that only re-derives what the
+  MLP readout above already reads is the M4 result again at a different layer.
+
+Cells: relpose-on/off (RNG-locked), and relpose-on + `use_plucker=False` to test whether the
+objective can substitute for the ray map. Runbook: `NOTES.md`.
 
 **Ranked behind it.**
 

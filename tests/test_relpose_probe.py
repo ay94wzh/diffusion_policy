@@ -217,6 +217,83 @@ def test_report_target_detects_decodable_geometry():
           f"vs mean predictor {mean['r_mean_deg']:.2f} deg, shuffled {shuf['r_mean_deg']:.2f} deg")
 
 
+def test_report_target_translation_only():
+    """`cam_eef` is a translation-only target (`tgt_R is None`) -- the path the smoke run
+    caught crashing, and the quantity M4's aux head read, so it is the column that doubles
+    as the probe's positive control.
+
+    A check that only asserted 'it does not raise' could not fail, so this pins the two
+    things that make the number meaningful: the fit beats the mean predictor on a target
+    whose answer is present by construction, and the rotation metrics are *absent* rather
+    than silently zero -- an implementation that filled in `r_mean_deg = 0.0` would pass a
+    crash check and read as a perfect rotation fit.
+    """
+    rng = np.random.default_rng(6)
+    X, t_all = [], []
+    for _ in range(1200):
+        cam = _rand_cam(rng)
+        R_c = quat_wxyz_to_mat(cam[3:7])
+        p_eef = rng.normal(size=3) * 0.3
+        y = R_c.T @ (p_eef - cam[:3])                  # EE position, camera frame
+        X.append(torch.from_numpy(y + 0.05 * rng.normal(size=3)).float())
+        t_all.append(torch.from_numpy(y))
+    out = {}
+    args = SimpleNamespace(mlp_steps=0)
+    entry = report_target(torch.stack(X), torch.stack(t_all).float(), None,
+                          'cam_eef', args, torch.device('cpu'), out)
+    # the rotation metric must be absent, not zero, in every arm
+    for arm in ('ridge', 'mean_predictor', 'shuffled_target'):
+        assert 'r_mean_deg' not in out['cam_eef'][arm], \
+            f"translation-only target reported a rotation error in '{arm}'"
+    assert 'r_mean_deg' not in entry
+    mean = out['cam_eef']['mean_predictor']
+    assert entry['ridge']['t_rmse_cm'] < 0.5 * mean['t_rmse_cm'], \
+        f"ridge {entry['ridge']['t_rmse_cm']:.3f} vs mean {mean['t_rmse_cm']:.3f}"
+    print(f"  translation-only target: ridge {entry['ridge']['t_rmse_cm']:.3f} cm vs mean "
+          f"predictor {mean['t_rmse_cm']:.3f} cm, no rotation key reported")
+
+
+def test_mlp_probe_path_runs():
+    """`fit_mlp` is the column that decides step 1a on `rel_pose`, and until now nothing had
+    ever executed it -- not the CPU suite, not the smoke run, which used `--mlp-steps 0`.
+
+    It is also where a dtype trap lives, so the dtypes here are the real ones and not
+    convenient ones: **float32 features against float64 targets**, which is what `z_v` and
+    the numpy camera math actually produce. `mse_loss` type-promotes in the forward pass,
+    so the run gets all the way to `loss.backward()` before failing, and only at full scale
+    (`--mlp-steps 2000`) did that surface.
+
+    Both halves of the target split are exercised, because they take different branches:
+    `cam_eef` carries no rotation and must report no rotation metric, while `abs_pose` does.
+    The assertion is the meaningful one -- the readout must beat the mean predictor on a
+    target whose answer is present by construction -- so this cannot pass on a code path
+    that merely declines to raise.
+    """
+    torch.manual_seed(0)
+    n, d = 800, 64
+    X = torch.randn(n, d)                                  # float32, as z_v is
+    t64 = X.double() @ torch.randn(d, 3, dtype=torch.float64) \
+        + 0.05 * torch.randn(n, 3, dtype=torch.float64)     # float64, as the cams are
+    R = mat_from_rot6d(X.double() @ torch.randn(d, 6, dtype=torch.float64))
+
+    args = SimpleNamespace(mlp_steps=500)
+    dev = torch.device('cpu')
+    out = {}
+    e1 = report_target(X, t64, None, 'cam_eef', args, dev, out)
+    assert 'mlp' in e1, 'the MLP arm was not produced for a translation-only target'
+    assert 'r_mean_deg' not in e1, 'translation-only target reported a rotation error'
+    mean = out['cam_eef']['mean_predictor']['t_rmse_cm']
+    assert e1['mlp']['t_rmse_cm'] < 0.5 * mean, \
+        f"mlp {e1['mlp']['t_rmse_cm']:.3f} vs mean predictor {mean:.3f} cm"
+
+    e2 = report_target(X, t64, R, 'abs_pose', args, dev, out)
+    assert 'mlp' in e2, 'the MLP arm was not produced for a rotation target'
+    # the metric lives inside each arm, not at the target level
+    assert 'r_mean_deg' in e2['mlp'], 'the rotation arm lost its rotation metric'
+    print(f"  mlp readout: {e1['mlp']['t_rmse_cm']:.3f} cm vs mean predictor "
+          f"{mean:.3f} cm, float64 targets against float32 features")
+
+
 def test():
     print('=' * 70)
     print('relpose probe -- CPU checks')
@@ -226,6 +303,8 @@ def test():
     test_rot6d_round_trip()
     test_ridge_recovers_known_weights()
     test_report_target_detects_decodable_geometry()
+    test_report_target_translation_only()
+    test_mlp_probe_path_runs()
     print('=' * 70)
     print('ALL RELPOSE PROBE CHECKS PASSED')
     print('=' * 70)

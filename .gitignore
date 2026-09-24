@@ -7,6 +7,10 @@ data/*
 # sweep needs no .gitignore edit; the multi-GB zarrs/checkpoints stay out
 !data/eval_*/
 !data/eval_*/**
+# relational-probe (step 1a) outputs: one small JSON per checkpoint, and the JSON *is* the
+# measurement artifact -- every number is re-derivable from it without re-running.
+!data/probe_relpose_*/
+!data/probe_relpose_*/**
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*

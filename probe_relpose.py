@@ -168,10 +168,19 @@ class MLPProbe(torch.nn.Module):
 
 
 def fit_mlp(X_tr, Y_tr, X_te, steps, device, seed=42, bs=4096, lr=1e-3):
+    """Train the nonlinear readout.
+
+    The target is cast to float32 to match the readout's own dtype. Targets here are
+    float64 -- they come from the numpy camera math -- and while ``mse_loss`` *forward*
+    type-promotes, the backward pass through a float32 ``nn.Linear`` does not: it dies at
+    ``loss.backward()`` with ``Found dtype Double but expected Float``. The same class of
+    trap as the one ``geodesic_deg`` documents, in the opposite direction, and it is why
+    the cast is here rather than left to promotion.
+    """
     torch.manual_seed(seed)
     model = MLPProbe(X_tr.shape[1], Y_tr.shape[1]).to(device)
     opt = torch.optim.Adam(model.parameters(), lr=lr)
-    Xtr, Ytr = X_tr.to(device), Y_tr.to(device)
+    Xtr, Ytr = X_tr.to(device), Y_tr.to(device).float()
     n = Xtr.shape[0]
     for _ in range(steps):
         idx = torch.randint(0, n, (min(bs, n),), device=device)
@@ -184,51 +193,75 @@ def fit_mlp(X_tr, Y_tr, X_te, steps, device, seed=42, bs=4096, lr=1e-3):
 
 
 def score(pred_t, pred_R, tgt_t, tgt_R, name, out):
-    """Translation error (cm) + rotation error (deg), next to the target's own scale."""
+    """Translation error (cm) + rotation error (deg), next to the target's own scale.
+
+    ``tgt_R is None`` is the translation-only target (``cam_eef``): the rotation keys are
+    omitted rather than filled with a placeholder, so an absent measurement cannot be read
+    off the JSON as a measured null.
+    """
     t_err = (pred_t - tgt_t).norm(dim=-1) * 100.0          # metres -> cm
-    r_err = geodesic_deg(pred_R, tgt_R)
-    out[name] = dict(
+    entry = dict(
         t_rmse_cm=float(t_err.pow(2).mean().sqrt()),
         t_median_cm=float(t_err.median()),
-        r_mean_deg=float(r_err.mean()),
-        r_median_deg=float(r_err.median()),
         target_median_cm=float(tgt_t.norm(dim=-1).median() * 100.0),
     )
-    return out[name]
+    if tgt_R is not None:
+        r_err = geodesic_deg(pred_R, tgt_R)
+        entry['r_mean_deg'] = float(r_err.mean())
+        entry['r_median_deg'] = float(r_err.median())
+    out[name] = entry
+    return entry
 
 
 def report_target(X, tgt_t, tgt_R, name, args, device, out):
-    """Fit ridge (+ optional MLP) on one target and score it against both baselines."""
+    """Fit ridge (+ optional MLP) on one target and score it against both baselines.
+
+    ``tgt_R is None`` (the ``cam_eef`` target -- the quantity M4's aux head read) drops the
+    rotation half of the target, of the prediction split and of the metrics *together*. The
+    three have to move as one: splitting a translation-only prediction at column 3 yields an
+    empty rotation block, and ``mat_from_rot6d`` on it fails rather than returning anything
+    meaningful. This path is exactly what the smoke run caught, and it is why the check
+    below is paired with a regression test rather than left to the fit to fail on.
+    """
     n = X.shape[0]
     n_tr = int(n * 0.8)
-    Y = torch.cat([tgt_t, torch.from_numpy(rot6d_from_mat(tgt_R.numpy()))], dim=-1)
+    has_rot = tgt_R is not None
+    Y = tgt_t if not has_rot else torch.cat(
+        [tgt_t, torch.from_numpy(rot6d_from_mat(tgt_R.numpy()))], dim=-1)
 
     X_tr, X_te = _standardize(X[:n_tr].float(), X[n_tr:].float())
     Y_tr, Y_te = Y[:n_tr], Y[n_tr:]
     Xb_tr, Xb_te = _with_bias(X_tr), _with_bias(X_te)
 
+    def _split(pred):
+        """Prediction columns -> (t, R). R is None when the target carries no rotation."""
+        if not has_rot:
+            return pred[:, :3], None
+        return pred[:, :3], mat_from_rot6d(pred[:, 3:])
+
+    def _tgt(perm=None):
+        if not has_rot:
+            return None
+        return tgt_R[n_tr:] if perm is None else tgt_R[n_tr:][perm]
+
     entry = {}
     pred = Xb_te @ ridge_fit(Xb_tr, Y_tr)
-    score(pred[:, :3], mat_from_rot6d(pred[:, 3:]), tgt_t[n_tr:], tgt_R[n_tr:],
-          'ridge', entry)
+    score(*_split(pred), tgt_t[n_tr:], _tgt(), 'ridge', entry)
 
     # baseline 1: the mean predictor -- the collapse floor any head must beat
     mean_pred = Y_tr.mean(0, keepdim=True).expand(Y_te.shape[0], -1)
-    score(mean_pred[:, :3], mat_from_rot6d(mean_pred[:, 3:]), tgt_t[n_tr:],
-          tgt_R[n_tr:], 'mean_predictor', entry)
+    score(*_split(mean_pred), tgt_t[n_tr:], _tgt(), 'mean_predictor', entry)
 
     # baseline 2: shuffled targets -- must fail, or the probe reads something else.
     # Permute the TEST targets among themselves: same marginal distribution, broken
     # correspondence. (Permuting training rows in would both be the wrong control and
     # index out of bounds, which is how this was caught.)
     perm = torch.randperm(len(X_te))
-    score(pred[:, :3], mat_from_rot6d(pred[:, 3:]), tgt_t[n_tr:][perm],
-          tgt_R[n_tr:][perm], 'shuffled_target', entry)
+    score(*_split(pred), tgt_t[n_tr:][perm], _tgt(perm), 'shuffled_target', entry)
 
     if args.mlp_steps > 0:
         pred_mlp = fit_mlp(X_tr, Y_tr, X_te, args.mlp_steps, device)
-        score(pred_mlp[:, :3], mat_from_rot6d(pred_mlp[:, 3:]), tgt_t[n_tr:],
-              tgt_R[n_tr:], 'mlp', entry)
+        score(*_split(pred_mlp), tgt_t[n_tr:], _tgt(), 'mlp', entry)
 
     entry['n_train'] = n_tr
     entry['n_test'] = n - n_tr

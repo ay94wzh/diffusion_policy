@@ -581,6 +581,91 @@ training signal and the inference path rides on it. It does not separate "N>1 ne
 "*variable* N needed", since the cell never sees N>1 at all. And it does not say how much
 view diversity is enough.
 
+## Relational probe (step 1a) — the geometry is already in `z_v`
+
+**Why.** `PLAN.md` opened relational supervision on `z_v` to *make geometry necessary*
+rather than better-injected, on the argument that a static scene leaks pose through the
+image, so a richer Plücker injection carries nothing the image lacks. Step 1b's
+relative-pose head rests on the unmeasured assumption that `z_v` does **not** already carry
+that geometry — which is also M4's surviving explanation. This probe measures it on frozen
+checkpoints: no training, no rollouts, one forward pass per sample, then a closed-form ridge
+readout and a 2000-step MLP readout against two baselines that make the numbers mean
+something.
+
+**Results.** Square, 2000 dataset indices (4000 frames, mean **3.97** of 7 slots active —
+the N∈[1,7] draw is what it should be), 80/20 split, `n_train` 12,715 (`abs_pose`,
+`cam_eef`) / 18,076 (`rel_pose`). Rotation in degrees, translation in cm, each against the
+target's own median scale. **Bold is the MLP column**, which is the one to read — relative
+pose is bilinear in the two camera poses, so a linear probe underfits it even when the
+geometry is fully present (the CPU test measures exactly that, 250.6 cm vs the mean
+predictor's 248.2 cm on synthetic data where it was present by construction).
+
+| target (median scale) | model | **mlp** | ridge | mean predictor | shuffled |
+|---|---|---|---|---|---|
+| `abs_pose` (144.0 cm) | `m3on` | **3.12°** / 5.59 cm | 2.65° / 4.47 cm | 37.94° / 42.19 cm | 50.16° / 58.68 cm |
+| | `m3off` | **4.13°** / 18.11 cm | 12.53° / 24.45 cm | 37.94° / 42.19 cm | 49.62° / 61.39 cm |
+| `cam_eef` (67.6 cm) | `m3on` | **3.66 cm** | 3.84 cm | 22.85 cm | 32.43 cm |
+| | `m3off` | **10.05 cm** | 19.19 cm | 22.85 cm | 34.59 cm |
+| `rel_pose` (70.7 cm) | `m3on` | **2.02°** / 3.14 cm | 21.42° / 30.41 cm | 65.35° / 55.75 cm | 75.26° / 75.64 cm |
+| | `m3off` | **9.34°** / 15.36 cm | 31.07° / 51.23 cm | 65.35° / 55.75 cm | 74.18° / 83.40 cm |
+
+`latent_stats` — the proposal's core claim as two numbers, "`z_v` view-aware, `z_g`
+view-invariant":
+
+| | `m3on` | `m3off` |
+|---|---|---|
+| `z_g` across view subsets of one state | 0.171 | 0.162 |
+| `z_v` across views within one draw | **0.466** | **0.224** |
+
+**All four gates pass**, so the probe is measuring what it claims to. `shuffled_target` is
+worse than the fit in all six cells (the probe is not reading something other than
+geometry); `cam_eef` — the positive control, the quantity M4's aux head read — beats its
+mean predictor by 6.2× / 2.3×, so the wiring is real and a null there would have meant
+"broken", not "empty".
+
+### Conclusion
+
+**1. The geometry is already there without any pose conditioning.** `m3off` has *no*
+Plücker map and *no* EE history — a pure image encoder — and a small readout recovers its
+own camera's absolute pose to **4.13°**, the camera-frame EE position to **10.05 cm**, and
+the relative pose between two views to **9.34° / 15.36 cm**, against mean-predictor floors
+of 37.94°, 22.85 cm and 65.35°. These are not floor-level numbers. The static-scene leak
+that `PLAN.md` reasoned about is now **measured rather than assumed**.
+
+**2. Plücker is not inert in the latent — it was inert in the behaviour.** `m3on` is 4.6×
+better at relative-pose rotation (2.02° vs 9.34°), 3.0× better at absolute-pose rotation,
+and its `z_v` is **2.1× more view-discriminative** (0.466 vs 0.224) while its `z_g` stays
+about as view-invariant (0.171 vs 0.162). That is the conditioning doing exactly what
+PROPOSAL §2.1 designed it to do, and it is the **first live mechanistic signal the
+conditioning has shown** — `PLAN.md` asked for this test precisely because the rollout
+numbers could not see it. It does not contradict the M3/M4 behavioural nulls; it sharpens
+them: the conditioning measurably reorganizes the representation along a direction the
+policy did not need.
+
+**3. The pre-registered decision rule fires — with a caveat.** `NOTES.md` said: if
+`m3off`'s MLP column already recovers the geometry, then 1b's head is a post-hoc fit and
+the *objective*, not the head, is what has to change. `m3off` recovers it well above any
+floor, so the head alone is not enough. But the `m3on`/`m3off` gap is real and large
+(4.6×), which is the part the rule did not anticipate: there is headroom the ray map
+already partly occupies, so a relational *objective* has somewhere to act — it just cannot
+claim to be supplying information the encoder did not have.
+
+**Fidelity control.** The probe's own paths were executed for the first time here, and the
+smoke found two blocking bugs (both recorded in `NOTES.md`'s traps): `report_target` crashed
+for the translation-only `cam_eef` target, and `fit_mlp` died at `loss.backward()` on
+float64 targets against a float32 `nn.Linear` — the latter only at `--mlp-steps 2000`, i.e.
+in the column that decides this section. Both now have CPU regression tests with mutation
+power demonstrated. One smoke artifact worth recording because it nearly misled: at
+`--n-samples 64` the `rel_pose` ridge had 566 training pairs against 1536 features,
+**severely underdetermined**, and scored 23× *worse* than the mean predictor; at full scale
+it beats it. Ridge on `rel_pose` needs ≳10× more rows than features to be readable at all.
+
+**Limits.** One task (square), one seed, one checkpoint pair — n=1 at this project's usual
+resolution. Decodability by a 2000-step MLP over 18k pairs is an **upper bound** on "the
+information is present"; it is not a claim about how the policy routes it. And `z_v` is an
+encoding of a *specific* scene, so the leak is about pose recovery in a static scene, which
+is the regime the whole argument was made in.
+
 ## Open questions
 
 - **How much diversity is enough?** `view_count_range=[2,2]` answers PROPOSAL §7's "2
@@ -611,6 +696,7 @@ Every milestone lands as new files; these are them.
 | L1 | `config/task/randview_image_abs_multiview.yaml` |
 | M3 | `model/vision/plucker.py`, `model/vision/view_conditioned_obs_encoder.py`, `env_runner/cam_key_image_runner.py`, `config/task/m3_plucker_image_abs_{multiview,n1}.yaml`, `config/train_diffusion_unet_image_workspace_m3.yaml`, `tests/test_view_conditioned_obs_encoder.py`, `preview_viewpoints.py` |
 | M4 | `policy/diffusion_unet_image_policy_aux.py`, `model/vision/per_view_aux_head.py`, `config/task/m4_aux_image_abs_multiview.yaml`, `config/train_diffusion_unet_image_workspace_m4.yaml`, `tests/test_aux_action_heads.py` |
+| step 1a | `probe_relpose.py`, `tests/test_relpose_probe.py` (a measurement, not a method — no training) |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE

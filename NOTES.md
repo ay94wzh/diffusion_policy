@@ -98,11 +98,10 @@ from a view **pair**, and how stable `z_g` is across view subsets of the same st
 reads the checkpoint's own cfg, so it adapts to `use_plucker` / `use_eef_hist`.
 
 ```bash
-# 0. get the code onto the box. step 1a was left UNCOMMITTED in the working tree, so the
-#    commit below is part of the runbook, not an assumption:
-git add probe_relpose.py tests/test_relpose_probe.py PLAN.md NOTES.md
-git commit -m "Relational probe (step 1a) + the program's runbook"
-git push ay94wzh main && ssh <box> 'cd <repo> && git pull'
+# 0. step 1a is committed (87d1708). This checkout IS the box -- verified 2026-09-24: 2x
+#    RTX 5090, the run_square_m3*/checkpoints and data/multiview/square_ph_ring13.zarr all
+#    present locally -- so the runbook below runs in place. From another machine only:
+#    git push <remote> main && ssh <box> 'cd <repo> && git pull'
 
 # 0b. do the checkpoints still exist? disk has deleted weights here before (M1's went
 #     on 2026-09-19), so never assume the ones a runbook names are on the box
@@ -111,16 +110,20 @@ ls -la data/outputs/run_square_m3*/checkpoints/ data/multiview/square_ph_ring13.
 # 1. CPU checks first -- catches convention errors before trusting any number
 python tests/test_relpose_probe.py                  # seconds, no GPU, no data
 
-# 2. smoke: does the wiring work with the real zarr + checkpoint?
+# 2. smoke: does the wiring work with the real zarr + checkpoint? MUST pass --mlp-steps,
+#    or the decisive column is skipped (see Traps -- the smoke passed while fit_mlp was
+#    broken). At this n the rel_pose numbers are underdetermined and mean nothing.
 python probe_relpose.py -c data/outputs/run_square_m3on_s42_200ep/checkpoints/latest.ckpt \
-  -o data/probe_relpose_square_m3on -d cuda:0 --n-samples 64 --stability-states 8
+  -o /tmp/probe_smoke -d cuda:1 --n-samples 64 --stability-states 8 --mlp-steps 200
 
-# 3. the pair that matters: rays on vs rays off (~5 min each)
+# 3. the pair that matters: rays on vs rays off (~50 s each). Runs 2026-09-24; results in
+#    PROGRESS.md *Relational probe (step 1a)*.
 for c in m3on m3off; do
-python probe_relpose.py -c data/outputs/run_square_${c}_s42_200ep/checkpoints/latest.ckpt \
-  -o data/probe_relpose_square_${c} -d cuda:0 --mlp-steps 2000
+python -u probe_relpose.py -c data/outputs/run_square_${c}_s42_200ep/checkpoints/latest.ckpt \
+  -o data/probe_relpose_square_${c} -d cuda:1 --mlp-steps 2000
 done
 # m4on/m4off work too (same encoder, plus an inert aux head) -- optional third cell
+# -d cuda:1 unless cuda:0 is free -- another user habitually holds ~13 GB there
 ```
 
 Cost: ~2000 dataset reads + one encoder pass each (~30 s), ridge fits (a few seconds), the
@@ -282,6 +285,20 @@ upside-down dataset looks plausible in a montage.
 assertions passed and proved nothing about the obs-key contract at runtime. **Budget for a
 probe phase before any long run** — the M3 probe cost ~35 min and saved ~15 h.
 
+**Step 1a is the fourth instance, and the sharpest.** `probe_relpose.py` shipped with a green
+CPU suite that pins every geometric convention to ~1e-15 with mutation power — and the two
+functions that decide the result had never run. The smoke found `report_target` crashing on
+the translation-only `cam_eef` target (`tgt_R is None` fed to `rot6d_from_mat`), and the
+first *full-scale* run found `fit_mlp` dying at `loss.backward()` — float64 targets against
+a float32 `nn.Linear`, which type-promotes in the forward pass and only fails in the
+backward. The MLP is the **only** column that can read `rel_pose` at all. Two lessons: a
+convention test says nothing about the paths that touch the checkpoint, and **the smoke
+passed while the decisive path was still broken**, because `--mlp-steps` defaults to 0 —
+smoke the flags you intend to run with, not just the wiring. Corollary: at `--n-samples 64`
+the `rel_pose` ridge scored 23× *worse* than the mean predictor purely from
+underdetermination (566 train pairs against 1536 features); at full scale it beats it. A
+small-`n` ridge null on a bilinear target reads as "no geometry" and means nothing.
+
 ### M2-specific
 
 The generator's gates are computed only at the end of a run; `--limit-demos 5` is the
@@ -295,6 +312,7 @@ failed gate (see the runbook).
 | novel-view sweeps + viewpoint videos | `data/eval_*/eval_log.json`, `media/<viewpoint>/*.mp4` | ✅ |
 | training logs (`logs.json.txt`) | `data/outputs/run_*/` | ✅ for M1/L1/M3/M4 runs |
 | aux-probe evidence | `data/probe_m4_square_logs.json.txt` | ✅ |
+| relational-probe (step 1a) results | `data/probe_relpose_square_{m3on,m3off}/probe_relpose.json` | ✅ |
 | weights (4.6 GB each) | `data/outputs/run_*/checkpoints/latest.ckpt` | ❌ — rsync only |
 | campaign logs (ordered, timestamped) | `data/m3_campaign.log`, `data/m4_campaign.log` | ❌ on the box |
 | multi-view zarrs | `data/multiview/<task>_ph_ring13.zarr` (819k images, 4.5 GB) | ❌ n/a |
