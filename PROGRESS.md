@@ -804,6 +804,43 @@ the choice cannot move the conclusion, but note that the reference sweeps record
 provenance at all (`data/eval_interp_square_*/` holds only `eval_log.json`), so which
 checkpoint produced a committed number is recoverable only from the runbook convention.
 
+### Stage 2 — `[1,3]` (mean N 2.0) is also at the floor
+
+Per the pre-registered floor branch, the next rung was `[1,3]`. Strict `success_rate`, 50
+paired episodes:
+
+| viewpoint | `[1,1]` | `[1,2]` | **`[1,3]`** | `[1,7]` |
+|---|---|---|---|---|
+| az_m75 | 0.02 | 0.00 | 0.04 | 0.40 |
+| az_m60 | 0.02 | 0.06 | 0.10 | 0.78 |
+| az_m45 | 0.06 | 0.04 | 0.08 | 0.60 |
+| az_m30 | 0.00 | 0.02 | 0.06 | 0.78 |
+| az_m15 | 0.02 | 0.04 | 0.08 | 0.68 |
+| az_0 | 0.04 | 0.02 | 0.06 | 0.78 |
+| az_p15 | 0.06 | 0.04 | 0.10 | 0.42 |
+| az_p30 | 0.06 | 0.00 | 0.06 | 0.70 |
+| az_p45 | 0.06 | 0.06 | 0.06 | 0.58 |
+| az_p60 | 0.06 | 0.04 | 0.12 | 0.78 |
+| az_p75 | 0.06 | 0.08 | 0.08 | 0.62 |
+| **trained mean** | 0.036 | 0.028 | **0.080** | **0.764** |
+| **held-out mean** | 0.047 | 0.043 | **0.073** | **0.550** |
+| max trained viewpoint | 0.06 | 0.06 | 0.12 | 0.78 |
+
+`[1,3]` is nominally the strongest floor cell (Δ ≈ 0.05 over the other two) but that is
+inside the 0.15 noise floor and no trained viewpoint exceeds 0.25, so the pre-registered
+reading is **floor**, not partial. Gates: `|el_0 − az_0| = 0.04` (0.02 vs 0.06), and the 50
+episode seed keys are set-identical to `m3off`'s. Elevation is at the floor on all three
+poses (0.02/0.08/0.02).
+
+**The ladder now reads: mean-N 1.0, 1.5 and 2.0 all at the floor; 4.0 works.** The transition
+lies somewhere between 2.0 and 4.0. Stage 3 is `[1,5]` (mean 3.0), launched 2026-09-25 — a
+large jump, per the stop-rule resolution, rather than a crawl.
+
+**And the transition is not a collapse boundary.** `[1,3]` fails with a *healthy* encoder
+(see the correction in the next section), so locating where behaviour switches on will not
+simultaneously locate where collapse ends. The two phenomena have come apart, which is what
+makes the second failure mode an open question rather than a restatement of the first.
+
 ### The floor is an encoder collapse, not a generalisation failure
 
 **Why this was measured at all.** Every evaluation here is N=1 inference, and at N=1 the
