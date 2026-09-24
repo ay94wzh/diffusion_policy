@@ -90,6 +90,69 @@ regardless of the flags. `eval_log.json` is a flat dict keyed
 re-derived without re-running. `test_start_seed: 100000` in the env_runner config is what
 makes the episodes **paired** across viewpoints.
 
+### Relational probe, step 1a (`probe_relpose.py`)
+
+Measures what geometry a **frozen** checkpoint's latents already encode -- no training:
+absolute camera pose and camera-frame EE position from one view's `z_v`, relative pose
+from a view **pair**, and how stable `z_g` is across view subsets of the same state. It
+reads the checkpoint's own cfg, so it adapts to `use_plucker` / `use_eef_hist`.
+
+```bash
+# 0. get the code onto the box. step 1a was left UNCOMMITTED in the working tree, so the
+#    commit below is part of the runbook, not an assumption:
+git add probe_relpose.py tests/test_relpose_probe.py PLAN.md NOTES.md
+git commit -m "Relational probe (step 1a) + the program's runbook"
+git push ay94wzh main && ssh <box> 'cd <repo> && git pull'
+
+# 0b. do the checkpoints still exist? disk has deleted weights here before (M1's went
+#     on 2026-09-19), so never assume the ones a runbook names are on the box
+ls -la data/outputs/run_square_m3*/checkpoints/ data/multiview/square_ph_ring13.zarr
+
+# 1. CPU checks first -- catches convention errors before trusting any number
+python tests/test_relpose_probe.py                  # seconds, no GPU, no data
+
+# 2. smoke: does the wiring work with the real zarr + checkpoint?
+python probe_relpose.py -c data/outputs/run_square_m3on_s42_200ep/checkpoints/latest.ckpt \
+  -o data/probe_relpose_square_m3on -d cuda:0 --n-samples 64 --stability-states 8
+
+# 3. the pair that matters: rays on vs rays off (~5 min each)
+for c in m3on m3off; do
+python probe_relpose.py -c data/outputs/run_square_${c}_s42_200ep/checkpoints/latest.ckpt \
+  -o data/probe_relpose_square_${c} -d cuda:0 --mlp-steps 2000
+done
+# m4on/m4off work too (same encoder, plus an inert aux head) -- optional third cell
+```
+
+Cost: ~2000 dataset reads + one encoder pass each (~30 s), ridge fits (a few seconds), the
+MLP ~1-2 min. Feature matrices are ~200 MB at the defaults.
+
+**Check before believing any of it**
+
+- `shuffled_target` must be **worse** than `ridge`/`mlp`, or the probe is reading
+  something other than geometry.
+- `mean_predictor` is the collapse floor: a fit that does not beat it has found nothing.
+- `stats.mean_active` should be ~4 of 7 slots (per-sample N∈[1,7]).
+
+**How to read the four measurements**
+
+- `abs_pose` -- for `use_plucker=True` this is near-trivial, because the ray map *is* an
+  input. The informative column is `m3off`: pose decoding there came from the image.
+- `cam_eef` -- the quantity M4's aux head read (6.4% of a mean-collapsing floor). This
+  column doubles as a check that the probe works at all, so a null here means something is
+  broken, not that the model is empty.
+- `rel_pose` -- **a ridge null here is NOT evidence of absence.** Relative pose is
+  bilinear in the two camera poses, so a *linear* probe cannot fit it even when the
+  geometry is fully present (measured: 250.6 cm vs the mean predictor's 248.2 cm on
+  synthetic data where it was exactly present). Read the `mlp` column and pass
+  `--mlp-steps`.
+- `latent_stats` -- `z_g_across_view_subsets` vs `z_v_across_views_within_draw` is the
+  "`z_v` view-aware, `z_g` view-invariant" claim as two numbers.
+
+Send back each run's `data/probe_relpose_*/probe_relpose.json`; the numbers go into
+`PROGRESS.md` once read. Decision rule: if the `m3off` MLP column already recovers the
+geometry, step 1b's head is a post-hoc fit and the *objective* -- not the head -- is what
+has to change.
+
 ### Resume and long campaigns
 
 Resume with the same run dir and `training.num_epochs=<epochs still wanted>`; the loop runs

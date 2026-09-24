@@ -24,6 +24,60 @@ Operational detail: `NOTES.md`. Last updated 2026-09-24.
 | **M4** — per-view aux action heads | ✅ done | `aux_loss` 52× down; `m4on − m4off` +0.02/+0.04 | PROGRESS *M4* |
 | **architectural confound** | ✅ resolved | fixed-N=1 scores 0.04/0.05 → **N>1** is load-bearing | PROGRESS *N>1* |
 | **M5** — single-novel-view inference | ⬜ not coded | — | below |
+| **relational supervision** (`z_v`, `z_g`) | ⬜ step 1a coded, not run | — | *Next* above |
+
+## Next: relational supervision on `z_v` (opened 2026-09-24)
+
+**The governing fact.** The scene is static, so the camera pose is recoverable from the
+RGB itself and a better-injected Plücker map carries no information the image lacks. That
+is the mechanism behind the measured conditioning null (KYC reports the same: static
+scenes leak pose through background cues; randomizing appearance is what makes explicit
+conditioning pay). So the lever is not *how* geometry is injected but **making geometry
+necessary** — supervise each latent in the frame it is supposed to represent:
+
+| latent | should be | supervised by |
+|---|---|---|
+| `z_v` | **view-aware** | a *relational* objective — predict `(R_ij, t_ij)` between two views |
+| `z_g` | **view-invariant** | *agreement* — across views, and across the action produced |
+
+Note the classical multi-view recipe (TCN) pulls simultaneous views *together*, i.e. it
+pushes invariance: right for `z_g`, wrong for `z_v`, which would delete the geometry.
+
+**Step 1 — relational supervision on `z_v`.**
+
+| # | what | gate before it counts |
+|---|---|---|
+| 1a | **probe on frozen checkpoints** — is the geometry already decodable from `z_v`? | must beat the mean predictor *and* the shuffled-pair control |
+| 1b | a relative-pose head + loss; the target is derived from the in-batch cam keys, so **no dataset change** | loss must reach well below the M4-style mean-collapse floor *before* any rollout |
+| 1c | feed the **predicted** relation into fusion as an attention bias | stays permutation-invariant, degenerates correctly at N=1 |
+
+Cells: the probe on `m3on` vs `m3off` (does the ray path change what is decodable at all),
+then relpose-on/off (RNG-locked) and relpose-on + `use_plucker=False` — that last cell is
+the first *mechanistic* live-ness test the conditioning has had, independent of rollout
+success. Runbook: `NOTES.md`.
+
+**Ranked behind it.**
+
+- **Q1 — Plücker usage.** A separate ray stem, multi-scale/adapter injection, and
+  Plücker-into-the-policy are cheap and *predicted null* in a static scene; the two with a
+  real justification are the **pairwise relative-pose attention bias** (fixes the structural
+  gap that the model currently has no view-to-view geometry at all — delivered by 1c) and
+  **ray-conditioned view prediction** (makes the rays necessary), the strongest non-null
+  candidate.
+- **Q2 — camera pool.** Discrete ring → **dense continuous pose distribution**; InfiNoVA
+  (2026) does exactly this and reports 5.4× VISTA augmentation and 1.7× better than five
+  physical cameras. **Trap: N=1 per sample is L1, which already fails** — the pool must keep
+  N>1. Probe it for free first with *contiguous-window* sampling from the existing ring; the
+  full version holds out **regions** (elevation band / azimuth wedge), not poses. Costs:
+  render time and disk (~8 GB at 65 poses for square), not IO.
+- **Q3 — remaining constraints.** Epipolar/Plücker reprojection consistency (depth-free,
+  calibration only) as the geometric companion to 1b; cross-view **action** consistency (the
+  literature's version, with diffusion heads untested — but ±7-8pp is below the n=1 noise
+  floor, so 2 seeds or a wider shift must be decided *before* running); counterfactual
+  enforcement (MemCorr) as the antidote to ignored conditioning.
+
+Depth stays out of scope for now (RGB-only): the cost is that simulator-verified pixel
+correspondences are unavailable, leaving the epipolar form above.
 
 ## M5 — single-novel-view inference (+ optional distillation)
 
