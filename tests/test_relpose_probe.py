@@ -23,7 +23,10 @@ the measurement the script exists to make, and it needs the box.
 """
 import os
 import sys
+import json
 import math
+import shutil
+import tempfile
 
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if ROOT_DIR not in sys.path:
@@ -37,8 +40,10 @@ import torch
 
 from probe_relpose import (
     relative_pose_from_cams, rot6d_from_mat, mat_from_rot6d, geodesic_deg,
-    ridge_fit, _standardize, _with_bias, report_target)
-from diffusion_policy.dataset.multiview_image_dataset import quat_wxyz_to_mat
+    ridge_fit, _standardize, _with_bias, report_target,
+    _apply_range, _mean_or_none, _rel_dist, _slot_view_indices, _pair)
+from diffusion_policy.dataset.multiview_image_dataset import (
+    quat_wxyz_to_mat, MultiViewImageDataset)
 from diffusion_policy.model.common.rotation_transformer import RotationTransformer
 
 
@@ -294,6 +299,153 @@ def test_mlp_probe_path_runs():
           f"{mean:.3f} cm, float64 targets against float32 features")
 
 
+def _slot_dataset(path, n_views, hw, view_count_range, steps=3):
+    """A slot-mode synthetic dataset -- the fixture the override/statistic tests share."""
+    obs_meta = {f'view_slot_{k:02d}_image': {'shape': [3, hw, hw], 'type': 'rgb'}
+                for k in range(n_views)}
+    obs_meta['robot0_eef_pos'] = {'shape': [3]}
+    obs_meta['robot0_eef_quat'] = {'shape': [4]}
+    obs_meta['robot0_gripper_qpos'] = {'shape': [2]}
+    return MultiViewImageDataset(
+        shape_meta={'obs': obs_meta, 'action': {'shape': [10]}},
+        dataset_path=path, horizon=4, pad_before=1, pad_after=7, n_obs_steps=2,
+        abs_action=True, view_pool=list(range(n_views)),
+        view_count_range=view_count_range, eef_hist_steps=steps, seed=0, val_ratio=0.0)
+
+
+def test_range_override_is_applied():
+    """The draw-range override must actually reach the dataset's draw.
+
+    It is what makes a cross-cell comparison legitimate: without it the probe measures
+    whatever range the CHECKPOINT trained with, so `[1,2]` and `[1,7]` would be compared
+    on different draws -- precisely the confound it exists to remove. It **cannot pass
+    against the pre-change code**, where `_apply_range` did not exist and there was no
+    override at all.
+
+    Mutation power: an override that is silently ignored leaves the cell's own range in
+    place, so the observed draw sizes below report that range rather than the requested
+    one. The unsatisfiable cases matter for the same reason -- `hi` must fit the pool or
+    `np.random.choice(..., replace=False)` raises deeper in `_m3_slots`, where the cause
+    would be much harder to see.
+    """
+    import test_multiview_dataset as tmd
+    tmp = tempfile.mkdtemp(prefix='probe_range_')
+    try:
+        path = os.path.join(tmp, 'synth.zarr')
+        tmd.build_synthetic_zarr(path)
+        n_views, hw = tmd.N_VIEWS, tmd.H
+        ds = _slot_dataset(path, n_views, hw, (1, n_views))
+
+        assert _pair('1,2') == (1, 2)
+        assert _apply_range(ds, (1, 1)) == (1, 1) and ds.view_count_range == (1, 1)
+        np.random.seed(0)
+        assert {int(ds[i % len(ds)]['obs']['view_mask'][0].sum())
+                for i in range(30)} == {1}, 'override to [1,1] did not take'
+
+        assert _apply_range(ds, (1, n_views)) == (1, n_views)
+        np.random.seed(0)
+        seen = {int(ds[i % len(ds)]['obs']['view_mask'][0].sum()) for i in range(60)}
+        assert seen == set(range(1, n_views + 1)), seen
+
+        for bad in ((0, 1), (2, 1), (1, n_views + 1)):
+            try:
+                _apply_range(ds, bad)
+            except ValueError:
+                continue
+            raise AssertionError(f'view_count_range {bad} was accepted')
+
+        ds.view_count_range = (1, n_views)
+        assert _apply_range(ds, None) == (1, n_views), 'None must be a no-op'
+        print(f'  range override applied and gated (refuses (0,1), (2,1), (1,{n_views + 1}))')
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_empty_metric_is_absent_not_nan():
+    """An empty statistic must be `None` -- not NaN, and not 0.0.
+
+    At a range whose draws are all N=1 every within-draw statistic is empty, and the old
+    code returned `float(np.mean([]))`. NaN is invalid strict JSON -- Python writes the
+    bare token `NaN`, which no strict parser accepts -- and read back as a number it is
+    indistinguishable from a measurement. The tempting repair, returning 0.0, is worse:
+    0.0 reads as PERFECT view-invariance, which is exactly the false confirmation this
+    probe must never produce.
+    """
+    nan = float(np.mean([]))
+    assert nan != nan, 'the old path is expected to yield NaN'
+    assert 'NaN' in json.dumps(dict(x=nan)), 'and json writes it as invalid strict JSON'
+
+    assert _mean_or_none([]) is None, 'an empty statistic must be absent'
+    assert 'NaN' not in json.dumps(dict(x=_mean_or_none([])))
+    assert _mean_or_none([0.0]) == 0.0, 'a MEASURED zero must survive as a zero'
+    assert abs(_mean_or_none([1.0, 3.0]) - 2.0) < 1e-12
+    print('  empty statistic -> null (not NaN, not 0.0); a measured 0.0 is preserved')
+
+
+def test_rel_dist_is_scale_free():
+    """`_rel_dist` must divide out scale, or a cross-cell comparison compares gains."""
+    a, b = torch.tensor([[1.0, 0.0]]), torch.tensor([[2.0, 0.0]])
+    assert abs(_rel_dist(a, b) - (1.0 / 1.5)) < 1e-6, _rel_dist(a, b)
+    # mutation: dropping the denominator reports 100x more at 100x the magnitude. The
+    # whole point is that the statistic is comparable between models of different size.
+    assert abs(_rel_dist(100 * a, 100 * b) - _rel_dist(a, b)) < 1e-6, 'not scale-free'
+    assert abs(_rel_dist(a, a)) < 1e-6
+    print('  _rel_dist is scale-free (identical at 1x and 100x magnitude)')
+
+
+def test_slot_view_indices_recovers_views_exactly():
+    """Slot -> ring index recovery must be exact, and must refuse an ambiguous match.
+
+    A nearest-neighbour match would silently pair the wrong view with a latent, which
+    understates every per-view statistic rather than failing -- the same failure shape as
+    the dataset's own cam/slot pairing, and the reason this raises instead of guessing.
+    """
+    import test_multiview_dataset as tmd
+    tmp = tempfile.mkdtemp(prefix='probe_views_')
+    try:
+        path = os.path.join(tmp, 'synth.zarr')
+        tmd.build_synthetic_zarr(path)
+        n_views, hw = tmd.N_VIEWS, tmd.H
+        ds = _slot_dataset(path, n_views, hw, (1, n_views))
+        # The synthetic fixture's cam_table repeats a row (views 0 and 2 share a pose),
+        # which NO recovery-by-exact-match can disambiguate -- and raising there is the
+        # correct behaviour, so the fixture is not wrong, it is simply degenerate for this
+        # purpose. The real ring has 13 distinct rows (verified against the zarr), so give
+        # the test a distinct table and let it exercise the recovery rather than the
+        # fixture's geometry.
+        tbl = np.zeros((n_views, 10), dtype=np.float32)
+        tbl[:, 0] = np.arange(n_views)
+        tbl[:, 3] = 1.0
+        tbl[:, 7] = 45.0
+        tbl[:, 8] = tbl[:, 9] = hw
+        ds.cam_table = tbl
+        np.random.seed(0)
+        obs = ds[0]['obs']
+        active = obs['view_mask'][0] > 0.5
+        pairs = _slot_view_indices(ds, obs, active)
+        slots = [s for s, _ in pairs]
+        vals = [v for _, v in pairs]
+        assert slots == list(range(int(active.sum()))), slots
+        assert len(set(vals)) == len(vals), f'views must be distinct: {vals}'
+        assert all(0 <= v < n_views for v in vals), vals
+
+        # mutation: duplicate the row of a view that IS active, so two table rows match.
+        # This is the degenerate-fixture case above, induced deliberately.
+        v0 = vals[0]
+        bad = ds.cam_table.copy()
+        bad[v0] = bad[(v0 + 1) % n_views]
+        ds.cam_table = bad
+        try:
+            _slot_view_indices(ds, obs, active)
+        except RuntimeError:
+            pass
+        else:
+            raise AssertionError('an ambiguous camera match was accepted')
+        print(f'  slot->view recovery exact ({vals}); a duplicated table row is refused')
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def test():
     print('=' * 70)
     print('relpose probe -- CPU checks')
@@ -305,6 +457,10 @@ def test():
     test_report_target_detects_decodable_geometry()
     test_report_target_translation_only()
     test_mlp_probe_path_runs()
+    test_range_override_is_applied()
+    test_empty_metric_is_absent_not_nan()
+    test_rel_dist_is_scale_free()
+    test_slot_view_indices_recovers_views_exactly()
     print('=' * 70)
     print('ALL RELPOSE PROBE CHECKS PASSED')
     print('=' * 70)

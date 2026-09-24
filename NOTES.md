@@ -164,6 +164,40 @@ python -u probe_relpose.py -c data/outputs/run_square_${c}_s42_200ep/checkpoints
 done
 # m4on/m4off work too (same encoder, plus an inert aux head) -- optional third cell
 # -d cuda:1 unless cuda:0 is free -- another user habitually holds ~13 GB there
+
+### Latent grid (schema 2) — cross-cell comparison
+
+**Use this, not a bare `--stability-ranges`, when comparing CHECKPOINTS.** The old
+`latent_stats` are not comparable across cells and the numbers below supersede them: the
+subset sizes compared were governed by each cell's own `view_count_range`, which is not a
+small effect — the *same* `m3off` encoder reads `z_g_across_view_subsets` = **0.335 at
+`[1,2]` vs 0.202 at `[1,7]`**. The override plus the grid is what removes that.
+
+```bash
+python -u probe_relpose.py -c <ckpt> -o data/probe_relpose_grid_square_<cell> -d cuda:0 \
+  --view-count-range 1,7 --stability-ranges "1,2;1,4;1,7;7,7" \
+  --stability-states 256 --stability-repeats 6 --n-samples 2000 --mlp-steps 2000 \
+  --num-threads 4          # add --random-init-control on the anchor
+```
+
+**Reading order, and the trap.** (1) `zv_pair_ratio` — fusion-free, so it measures the
+backbone alone; (2) `zv_across_states` — **check this FIRST**, because it is the collapse
+detector; (3) `zg_across_view_subsets` per range. A **collapsed** encoder yields near-constant
+`z_v`, which makes `zv_pair_ratio` a ratio of two ~1e-5 numbers and can read as *extreme*
+view-invariance — it produced exactly that on `m3v12` (1.277 vs a working 0.581, which a
+naive reading would call a confirmation). Anchors on square: healthy random-init **1.51**,
+`m3off` **0.58**, `m3v12` collapsed (`zv_across_states` 2.7e-05 vs `m3off`'s 0.572).
+Gates, all of them, before any number is believed: `stats.mean_active` tracks the EFFECTIVE
+range (~4.0 under a `[1,7]` override; 1.5 means the override was silently ignored);
+`zg_permutation_floor` ~1e-8 (float noise — if it is not tiny, something non-deterministic is
+live and nothing else is trustworthy); `zv_n_agnostic_max_abs_diff` < **1e-4** (it is 2e-05 —
+cuDNN picks different kernels for batch-1 vs batch-7, so `== 0` is the wrong gate and would
+fail a correct implementation); and the `draw_fingerprint` must MATCH between cells being
+compared, which is what makes the pairing checkable rather than assumed.
+
+**`[1,2]` and `[1,4]` grid entries carry `zv_pair_ratio: null` by construction** — a full
+draw needs every slot, so only `[1,7]` and `[7,7]` can carry it. That is why the grid exists
+rather than a single range.
 ```
 
 Cost: ~2000 dataset reads + one encoder pass each (~30 s), ridge fits (a few seconds), the
@@ -297,6 +331,13 @@ originally had no disk gate and that was the binding constraint all session.
   that the conditioning is inert behaviourally, `m3fixedn1` by the resolved N>1 confound.
   **`m3off` is never a deletion candidate** — it is the ladder's anchor and the only cheap
   eval-path-drift check.
+- **Rule, learned the hard way on 2026-09-25: do not delete a cell's weights until its LATENT
+  has been probed, not merely its behaviour measured.** `m3fixedn1` was deleted the same day
+  its behavioural question closed — and within hours a mechanistic question arose (is the
+  floor an encoder collapse?) for which it was the natural second floor pole. It survives by
+  luck: `m3v12` turned out to be a *better* pole, because it moves mean-N where `m3fixedn1`
+  does not. A behavioural null does not close a cell; it only closes the behavioural question.
+  Probing is free and needs only the checkpoint, so the insurance costs nothing but a rule.
 - **`data/robomimic_image.zip` (84.75 GB) does not exist on this box** — only the three
   `ph` tasks (`square`, `can`, `lift`) are available, with both `image.hdf5` and
   `image_abs.hdf5`. Anything sized against that archive needs re-checking.

@@ -27,7 +27,7 @@ Operational detail: `NOTES.md`. Last updated 2026-09-24.
 | **architectural confound** | ✅ resolved | fixed-N=1 scores 0.04/0.05 → **N>1** is load-bearing | PROGRESS *N>1* |
 | **M5** — single-novel-view inference | ⬜ not coded | — | below |
 | **relational supervision** (`z_v`, `z_g`) | ⬜ retired by 1a's result — not cost | 1a measured the geometry 1b would supervise is *already* in `z_v` | *Next* above |
-| **N-diversity ladder** | 🟡 Stage 1 `[1,2]` **floor**; Stage 2 `[1,3]` running | the pre-registered prediction was falsified — max-N = 2 buys nothing over N = 1 (0.028/0.043 vs 0.036/0.047) | PROGRESS *N-diversity ladder* |
+| **N-diversity ladder** | 🟡 Stage 1 `[1,2]` **floor**; Stage 2 `[1,3]` running | the pre-registered prediction was falsified — max-N = 2 buys nothing over N = 1 (0.028/0.043 vs 0.036/0.047), and the floor is an **encoder collapse**, not a generalisation failure | PROGRESS *N-diversity ladder* |
 
 ## Next: relational supervision on `z_v` (opened 2026-09-24, **retired 2026-09-24**)
 

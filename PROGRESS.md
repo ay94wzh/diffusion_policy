@@ -803,6 +803,73 @@ the choice cannot move the conclusion, but note that the reference sweeps record
 provenance at all (`data/eval_interp_square_*/` holds only `eval_log.json`), so which
 checkpoint produced a committed number is recoverable only from the runbook convention.
 
+### The floor is an encoder collapse, not a generalisation failure
+
+**Why this was measured at all.** Every evaluation here is N=1 inference, and at N=1 the
+fusion softmax is over a *single* unmasked key, so the learnable query is inert. Large-N
+training therefore cannot be teaching the fusion anything, which pointed at the **shared
+backbone**: the hypothesis was that seven views of one scene press the encoder toward a
+canonical, scene-level representation that two views do not. It predicted that a
+fusion-free view-invariance statistic would separate the working cell from the floor cell.
+
+**Two confounds had to be fixed before the comparison meant anything.**
+`probe_relpose.py`'s `measure_stability` instantiated the dataset from the checkpoint's own
+config, so the compared subset sizes were governed by that cell's `view_count_range` — and
+that is not a small effect: the *same* `m3off` encoder reports
+`z_g_across_view_subsets` = **0.335 at `[1,2]` vs 0.202 at `[1,7]`**. And at N=1 the fusion
+reduces to `z_g = A z_v + b` with `A` trained per cell, so a raw `z_g` comparison conflates
+the backbone with that cell's value-projection gain. Both were removed: a
+`--view-count-range` override applied to a *grid* of ranges (`1,2;1,4;1,7;7,7`), and a
+fusion-free primary statistic — pairwise `z_v` distances over the view pool at a full draw
+(`zv_pair_ratio`), against the `z_v` distance *between states at a fixed view* as the
+denominator. `z_v` is N-agnostic by construction (GroupNorm, eval-mode centre crop, no
+dropout), which is what licenses it; measured on the box at **2e-05**, i.e. cuDNN
+kernel-selection noise four orders of magnitude below the quantities being read.
+
+**The result inverts the hypothesis.** `m3v12`'s encoder has **collapsed**:
+
+| | `m3off` `[1,7]` works | `m3v12` `[1,2]` floor |
+|---|---|---|
+| `z_v` spread across states | 7.6e-02 | **2.7e-06** |
+| `z_v` norm (mean) | 0.476 | **0.104** |
+| `zv_pair_ratio` @ `7,7` | 0.581 | 1.277 |
+| `zv_across_states` @ `7,7` | 0.572 | **2.7e-05** |
+| permutation floor | 4.2e-08 | 0 |
+
+Its `z_v` is a near-constant function of its input — a factor of ~**23,000** less
+state-to-state variation than the working cell — while the images feeding it differ by 0.93
+in max pixel value. It is not an EMA artefact: the raw (non-EMA) model shows the same
+(3.2e-06). So `[1,2]` does not generalise badly to novel views; it barely encodes the scene
+at all, and a constant `z_g` means the policy acts **open-loop** — which is what a 0.028
+success rate, at the *trained* pose, looks like.
+
+**This is also a false confirmation that the design caught.** Under a naive reading,
+`m3v12`'s `zv_pair_ratio` of 1.277 against `m3off`'s 0.581 is *above* the working cell's —
+which the pre-registration said would **confirm** the canonicity hypothesis. But both the
+numerator and the denominator of that ratio are ~1e-5, because a constant representation has
+neither view-distance nor state-distance to measure; the ratio is meaningless. What caught it
+is exactly the guard the design added for this trap: the explicit denominator
+(`zv_across_states`, 2.7e-05) plus the random-init control, which shows a *healthy* encoder
+sits at 1.51 and a working trained one at 0.58 — so 1.277 is not "even more canonical", it is
+degenerate. The pre-registered **unreadable** branch is the correct reading.
+
+**What it means.** The invariance-pressure hypothesis is neither confirmed nor refuted — it
+is **unreadable on this cell**. What replaces it is simpler and better supported: the ladder's
+floor at low mean-N is a **representation collapse**, so what large-N sampling supplies is not
+canonicity pressure but *prevention of collapse*. That reframes the N>1 headline rather than
+overturning it, and it is testable: if `[1,3]`'s encoder also collapses while `[1,7]`'s does
+not, the collapse boundary coincides with the behavioural boundary.
+
+**A practical consequence worth pinning.** `z_v` variance is a cheap, direct collapse
+detector, and it can be read at epoch ~25 instead of after 200 epochs plus a 52-minute sweep.
+It also may not be specific to the ladder: L1 — the cell that destroyed square and can —
+failed at the *trained* pose too, which is the same signature, and its checkpoints are still
+on disk for a direct read.
+
+**Caveats.** One task (square), one seed. The collapse is measured on the encoder's output,
+not traced to a layer or a cause; "collapse" here is a description of the representation, not
+a mechanism.
+
 ## Open questions
 
 - **How much diversity is enough?** `view_count_range=[2,2]` answers PROPOSAL §7's "2

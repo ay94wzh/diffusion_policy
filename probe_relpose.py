@@ -45,6 +45,7 @@ Usage (on the box -- needs the multi-view zarr and the checkpoint):
 import os
 import sys
 import json
+import time
 import pathlib
 import tempfile
 
@@ -288,7 +289,62 @@ def load_policy(checkpoint, device):
     return policy, cfg
 
 
-def collect(policy, cfg, device, args):
+def _apply_range(dataset, view_count_range):
+    """Apply a draw-range override to an instantiated dataset, in place.
+
+    Set on the INSTANCE rather than the cfg: a checkpoint's payload cfg comes back in
+    struct mode, so `cfg.task.dataset.view_count_range = ...` raises, and relaxing it
+    with `OmegaConf.set_struct(False)` would have to be undone to keep the rest of the
+    cfg read-only. Setting the attribute bypasses `__init__`, so its guard is
+    re-implemented here -- and it is the guard that must hold, because `hi` has to fit
+    in the pool or `np.random.choice(..., replace=False)` in `_m3_slots` raises later.
+    """
+    if view_count_range is None:
+        return tuple(int(x) for x in dataset.view_count_range)
+    lo, hi = (int(x) for x in view_count_range)
+    n_slots = int(dataset.n_slots)
+    if not (1 <= lo <= hi <= n_slots):
+        raise ValueError(
+            f'view_count_range [{lo}, {hi}] must satisfy 1 <= lo <= hi <= n_slots ({n_slots})')
+    if hi > len(dataset.view_pool):
+        raise ValueError(
+            f'view_count_range hi={hi} exceeds the pool size {len(dataset.view_pool)}')
+    dataset.view_count_range = (lo, hi)
+    return (lo, hi)
+
+
+def _slot_view_indices(dataset, obs, active_row):
+    """``[(slot, ring index), ...]`` for the active slots of one frame.
+
+    Recovered by EXACT match of the slot's camera vector against `cam_table` (the
+    dataset serves `cam_table[v]` verbatim, so equality holds); an ambiguous match
+    raises rather than picking a nearest neighbour, because a wrong pairing would
+    silently understate every per-view statistic instead of failing.
+    """
+    out = []
+    for k in range(int(dataset.n_slots)):
+        if not bool(active_row[k]):
+            continue
+        cam = obs[dataset.cam_keys[k]][0].numpy()
+        hit = np.nonzero(np.all(dataset.cam_table == cam, axis=1))[0]
+        if len(hit) != 1:
+            raise RuntimeError(
+                f'slot {k}: camera vector matches {len(hit)} cam_table rows, expected 1')
+        out.append((k, int(hit[0])))
+    return out
+
+
+def _rel_dist(a, b):
+    """Mean relative L2 between two matched row-sets: ``||a-b|| / (0.5(||a||+||b||))``.
+
+    Scale-free, so the number is comparable across checkpoints -- which is the whole
+    point, since the thing under test is a cross-cell difference.
+    """
+    return float(((a - b).norm(dim=-1) /
+                  (0.5 * (a.norm(dim=-1) + b.norm(dim=-1))).clamp_min(1e-6)).mean())
+
+
+def collect(policy, cfg, device, args, view_count_range=None):
     """One forward pass per sample -> per-view latents, camera vectors, EE position.
 
     Camera vectors are read in the DATASET's slot order, because the dataset is what
@@ -297,6 +353,8 @@ def collect(policy, cfg, device, args):
     probe here understate the geometry rather than fail).
     """
     dataset = hydra.utils.instantiate(cfg.task.dataset)
+    cell_range = tuple(int(x) for x in dataset.view_count_range)
+    _apply_range(dataset, view_count_range)
     To = policy.n_obs_steps
     cam_keys = list(getattr(dataset, 'cam_keys', None) or policy.obs_encoder.cam_keys)
     enc_cam_keys = list(policy.obs_encoder.cam_keys)
@@ -327,7 +385,12 @@ def collect(policy, cfg, device, args):
     CAMs, EEFs = torch.cat(CAM, 0), torch.cat(EEF, 0)
     stats = dict(n_frames=int(Zs.shape[0]), n_slots=int(Zs.shape[1]),
                  dim=int(Zs.shape[2]), mean_active=float(ACTs.sum(-1).float().mean()),
-                 n_dataset=len(dataset))
+                 n_dataset=len(dataset),
+                 # Gate: mean_active must track the EFFECTIVE range (a [1,7] override
+                 # reads ~4.0; 1.5 means the override was silently ignored), and both
+                 # ranges are recorded so a reader can tell them apart.
+                 effective_range=[int(x) for x in dataset.view_count_range],
+                 cell_view_count_range=[int(x) for x in cell_range])
     return Zs, ACTs, CAMs, EEFs, stats
 
 
@@ -370,44 +433,197 @@ def build_probe_sets(Zs, ACTs, CAMs, EEFs, args, seed=42):
     )
 
 
-def measure_stability(policy, cfg, device, args):
-    """z_g across view subsets of the SAME state, vs z_v across views of one draw."""
-    dataset = hydra.utils.instantiate(cfg.task.dataset)
-    To = policy.n_obs_steps
-    zg_draws, zv_spread = [], []
-    for i in range(min(args.stability_states, len(dataset))):
-        per_draw = []
-        for _ in range(args.stability_repeats):
+def _mean_or_none(vals):
+    """``None`` -- never 0.0 and never NaN -- when there is nothing to average.
+
+    ``float(np.mean([]))`` is NaN, which is invalid strict JSON and, read back as a
+    number, is indistinguishable from a measurement. That path is not hypothetical: at
+    a range whose draws are all N=1, every within-draw statistic is empty.
+    """
+    return float(np.mean(vals)) if len(vals) else None
+
+
+def _full_draw_block(dataset, draws, n_slots):
+    """The **fusion-free** statistic: pairwise ``z_v`` distances over the view POOL at a
+    full draw, against the ``z_v`` distance *between states* at a fixed view.
+
+    ``z_v`` is N-agnostic by construction -- GroupNorm rather than BatchNorm, a
+    deterministic centre crop in eval, no dropout -- so one view encodes to the same
+    tensor at any N. That is what licenses this comparison. It matters because at N=1
+    the fusion is exactly ``z_g = A z_v + b`` with ``A`` trained *per cell*, so a raw
+    ``z_g`` comparison across cells conflates the backbone with that cell's
+    value-projection gain; this block is the one that does not.
+
+    The half-split gap is the statistic's own noise floor, and is what makes a
+    confirm/refute call quantitative instead of eyeballed.
+    """
+    # the FIRST full draw per state, not just `per[0]`: a state whose first draw was
+    # small may still contribute, and at [1,7] most first draws are not full. Any full
+    # draw serves the whole pool, so which repeat supplies it does not matter -- and the
+    # 21 view pairs are the same set every time, so extra repeats add no information.
+    full = []
+    for per in draws:
+        hit = next((p for p in per if len(p[3]) == n_slots), None)
+        if hit is not None:
+            full.append(hit)
+    if not full:
+        return dict(zv_pair_matrix=None, zv_across_states=None,
+                    zv_pair_ratio=None, half_split=None)
+    by_view = [{v: z[:, slot] for slot, v in pairs} for (_, z, _, pairs) in full]
+    views = sorted(by_view[0].keys())
+
+    def _ratio(ds):
+        pair = [_rel_dist(d[i], d[j]) for d in ds
+                for a_i, i in enumerate(views) for j in views[a_i + 1:]
+                if i in d and j in d]
+        cross = [_rel_dist(ds[i][v], ds[j][v])
+                 for v in views for i in range(len(ds)) for j in range(i + 1, len(ds))
+                 if v in ds[i] and v in ds[j]]
+        pm, cm = _mean_or_none(pair), _mean_or_none(cross)
+        return pm, cm, (pm / cm if pm is not None and cm else None)
+
+    pair_mean, cross_mean, ratio = _ratio(by_view)
+    half = len(by_view) // 2
+    _, _, ra = _ratio(by_view[:half]) if half else (None, None, None)
+    _, _, rb = _ratio(by_view[half:]) if half else (None, None, None)
+    return dict(
+        zv_pair_matrix=dict(mean=pair_mean, n=len(by_view)),
+        zv_across_states=cross_mean,
+        zv_pair_ratio=ratio,
+        half_split=dict(a=ra, b=rb,
+                        gap=(abs(ra - rb) if ra is not None and rb is not None else None)),
+    )
+
+
+def _stability_entry(policy, dataset, device, args, To, rng):
+    """One draw-range's worth of latent statistics."""
+    n_states = min(int(args.stability_states), len(dataset))
+    # seeded per block, so the stability draws do not depend on how much of the global
+    # stream `collect` consumed -- i.e. on --n-samples. Two cells are then drawn
+    # IDENTICALLY, which is what makes the fingerprint below checkable rather than
+    # merely asserted.
+    np.random.seed(int(args.seed))
+
+    draws, size_hist, heads = [], {}, []
+    for i in range(n_states):
+        per = []
+        for _ in range(int(args.stability_repeats)):
             s = dataset[i]
             obs = dict_apply(s['obs'], lambda x: x.unsqueeze(0).to(device))
             nobs = policy.normalizer.normalize(obs)
             this_nobs = dict_apply(nobs, lambda x: x[:, :To].reshape(-1, *x.shape[2:]))
             with torch.no_grad():
                 enc = policy.obs_encoder.forward_full(this_nobs)
-            per_draw.append((enc['z_global'].float().cpu(),
-                             enc['z_views'].float().cpu(),
-                             enc['view_active'].bool().cpu()))
-        # how far z_g moves when the VIEW SET changes for a fixed state, normalised so
-        # the number is comparable across checkpoints
-        for a in range(len(per_draw)):
-            for b in range(a + 1, len(per_draw)):
-                za, zb = per_draw[a][0], per_draw[b][0]
-                zg_draws.append(float(((za - zb).norm(dim=-1) /
-                                       (0.5 * (za.norm(dim=-1) + zb.norm(dim=-1)))).mean()))
-        # how far the live views' z_v are from each other within one draw
-        z, act = per_draw[0][1], per_draw[0][2]
-        for f in range(z.shape[0]):
-            idx = act[f].nonzero().flatten()
-            if len(idx) < 2:
-                continue
-            zv = z[f, idx]
-            m = zv.mean(0, keepdim=True)
-            zv_spread.append(float(((zv - m).norm(dim=-1) /
-                                    m.norm().clamp_min(1e-6)).mean()))
-    return dict(
-        z_g_across_view_subsets=float(np.mean(zg_draws)),
-        z_v_across_views_within_draw=float(np.mean(zv_spread)),
-        n_zg_pairs=len(zg_draws), n_zv_frames=len(zv_spread))
+            active = enc['view_active'].bool().cpu()
+            per.append((enc['z_global'].float().cpu(),
+                        enc['z_views'].float().cpu(),
+                        active,
+                        _slot_view_indices(dataset, s['obs'], active[0])))
+        draws.append(per)
+        n_act = len(per[0][3])
+        size_hist[str(n_act)] = size_hist.get(str(n_act), 0) + 1
+        if len(heads) < 4:
+            heads.append(sorted(v for _, v in per[0][3]))
+
+    zg_by_size = {}
+    for per in draws:
+        for a in range(len(per)):
+            for b in range(a + 1, len(per)):
+                ka, kb = len(per[a][3]), len(per[b][3])
+                zg_by_size.setdefault(f'{min(ka, kb)}|{max(ka, kb)}', []).append(
+                    _rel_dist(per[a][0], per[b][0]))
+
+    zv_by_size = {}
+    for per in draws:
+        for (_, z, act, _) in per:
+            for f in range(z.shape[0]):
+                idx = act[f].nonzero().flatten()
+                if len(idx) < 2:
+                    continue
+                zv = z[f, idx]
+                zv_by_size.setdefault(str(len(idx)), []).extend(
+                    _rel_dist(zv[p], zv[q])
+                    for p in range(len(idx)) for q in range(p + 1, len(idx)))
+
+    entry = dict(
+        n_states=n_states,
+        n_repeats=int(args.stability_repeats),
+        draw_fingerprint=dict(size_hist=size_hist, first_views=heads),
+        zg_across_view_subsets=_mean_or_none([v for vs in zg_by_size.values() for v in vs]),
+        zg_by_size={k: dict(mean=_mean_or_none(v), n=len(v))
+                    for k, v in sorted(zg_by_size.items())},
+        zv_within_draw_by_size={k: dict(mean=_mean_or_none(v), n=len(v))
+                                for k, v in sorted(zv_by_size.items())},
+        # At a full draw every repeat serves the same view SET re-permuted, and the
+        # fusion is permutation-invariant, so this bucket is the pipeline's noise floor
+        # for the entire z_g statistic -- for free, and it CAN fail: anything above
+        # float noise means something non-deterministic is live and nothing else here
+        # is trustworthy.
+        zg_permutation_floor=_mean_or_none(
+            zg_by_size.get(f'{int(dataset.n_slots)}|{int(dataset.n_slots)}', [])),
+    )
+    entry.update(_full_draw_block(dataset, draws, n_slots=int(dataset.n_slots)))
+    return entry
+
+
+def measure_stability(policy, cfg, device, args, ranges):
+    """Probe the latent statistics on a GRID of draw ranges.
+
+    A grid rather than one range, because the draw composition is otherwise governed by
+    the checkpoint's own training range -- `[1,2]` compares mostly 1-vs-2 view draws
+    while `[1,7]` compares up to 1-vs-7 -- so a single number is not comparable across
+    cells. Every cell runs through one code path on the same grid, and the fingerprints
+    it emits are what let two cells' draws be checked as identical rather than assumed.
+    """
+    dataset = hydra.utils.instantiate(cfg.task.dataset)
+    cell_range = tuple(int(x) for x in dataset.view_count_range)
+    To = policy.n_obs_steps
+    grid = {}
+    for rng in ranges:
+        _apply_range(dataset, rng)
+        entry = _stability_entry(policy, dataset, device, args, To, rng)
+        z11 = (entry['zg_by_size'].get('1|1') or {}).get('mean')
+        # the fuser's amplification, carried explicitly as a nuisance parameter: a
+        # difference here with no difference in the fusion-free ratio means the FUSER
+        # differs, not the backbone.
+        entry['amp'] = (z11 / entry['zv_pair_ratio']
+                        if z11 is not None and entry.get('zv_pair_ratio') else None)
+        grid[f'{rng[0]},{rng[1]}'] = entry
+    return cell_range, grid
+
+
+def _check_zv_n_agnostic(policy, dataset, device, args, To):
+    """The single assumption every per-view statistic here rests on: that ``z_v`` does not
+    depend on how many OTHER views share the batch.
+
+    Encodes one view inside a full 7-view draw, then the same view alone, and requires
+    bit-identical output. It should hold by construction (GroupNorm, not BatchNorm; a
+    deterministic eval-mode centre crop; no dropout) -- but it is an assumption about the
+    encoder, and if it is not ~0 then every per-view number in the JSON means something
+    other than what it says. Cheap enough to check on every run.
+    """
+    _apply_range(dataset, (int(dataset.n_slots), int(dataset.n_slots)))
+    np.random.seed(int(args.seed))
+    obs = dict_apply(dataset[0]['obs'], lambda x: x.unsqueeze(0).to(device))
+    nobs = policy.normalizer.normalize(obs)
+
+    def _enc(o):
+        this = dict_apply(o, lambda x: x[:, :To].reshape(-1, *x.shape[2:]))
+        with torch.no_grad():
+            return policy.obs_encoder.forward_full(this)
+
+    full = _enc(nobs)
+    alone = dict(nobs)
+    mask = nobs[dataset.view_mask_key].clone()
+    mask[:, :, 1:] = 0.0                       # keep slot 0 only
+    alone[dataset.view_mask_key] = mask
+    one = _enc(alone)
+    return float((full['z_views'][:, 0] - one['z_views'][:, 0]).abs().max())
+
+
+def _pair(spec):
+    lo, hi = (int(x) for x in str(spec).split(','))
+    return (lo, hi)
 
 
 @click.command()
@@ -418,10 +634,19 @@ def measure_stability(policy, cfg, device, args):
 @click.option('--pairs-per-sample', default=8, help='relative-pose pairs per frame')
 @click.option('--stability-states', default=64)
 @click.option('--stability-repeats', default=4, help='view draws per state')
+@click.option('--stability-ranges', default=None,
+              help='"LO,HI;LO,HI;..." grid. Default: the checkpoint\'s own range only.')
+@click.option('--view-count-range', default=None,
+              help='LO,HI override for the geometry collect pass (default: first grid entry)')
+@click.option('--random-init-control', is_flag=True,
+              help='also run the grid on a re-initialised encoder -- the ceiling control')
+@click.option('--num-threads', default=4, help='torch CPU threads')
 @click.option('--mlp-steps', default=0, help='>0 trains a small MLP readout too')
 @click.option('--seed', default=42)
 def main(checkpoint, output_dir, device, n_samples, pairs_per_sample,
-         stability_states, stability_repeats, mlp_steps, seed):
+         stability_states, stability_repeats, stability_ranges, view_count_range,
+         random_init_control, num_threads, mlp_steps, seed):
+    torch.set_num_threads(int(num_threads))
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
     device = torch.device(device)
     torch.manual_seed(seed)
@@ -446,20 +671,58 @@ def main(checkpoint, output_dir, device, n_samples, pairs_per_sample,
     print(f'  use_plucker={enc_cfg.use_plucker} use_eef_hist={enc_cfg.use_eef_hist} '
           f'n_slots={len(policy.obs_encoder.cam_keys)}')
 
-    Zs, ACTs, CAMs, EEFs, stats = collect(policy, cfg, device, args)
+    grid_ranges = ([_pair(p) for p in str(stability_ranges).split(';') if p.strip()]
+                   if stability_ranges else None)
+    if grid_ranges is None:
+        grid_ranges = [tuple(int(x) for x in cfg.task.dataset.view_count_range)]
+    collect_range = _pair(view_count_range) if view_count_range else grid_ranges[0]
+    print(f'  grid={grid_ranges}  collect_range={collect_range}')
+
+    t0 = time.time()
+    Zs, ACTs, CAMs, EEFs, stats = collect(policy, cfg, device, args, collect_range)
     print(f'collected {stats["n_frames"]} frames, mean active slots '
-          f'{stats["mean_active"]:.2f} of {stats["n_slots"]}')
+          f'{stats["mean_active"]:.2f} of {stats["n_slots"]}  '
+          f'[cell {stats["cell_view_count_range"]} -> effective '
+          f'{stats["effective_range"]}]  ({time.time() - t0:.0f}s)')
 
     sets = build_probe_sets(Zs, ACTs, CAMs, EEFs, args, seed=seed)
-    out = dict(checkpoint=checkpoint, stats=stats,
+    out = dict(schema=2, checkpoint=checkpoint,
+               checkpoint_bytes=os.path.getsize(checkpoint),
+               checkpoint_mtime=time.strftime(
+                   '%Y-%m-%d %H:%M:%S', time.localtime(os.path.getmtime(checkpoint))),
+               stats=stats,
                use_plucker=bool(enc_cfg.use_plucker),
                use_eef_hist=bool(enc_cfg.use_eef_hist), targets={})
     for name in ('abs_pose', 'cam_eef', 'rel_pose'):
         X, t, R = sets[name]
         report_target(X, t, R, name, args, device, out['targets'])
-    out['latent_stats'] = measure_stability(policy, cfg, device, args)
 
-    print(json.dumps(out, indent=2))
+    t0 = time.time()
+    cell_range, grid = measure_stability(policy, cfg, device, args, grid_ranges)
+    out['cell_view_count_range'] = list(cell_range)
+    out['grid_ranges'] = [list(r) for r in grid_ranges]
+    out['latent_grid'] = grid
+    out['latent_stats'] = grid[f'{grid_ranges[0][0]},{grid_ranges[0][1]}']
+    print(f'stability grid done ({time.time() - t0:.0f}s)')
+
+    ds = hydra.utils.instantiate(cfg.task.dataset)
+    out['zv_n_agnostic_max_abs_diff'] = _check_zv_n_agnostic(
+        policy, ds, device, args, policy.n_obs_steps)
+    print(f'  z_v N-agnostic max|diff| = {out["zv_n_agnostic_max_abs_diff"]:.3e}')
+
+    out['latent_controls'] = None
+    if random_init_control:
+        enc = policy.obs_encoder
+        saved = {k: v.detach().clone() for k, v in enc.state_dict().items()}
+        try:
+            enc.apply(lambda m: m.reset_parameters()
+                      if hasattr(m, 'reset_parameters') else None)
+            _, ctrl = measure_stability(policy, cfg, device, args, grid_ranges)
+        finally:
+            enc.load_state_dict(saved)
+        out['latent_controls'] = dict(random_init=ctrl)
+        print('  random-init control done')
+
     dest = os.path.join(output_dir, 'probe_relpose.json')
     with open(dest, 'w') as f:
         json.dump(out, f, indent=2)
