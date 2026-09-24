@@ -19,6 +19,7 @@ Last updated 2026-09-24.
 | **N>1** | M3's model with one CLI line changed so every sample sees a single view | **the load-bearing ingredient** — reproduces L1, not M3 |
 | **1a** | relational probe on frozen checkpoints: what geometry does `z_v` already carry? | geometry is there *without* conditioning; **Plücker is live in the latent, inert in the behaviour** |
 | **`[1,2]`** | N-diversity ladder, first rung: `view_count_range=[1,2]` instead of `[1,7]` | **floor** — 0.028/0.043, indistinguishable from `[1,1]`; the N>1 gain is not reachable at max-N = 2 |
+| **ladder** | the N-diversity ladder closed: mean-N 1.0 / 1.5 / 2.0 / 3.0 / 4.0 | **knee between 2.0 and 3.0** (0.080 → 0.456), then graded to 0.764; and `[1,5]` is *more* view-general than `[1,7]` (82% vs 72% retained) |
 | **collapse** | measuring the encoder's output spread across failing and working cells | **a failure mode, not *the* failure mode** — explains `[1,2]`'s floor and answers L1's task split, but `[1,3]` fails while healthy; read the correction in that section |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
@@ -863,9 +864,35 @@ things at once, which is a correction to how the previous stage read it:
   the plateau value.
 
 "How much diversity is enough" therefore has a two-part answer: below mean-N 3 it is not
-enough at all, and above it, more still buys more. The strict 50-episode sweep is what the
-pre-registered table reads; the numbers above are the free in-training read, and `mean_score`
-saturates.
+enough at all, and above it, more still buys more.
+
+**Confirmed by the strict 50-episode paired sweep**, which is what the pre-registration reads:
+
+| cell | mean N | trained | held-out | trained→held-out drop |
+|---|---|---|---|---|
+| `m3fixedn1` `[1,1]` | 1.0 | 0.036 | 0.047 | — |
+| `m3v12` `[1,2]` | 1.5 | 0.028 | 0.043 | — |
+| `m3v13` `[1,3]` | 2.0 | 0.080 | 0.073 | — |
+| **`m3v15` `[1,5]`** | **3.0** | **0.456** | **0.373** | **0.083** |
+| `m3off` `[1,7]` | 4.0 | 0.764 | 0.550 | **0.214** |
+
+Gates for `[1,5]`: `|el_0 − az_0| = 0.08` (0.38 vs 0.46), and the 50 episode seed keys are
+set-identical to `m3off`'s. Elevation `0.38 / 0.26 / 0.00` — it holds *up* and not down, the
+same asymmetry M3 showed.
+
+**A second result in the last column, which the ladder was not designed to find.** `[1,5]`
+retains **82%** of its trained performance at held-out views; `[1,7]` retains **72%**. So
+`[1,5]` is the *more view-general* model even though its absolute held-out score is lower
+(0.373 against 0.550). More diversity bought absolute performance **and** cost generalization
+— the opposite of a monotone story, and a caution against reading the ladder as "more views
+is better" beyond the point where it stops being.
+
+**How this section was read, in sequence, and each reading's error.** `[1,2]`'s null was first
+read as "a second view buys nothing"; then the shape was called a threshold; then a
+threshold-plus-dose. The five-rung curve is the last of those, and each earlier reading was
+overconfident about a curve drawn from two points. The pre-registered Stage-1 prediction
+(0.15–0.40 for `[1,2]`) was falsified outright. That is the record; the ladder closed at five
+rungs and no further rung is planned.
 
 ### The second failure mode is downstream of the encoder
 

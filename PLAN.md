@@ -27,7 +27,7 @@ Operational detail: `NOTES.md`. Last updated 2026-09-24.
 | **architectural confound** | ✅ resolved | fixed-N=1 scores 0.04/0.05 → **N>1** is load-bearing | PROGRESS *N>1* |
 | **M5** — single-novel-view inference | ⬜ not coded | — | below |
 | **relational supervision** (`z_v`, `z_g`) | ⬜ retired by 1a's result — not cost | 1a measured the geometry 1b would supervise is *already* in `z_v` | *Next* above |
-| **N-diversity ladder** | 🟡 Stages 1–2 `[1,2]` `[1,3]` **floor**; Stage 3 `[1,5]` running | the pre-registered prediction was falsified — mean-N 1.0/1.5/2.0 are all floor (0.036 / 0.028 / 0.080) while 4.0 works (0.764). **`[1,2]`'s floor is collapse; `[1,3]`'s is not** — a healthy encoder fails too, so the transition is not a collapse boundary | PROGRESS *N-diversity ladder* |
+| **N-diversity ladder** | ✅ **closed at five rungs** | knee between mean-N 2.0 (0.080) and 3.0 (**0.456**), then graded to 4.0 (0.764). The pre-registered Stage-1 prediction was falsified; `[1,2]`'s floor is collapse, `[1,3]`'s is not | PROGRESS *N-diversity ladder* |
 | **collapse** | measuring encoder output spread across failing vs working cells | ⚠️ **a failure mode, not the failure mode** — explains `[1,2]`'s floor and answers the L1 task split (open since L1), but `[1,3]` is at the floor with a *healthy* encoder, so a second failure mode exists | PROGRESS *Collapse is a failure mode* |
 
 ## Next: what makes training collapse? (opened 2026-09-25)
