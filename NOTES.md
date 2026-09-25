@@ -402,6 +402,62 @@ done; done
 # smoke ONE cell (-o /tmp/smoke.json) first: the tool has no assertions, and n_obs=1 would
 # print 0 for both arms -- the same misreading class as the :.4f bug below.
 ```
+
+**Gate outcome, 2026-09-25 — FAILED, so the intervention is off and the propdrop run was NOT
+launched.** Read from the nine JSONs, not the console:
+
+| seed | `R_m3v13` | `R_m3off` | ratio | gate (≥1.5) |
+|---|---|---|---|---|
+| 0 | 38.53 | 22.59 | 1.705 | PASS |
+| 1 | 40.05 | 12.60 | 3.179 | PASS |
+| 2 | 16.20 | 28.56 | **0.567** | fail |
+
+`min` over seeds = **0.567** → the pre-registered *gate failed, reading ambiguous* branch
+(2-of-3 is not support). **Two defects in the instrument, both verified in code, are why it is
+ambiguous rather than clean parity:**
+
+1. **The observation draw was never seeded.** `screen_conditioning.py` seeds `torch` only
+   (line 75); `multiview_image_dataset` draws each sample's view subset with `np.random`
+   (lines 626/630). So every invocation draws a *different* view ensemble. `image_only` swings
+   **2.47×** (`m3v13`) and **2.27×** (`m3off`) across the three seeds — the whole instability.
+2. **The two cells were drawn at different view counts.** The dataset is instantiated from each
+   checkpoint's own cfg, so `m3v13` drew `[1,3]` (mean 2.0) while `m3off` drew `[1,7]`
+   (mean 4.0). Fewer live views → smaller ensemble spread → lower `image_only`, which is the
+   direction of the entire seed-0 gap. **This is the same confound the project already
+   corrected for `screen_collapse` on 2026-09-25.**
+
+**The clean quantity is decisive, and it is what the write-up rests on.** `proprio_only` is
+draw-independent — the proprio keys are the same 64 low-dim rows whichever views are live — and
+it is stable to 0.2–0.4% within each cell across all three runs: `m3v13` 0.35003, `m3off`
+0.34726, `m3v12` 0.34704. The proprio contrast is **1.008×**, so **the n=8 claim of a 1.75×
+proprio gap does not reproduce and the balance hypothesis as stated is refuted** — on the one
+arm the view draw cannot touch, independently of the gate's instability. This *confirms* the
+suspicion already recorded above ("what is solid here is the severed path, not the balance
+reading") rather than contradicting it. The control still works: `m3v12`'s image arm is
+2.4–5.0e-05, ~256× below the others.
+
+**Instrument fix, pre-registered 2026-09-25 before it was run.** `--view-count-range`
+(mirroring `screen_collapse.py`'s, via `probe_relpose._apply_range`) plus `np.random.seed(seed)`
+— **optional, default None = unchanged behaviour** so the flagless path stays as-is, and
+`cell_view_count_range` / `effective_range` are recorded in the JSON the way
+`screen_collapse.py` does, so the draw is auditable from the artifact.
+
+- **Role of the matched reading, fixed now.** It is a pre-declared *confound control*, following
+  the project's own precedent for this exact confound (the 2026-09-25 collapse-screen
+  correction, which re-measured matched and let the matched table supersede the first). It
+  **does not revisit the gate verdict** — that is closed: the intervention is off. Its purpose
+  is forward-looking, to give the project a *use*-sensitive instrument that is not
+  draw-confounded.
+- **Prediction, registered before the run.** If the ladder's latent anti-correlation extends
+  into behaviour-space, `image_only` at a matched `[7,7]` draw declines monotonically with
+  mean-N: `m3off` (4.0) > `m3v15` (3.0) > `m3v13` (2.0) > `m3v12` (1.5, at ~1e-05 — severed).
+  **The competing outcome is equally informative: `image_only` flat across cells**, meaning the
+  ladder's behavioural differences are invisible to this instrument too. Both are recorded as
+  results; neither is read as the other.
+- **Consequence to record, not to hide:** the three committed `*_latest.json` came from the
+  *unseeded* path, so they are **not reproducible** under the fixed code even at identical
+  flags. Their qualitative finding (m3v12's severed path) stands; their method is superseded.
+
 - **Print with `:.6g`, not `:.4f`.** The `:.4f` format turned 2.59e-05 into `0.0000`, which
   was then written up as "bit-identical"; the number is 256× below the other cells, not zero.
 
