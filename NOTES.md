@@ -567,12 +567,28 @@ originally had no disk gate and that was the binding constraint all session.
 
 - A checkpoint is **4.62 GB** (policy + EMA + Adam state); `topk.k=1` plus `latest.ckpt`
   ≈ **9.2 GB per run**. Nine M3 runs needed ~83 GB.
+- **2026-09-25 session, in order — 15 GB → 18 GB free, having first paid 17.6 GB out.** Freed
+  four topks whose cells' questions were closed (`m3n1gate`, `square_randview_s42`,
+  `can_m3on`, `lift_randview`), each keeping its `latest.ckpt` so no cell lost probeability;
+  `m3off` untouched as always. Then two new runs (`m3v27`, `abs_single_..._retrain200ep`) took
+  17.4 GB. Then the **first byte-identical duplicate this project has found**: the M1 re-train's
+  `epoch=0200-*` topk was byte-identical to its own `latest.ckpt` (the case predicted above — a
+  topk named for the *final* epoch is saved back-to-back from the same in-memory state), which
+  released 4.4 GB for nothing. Prior `cmp` sweeps across 25 files had found none, so the rule had
+  released nothing until now.
+- **Before deleting anything, `cmp` it against its `latest.ckpt`** — and note that the M1 case
+  shows the payoff is real rather than theoretical. Deleting a *topk* never removes a cell's
+  probeability as long as `latest.ckpt` stays, which is what makes these deletions safe under the
+  probe-first rule.
 - **Size a run with `du`, never by counting checkpoint files.** `topk.k=1` writes a second
-  file only when the best rollout is *not* the final epoch, which is a per-run coin flip: as
-  of 2026-09-25 `run_square_m3v12_*` holds **one** file (4.4 GiB — its topk was pruned for
-  disk) while `m3off`, `m3n1gate`, `m3v13` and `m3v15` each hold **two** (8.7 GiB). Estimating
-  "3 × 4.4 GiB" for a deletion that in fact released 17 GiB is exactly the error this note
-  exists to prevent.
+  file only when the best rollout is *not* the final epoch, which is a per-run coin flip. As of
+  2026-09-25 (end of session), **two-file (8.7 GiB)** dirs: `m3v13`, `m3v15`, `m3v27`, `m4on`,
+  `m4off`, `can_randview`, `lift_n1gate`. **One-file (4.4 GiB)**: `m3off`, `m3on`, `m3v12`,
+  `m3n1gate`, both `square_randview` seeds, `can_m3on`, `lift_randview`,
+  `abs_single_retrain`. The *same* run dir can move between the two columns — `m3n1gate` went
+  2 → 1 when its topk was freed, `m3v27` arrived at 2 — so never carry an old count forward.
+  Estimating "3 × 4.4 GiB" for a deletion that in fact released 17 GiB is exactly the error this
+  note exists to prevent.
 - **The top-k file is often byte-identical to `latest.ckpt`** — the workspace saves both
   back-to-back from the same in-memory state, so a topk named `epoch=0200-*` on a 201-epoch
   run is a duplicate. **Compare with `cmp`, never by size**: of 19 checkpoints checked on

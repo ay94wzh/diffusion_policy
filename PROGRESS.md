@@ -7,6 +7,54 @@ trained on, and at inference time from a **single camera placed at a novel pose*
 
 Last updated 2026-09-25.
 
+## This session in plain terms (2026-09-25)
+
+Five things settled today. Two are negative results, and one is a correction of a diagnosis
+made earlier in the same session — that is the honest shape of it.
+
+**1. The balance hypothesis is dead, and it died by rule.** `[1,3]`'s floor was thought to come
+from leaning too hard on proprioception — the n=8 reading said 1.75× harder than the working
+cell. At n=64 across three seeds that gap is gone: the proprio arm reads **1.005×** between
+`m3v13` and `m3off`, and does not vary across the ladder at all — the four rungs span **1.005×**
+between their lowest and highest, and repeat runs of one cell agree to 1.001–1.009×. The
+pre-registered gate in front of the proprioception-dropout run **failed** (min ratio 0.567;
+2-of-3 seeds above the bar), so **the run was never launched**. The rule decided it before its
+justification was examined.
+
+**2. That leaves the open question with no candidate mechanism.** "Why does `[1,3]` fail while
+its representation looks fine?" now has nothing proposed to answer it. What it does have is a
+sharper specification — see 3.
+
+**3. `image→action sensitivity` is not a scalar, and my own diagnosis of its noise was wrong.** I
+said the screen's 2× instability came from an unseeded view draw and per-cell draw ranges. Both
+were real defects and both are fixed (the tool is now bit-reproducible to 6 figures) — but the
+matched-draw control left the spread **unchanged** (1.92–2.50×). The sharper truth: with the
+input held identical across cells, the **rank order still flips across seeds**. So the missing
+instrument cannot be built by tightening this statistic; it needs a verdict that does not depend
+on which scenes are probed.
+
+**4. The latent numbers point the wrong way across the whole ladder.** Filling `m3v15`'s missing
+probe turned `[1,3]`'s anomaly into a monotone trend. As mean-N falls 4.0 → 3.0 → 2.0, `z_g` gets
+*more* view-invariant and `z_v` *less* view-aware — toward what the proposal calls the goal —
+while behaviour falls 0.764 → 0.456 → 0.080. Across four independently trained rungs, the
+representation looks better and the policy works worse.
+
+**5. The ladder's last question is answered, and M1 is exonerated.**
+- **`[2,7]`** never trains at N=1 (min-N 2, mean-N 4.5) and is **indistinguishable from `[1,7]`**:
+  Δ trained +0.104, inside the 0.15 band; Δ held-out +0.003. So the ingredient is *enough views
+  on average* — not the presence of N>1, and not the availability of N=1. It also settles a
+  design question: N=1 **inference** works without ever training at N=1, so M3's stated reason
+  for randomising N is not necessary for the capability it protects.
+- **M1's baseline was not collapsed** — 17.5× above its own random-init baseline. M1's
+  view-tiedness is a *different* failure mode from the collapse that explains L1 square/can and
+  `[1,2]`, so the collapse story does not run back to M1.
+
+Housekeeping — disk freed, the recording gaps, and the duplicate checkpoint — is in
+`NOTES.md`'s *Disk* and *Artifacts* sections; the research corrections are below in *Record of
+corrections*.
+
+Everything below is the evidence for the above, in the project's usual detail.
+
 ## Current state
 
 | rung | what changed | verdict |
