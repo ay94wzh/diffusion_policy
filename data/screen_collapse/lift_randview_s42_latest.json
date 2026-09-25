@@ -1,0 +1,11 @@
+{
+  "n_states": 16,
+  "feature_dim": 512,
+  "mean_norm": 2.40059494972229,
+  "max_spread": 0.05965782329440117,
+  "relative_spread": 0.02485126629471779,
+  "random_init": false,
+  "cell_view_count_range": null,
+  "effective_range": null,
+  "checkpoint": "data/outputs/run_lift_randview_s42_200ep/checkpoints/latest.ckpt"
+}

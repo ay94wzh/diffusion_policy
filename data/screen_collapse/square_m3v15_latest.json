@@ -1,0 +1,17 @@
+{
+  "n_states": 16,
+  "feature_dim": 512,
+  "mean_norm": 0.0894094780087471,
+  "max_spread": 0.0019918831530958414,
+  "relative_spread": 0.022278210148215294,
+  "random_init": false,
+  "cell_view_count_range": [
+    1,
+    5
+  ],
+  "effective_range": [
+    7,
+    7
+  ],
+  "checkpoint": "data/outputs/run_square_m3v15_s42_200ep/checkpoints/latest.ckpt"
+}

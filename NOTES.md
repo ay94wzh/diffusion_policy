@@ -199,47 +199,6 @@ compared, which is what makes the pairing checkable rather than assumed.
 draw needs every slot, so only `[1,7]` and `[7,7]` can carry it. That is why the grid exists
 rather than a single range.
 
-### Collapse screen (`screen_collapse.py`)
-
-**Run this before believing any training run is healthy, and always with `--random-init`.**
-
-Every cell in this project that fails, fails the same way: the encoder outputs a
-near-constant vector, so the policy acts open-loop and fails at the TRAINED pose rather than
-only off-axis. That is what separates the tasks L1 solves from the tasks it destroys, and
-what the ladder's floor is (PROGRESS.md *Collapse is the unifying failure mode*).
-
-```bash
-# ALWAYS pass the SAME --view-count-range when comparing cells
-python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0 --view-count-range 7,7
-python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0 --random-init \
-  --view-count-range 7,7                                                    # baseline
-```
-
-- **Pass a matched `--view-count-range`, or the screen is not comparable across cells.** By
-  default each cell draws from its OWN training range, so a `[1,2]` cell sees 1–2 live views
-  while a `[1,7]` cell sees up to 7 — and live-view count moves the fused spread. This is the
-  *same* confound the probe's grid removes, and it was reproduced here once already: without
-  the flag `[1,3]` read **above** `m3off` (4.13e-02 vs 3.31e-02), which was the tell.
-- **The baseline is per-architecture and must be measured, never borrowed.** It is 1.3e-02
-  for L1's `MultiImageObsEncoder` and **5.1e-03** for M3's `ViewConditionedObsEncoder` — so
-  a threshold taken from one family is wrong for the other. Compare a cell only against a
-  `--random-init` run of *its own* checkpoint.
-- **A screen is not a verdict on failure.** `m3v13` `[1,3]` is at the floor with a *healthy*
-  encoder (1.36e-02 at `[7,7]` against `m3off`'s 1.72e-02), so a healthy reading does not
-  mean a cell will work and collapse is not necessary for failure. Screen for collapse, do
-  not screen for success.
-- Anchors (relative spread): M3 encoders — random init 5.1e-03, `m3off` (works) **3.3e-02**,
-  `m3v12` (floor) **5.4e-07**. L1 encoders — random init 1.3e-02, lift (works) 2.5e-02,
-  square (fails) 1.5e-04, can (fails) 3.1e-05.
-- Read the **ordering**, not the absolute value: ~1e-02 healthy, ~1e-04 and below degenerate.
-- It is a screen (16 consecutive frames), not a measurement, and it is **correlation, not
-  causation** — collapse may be a symptom of something deeper. Seed-robust on L1 square
-  (s42 1.5e-04, s43 2.0e-04) and control-backed (random-init baselines match to 1.6%
-  within the L1 family).
-- It works on any image encoder, which is why it is separate from `probe_relpose.py` (that
-  one needs M3's per-slot cam keys).
-```
-
 Cost: ~2000 dataset reads + one encoder pass each (~30 s), ridge fits (a few seconds), the
 MLP ~1-2 min. Feature matrices are ~200 MB at the defaults.
 
@@ -269,6 +228,81 @@ Send back each run's `data/probe_relpose_*/probe_relpose.json`; the numbers go i
 `PROGRESS.md` once read. Decision rule: if the `m3off` MLP column already recovers the
 geometry, step 1b's head is a post-hoc fit and the *objective* -- not the head -- is what
 has to change.
+
+### Collapse screen (`screen_collapse.py`)
+
+**Run this before believing any training run is healthy. Always with `--random-init`, always
+with a matched `--view-count-range`, and always with `-o`** (the flag is what writes the
+artifact; without it the number exists only in your scrollback, which is how one of them got
+misread as `0.0000`).
+
+The failure it detects: the encoder outputs a near-constant vector, so the policy acts
+open-loop and fails at the TRAINED pose rather than only off-axis. That is `[1,2]`'s floor, and
+it is what separates the tasks L1 solves from the tasks it destroys (PROGRESS.md *Collapse is
+a failure mode*).
+
+```bash
+# the SAME --view-count-range for every cell being compared
+python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0 \
+  --view-count-range 7,7 -o data/screen_collapse/<cell>_latest.json
+python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0 \
+  --view-count-range 7,7 --random-init -o data/screen_collapse/<cell>_RANDOM_INIT.json
+```
+
+- **A matched `--view-count-range`, or the screen is not comparable across cells.** By default
+  each cell draws from its OWN training range, so a `[1,2]` cell sees 1–2 live views while a
+  `[1,7]` cell sees up to 7 — and live-view count moves the fused spread. This is the *same*
+  confound the probe's grid removes; it was reproduced here once already, and the tell was
+  `[1,3]` reading **above** `m3off` (4.13e-02 vs 3.31e-02).
+- **The baseline is per-architecture and must be measured, never borrowed**: 1.27e-02 (lift) /
+  1.25e-02 (square) for L1's `MultiImageObsEncoder`, **5.1e-03** for M3's
+  `ViewConditionedObsEncoder`. A threshold taken from one family is wrong for the other.
+- **The screen cannot be matched for every cell.** `m3n1gate` is K=1 with a singleton
+  `view_pool=[6]`, so `--view-count-range 7,7` is refused (correctly) and it can only be
+  measured at its own `[1,1]`. A cell whose pool is smaller than the requested `hi` is not
+  comparable, and the tool failing loudly is the intended behaviour.
+- **Anchors** (relative spread, matched `[7,7]`): baselines 5.1e-03 / 1.3e-02; L1 lift (works)
+  2.49e-02, L1 square s42/s43 (fails) 1.49e-04 / 1.99e-04, L1 can (fails) 3.05e-05; `m3off`
+  (works) 1.72e-02, `m3v15` (works) 2.23e-02, `m3v13` (floor) 1.36e-02, `m3v12` (floor)
+  **1.83e-07**. Read the **ordering**: ~1e-02 healthy, ~1e-04 and below degenerate.
+- **A screen is not a verdict on failure.** `m3v13` is at the floor with a *healthy* encoder, so
+  a healthy reading does not mean a cell will work. Screen for collapse, not for success.
+- It is a screen (16 consecutive frames), not a measurement, and it is **correlation, not
+  causation** — collapse may be a symptom of something deeper. Seed-robust on L1 square
+  (s42 1.49e-04, s43 1.99e-04) and control-backed (random-init baselines match to 1.6% within
+  the L1 family).
+- Works on any image encoder, which is why it is separate from `probe_relpose.py` (that one
+  needs M3's per-slot cam keys). Since 2026-09-25 it also handles `view_subset` datasets (L1's),
+  which have no `view_count_range` at all.
+
+### Conditioning screen (`screen_conditioning.py`)
+
+**This is the one that can see a policy failing while its representation is fine** — the other
+two tools measure whether information is *present*, and `m3v13` is the case where it is present
+and the policy still fails.
+
+```bash
+python screen_conditioning.py -c <run>/checkpoints/latest.ckpt -d cuda:0 \
+  -o data/screen_conditioning/<cell>_latest.json      # --n-obs 8 --seed 0 by default
+```
+
+It holds the diffusion sampling noise fixed (`torch.manual_seed(0)` before every
+`predict_action`) and varies one input path at a time, so a change in the output is
+attributable to that input rather than the sampler. Reported: `std` across the observations,
+over the action chunk, normalised by the chunk's mean absolute value.
+
+- **`image-only` near `0.0000` means the image path is severed** — the policy cannot see the
+  scene at all, which is what a collapsed encoder must produce. `m3v12` reads **2.59e-05**
+  against `m3off`'s 0.0068.
+- **Read the two paths separately, never their sum.** `global_cond` is
+  `concat([z_global, low-dim])` and the low-dim keys are 9 dims of proprioception that vary
+  across samples too. Measured together, the *collapsed* cell comes out the **most**
+  observation-sensitive (`m3v12` 0.0686) — its constant image riding along with normally
+  varying proprioception — which is the opposite of the truth.
+- Anchors: `m3off` 0.0068 / 0.0386 (image / proprio), `m3v13` 0.0067 / 0.0674, `m3v12`
+  2.59e-05 / 0.0686.
+- **Print with `:.6g`, not `:.4f`.** The `:.4f` format turned 2.59e-05 into `0.0000`, which
+  was then written up as "bit-identical"; the number is 256× below the other cells, not zero.
 
 ### Resume and long campaigns
 
@@ -353,14 +387,18 @@ originally had no disk gate and that was the binding constraint all session.
 - A checkpoint is **4.62 GB** (policy + EMA + Adam state); `topk.k=1` plus `latest.ckpt`
   ≈ **9.2 GB per run**. Nine M3 runs needed ~83 GB.
 - **Size a run with `du`, never by counting checkpoint files.** `topk.k=1` writes a second
-  file only when the best rollout is *not* the final epoch — `m3off`'s checkpoints dir is
-  8.7 GiB (topk byte-identical to `latest.ckpt`, see below) while `m3plucker`'s is 4.4 GiB
-  (no topk written). Estimating 3 × 4.4 GiB for a deletion that in fact released 17 GiB is
-  exactly the error this note exists to prevent.
+  file only when the best rollout is *not* the final epoch, which is a per-run coin flip: as
+  of 2026-09-25 `run_square_m3v12_*` holds **one** file (4.4 GiB — its topk was pruned for
+  disk) while `m3off`, `m3n1gate`, `m3v13` and `m3v15` each hold **two** (8.7 GiB). Estimating
+  "3 × 4.4 GiB" for a deletion that in fact released 17 GiB is exactly the error this note
+  exists to prevent.
 - **The top-k file is often byte-identical to `latest.ckpt`** — the workspace saves both
   back-to-back from the same in-memory state, so a topk named `epoch=0200-*` on a 201-epoch
-  run is a duplicate. **Compare with `cmp`, never by size**: of 19 checkpoints, exactly one
-  was byte-identical while six others were the same size and genuinely different models.
+  run is a duplicate. **Compare with `cmp`, never by size**: of 19 checkpoints checked on
+  2026-09-24, exactly one was byte-identical while six others were the same size and genuinely
+  different models. **Re-checked 2026-09-25 across the then-current 25 files: none were
+  byte-identical**, so this rule released nothing on that date — the 4 GiB reclaimed came from
+  deleting an already-probed topk outright, not from a duplicate.
 - **The M1 (`*_abs_single`) weights were deleted on 2026-09-19** to make room for M3. Their
   `logs.json.txt`, `media/` and `.hydra/` survive and every number derived from them is
   committed. Recovery is a 1–2.5 h retrain per task from the runbook above.
@@ -442,11 +480,14 @@ failed gate (see the runbook).
 
 | what | where | in git |
 |---|---|---|
-| novel-view sweeps + viewpoint videos | `data/eval_*/eval_log.json`, `media/<viewpoint>/*.mp4` | ✅ |
+| novel-view sweeps | `data/eval_*/eval_log.json` (plus `media/<viewpoint>/*.mp4` only when `--n-test-vis > 0`; the M3-era sweeps kept none) | ✅ |
 | training logs (`logs.json.txt`) | `data/outputs/run_*/` | ✅ for M1/L1/M3/M4 runs |
 | aux-probe evidence | `data/probe_m4_square_logs.json.txt` | ✅ |
 | relational-probe (step 1a) results | `data/probe_relpose_square_{m3on,m3off}/probe_relpose.json` | ✅ |
-| N-diversity ladder sweeps | `data/eval_{interp,el}_square_m3v12/` (and `m3v13…` as rungs land) | ✅ |
+| probe grid + fused-latent (`z_g`) runs | `data/probe_relpose_grid_square_*`, `data/probe_zg_square_*` | ✅ |
+| **collapse screens** | `data/screen_collapse/*.json` (trained + `_RANDOM_INIT` controls) | ✅ |
+| **conditioning screens** | `data/screen_conditioning/*.json` | ✅ |
+| N-diversity ladder sweeps | `data/eval_{interp,el}_square_{m3v12,m3v13,m3v15}/` | ✅ |
 | ladder failure-mode videos | `data/eval_smoke_square_m3v12/media/<viewpoint>/*.mp4` | ✅ |
 | weights (4.6 GB each) | `data/outputs/run_*/checkpoints/latest.ckpt` | ❌ — rsync only |
 | campaign logs (ordered, timestamped) | `data/m3_campaign.log`, `data/m4_campaign.log` | ❌ on the box |

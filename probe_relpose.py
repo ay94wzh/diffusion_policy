@@ -300,7 +300,11 @@ def _apply_range(dataset, view_count_range):
     in the pool or `np.random.choice(..., replace=False)` in `_m3_slots` raises later.
     """
     if view_count_range is None:
-        return tuple(int(x) for x in dataset.view_count_range)
+        # `view_count_range` exists only in slot mode (view_pool). A `view_subset`
+        # dataset -- L1's -- has no such attribute, so this has to be a getattr or the
+        # screen cannot run on that whole encoder family at all.
+        cur = getattr(dataset, 'view_count_range', None)
+        return tuple(int(x) for x in cur) if cur is not None else None
     lo, hi = (int(x) for x in view_count_range)
     n_slots = int(dataset.n_slots)
     if not (1 <= lo <= hi <= n_slots):

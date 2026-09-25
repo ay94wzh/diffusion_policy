@@ -81,7 +81,10 @@ def measure(policy, cfg, device, n_states, random_init, view_count_range=None):
                       if hasattr(m, 'reset_parameters') else None)
     try:
         dataset = hydra.utils.instantiate(cfg.task.dataset)
-        cell_range = tuple(int(x) for x in dataset.view_count_range)
+        # absent for `view_subset` datasets (L1's encoder family), which have no draw
+        # range at all -- one view per sample, drawn from `view_subset`
+        cur = getattr(dataset, 'view_count_range', None)
+        cell_range = tuple(int(x) for x in cur) if cur is not None else None
         # WITHOUT this, the screen is not comparable across cells: each draws from its own
         # training range, so a [1,2] cell sees 1-2 active views while a [1,7] cell sees up
         # to 7, and the number of live views affects the fused output's spread. Same
@@ -103,8 +106,10 @@ def measure(policy, cfg, device, n_states, random_init, view_count_range=None):
                     max_spread=float(Z.std(dim=0).max()),
                     relative_spread=float(Z.std(dim=0).max() / Z.norm(dim=-1).mean()),
                     random_init=bool(random_init),
-                    cell_view_count_range=[int(x) for x in cell_range],
-                    effective_range=[int(x) for x in dataset.view_count_range])
+                    cell_view_count_range=(list(cell_range) if cell_range else None),
+                    effective_range=(list(dataset.view_count_range)
+                                     if getattr(dataset, 'view_count_range', None)
+                                     else None))
     finally:
         if saved is not None:
             encoder.load_state_dict(saved)

@@ -106,10 +106,13 @@ def main():
     torch.set_num_threads(args.num_threads)
     out = measure(args.checkpoint, torch.device(args.device), args.n_obs, args.seed)
     out['checkpoint'] = args.checkpoint
-    print(f"  image-only {out['image_only']:.4f}   proprio-only {out['proprio_only']:.4f}   "
+    # `:.6g`, NOT `:.4f`. A severed path reads ~2.6e-05, and `:.4f` prints that as `0.0000`
+    # -- which was then written up as "bit-identical". The format width turned a measurable
+    # number into a claim the data did not support; do not reintroduce it.
+    print(f"  image-only {out['image_only']:.6g}   proprio-only {out['proprio_only']:.6g}   "
           f"(n={out['n_obs']})")
-    print('  image-only 0.0000 means the image path is SEVERED: the policy cannot see the '
-          'scene at all')
+    print('  image-only at ~1e-05 or below means the image path is SEVERED: the policy '
+          'cannot see the scene at all')
     if args.output:
         with open(args.output, 'w') as f:
             json.dump(out, f, indent=2)

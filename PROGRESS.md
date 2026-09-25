@@ -5,7 +5,7 @@ trained on, and at inference time from a **single camera placed at a novel pose*
 `PROPOSAL.md` holds the direction and the original predictions; `PLAN.md` what remains;
 `NOTES.md` the operational detail (runbooks, timings, disk, recurring traps).
 
-Last updated 2026-09-24.
+Last updated 2026-09-25.
 
 ## The ladder, and what each rung found
 
@@ -20,17 +20,20 @@ Last updated 2026-09-24.
 | **1a** | relational probe on frozen checkpoints: what geometry does `z_v` already carry? | geometry is there *without* conditioning; **Plücker is live in the latent, inert in the behaviour** |
 | **`[1,2]`** | N-diversity ladder, first rung: `view_count_range=[1,2]` instead of `[1,7]` | **floor** — 0.028/0.043, indistinguishable from `[1,1]`; the N>1 gain is not reachable at max-N = 2 |
 | **ladder** | the N-diversity ladder closed: mean-N 1.0 / 1.5 / 2.0 / 3.0 / 4.0 | **knee between 2.0 and 3.0** (0.080 → 0.456), then graded to 0.764; and `[1,5]` is *more* view-general than `[1,7]` (82% vs 72% retained) |
-| **collapse** | measuring the encoder's output spread across failing and working cells | **a failure mode, not *the* failure mode** — explains `[1,2]`'s floor and answers L1's task split, but `[1,3]` fails while healthy; read the correction in that section |
+| **collapse** | measured the encoder's output spread across every surviving checkpoint, matched-draw, with random-init controls | **a failure mode, not *the* failure mode** — explains `[1,2]`'s floor and answers L1's task split, but `[1,3]` fails while healthy, so a second failure mode exists |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
 
-Every number in this document is **n=1 model, 50 paired episodes**, and the effective
-noise on such a sweep is larger than the ±0.05 the plan assumed — two sweeps of the same
-checkpoint on the *same* camera pose differ by 0.14 (see *Noise and resolution*). Nulls
-here mean "indistinguishable at this resolution", not "proven identical".
+**What "n=1" covers, and what it does not.** The *behavioural* tables — M1 through the
+N-diversity ladder — are one model, 50 paired episodes, and the effective noise is larger than
+the ±0.05 the plan assumed: two sweeps of the same checkpoint at the *same* camera pose differ
+by 0.14 (see *Noise and resolution*). The **probe and screen sections are not episode-based at
+all** — they report readouts over 2000 samples, 4096 draws, or 16 frames — and each states its
+own noise floor (a half-split gap, or a matched random-init baseline). Everywhere, a null means
+"indistinguishable at this resolution", not "proven identical".
 
-The three conclusions, in the order the project reached them:
+The five conclusions, in the order the project reached them:
 
 1. **View diversity alone is neither sufficient nor harmless.** On lift it is
    sufficient — a conditioning-free baseline reaches 0.76–0.96 at every viewpoint out
@@ -44,9 +47,21 @@ The three conclusions, in the order the project reached them:
 3. **Multi-view sampling is the ingredient.** Of the four things that changed together
    between L1 and M3, the one that matters is N>1: the same encoder forced to one view
    per sample scores 0.04 / 0.05, indistinguishable from L1.
+4. **"How much" has a knee, not a slope.** Mean-N 1.0 / 1.5 / 2.0 are all at the floor
+   (0.036 / 0.028 / 0.080); the knee is between 2.0 and **3.0** (0.456), and it rises to 0.764
+   at 4.0. Unexpectedly, the 3.0 cell is the *more* view-general of the two working ones
+   (82% of trained retained against 72%).
+5. **The floor is not one thing, and the encoder is not always the problem.** `[1,2]`'s floor
+   *is* an encoder collapse — five orders of magnitude below its neighbours, and its image path
+   is behaviourally severed. `[1,3]`'s floor is **not**: its representation beats the working
+   cell on variance, `z_v` decodability, `z_g` decodability *and* image→action sensitivity, and
+   it still scores 0.080. Collapse is a real failure mode and it answers L1's task split, but a
+   healthy screen does not mean a working policy.
 
 Honest summary against the proposal: **§2.2's fusion works; §2.1's geometric
-conditioning and §2.4's auxiliary heads are both inert.**
+conditioning and §2.4's auxiliary heads are both inert.** And every instrument built here
+measures whether information is *present* — which is why the last conclusion above is the one
+that does not yet have an explanation.
 
 ## Setup and protocol
 
@@ -88,6 +103,16 @@ These three measurement properties govern how every table below should be read.
   **0.14** (`m4on`: `el_0` 0.70 vs `az_0` 0.84). Unseeded diffusion sampling adds
   ~0.08 spread on repeat evals of one checkpoint (square epoch-150 scored 0.86 once and
   0.94 on re-eval). Treat differences below ~0.1 as unmeasured.
+- **On a *mean* over viewpoints the working threshold is 0.15 — a stated convention, not a
+  derivation.** The 0.14 above is the spread on a *single* viewpoint. A mean over the 5 trained
+  or 6 held-out azimuths cancels the episode-draw and sampling components but not the
+  systematic ones, so it is tighter than 0.14 without being as tight as 0.14/√5 would suggest.
+  The N-diversity ladder adopts **|Δ| < 0.15 unmeasured, 0.15–0.30 weak, > 0.30 real** so its
+  branch decisions are fixed in advance rather than chosen after the fact. **No ladder decision
+  depends on the exact value**: `[1,1]`/`[1,2]`/`[1,3]` sit 0.07–0.12 below it and `[1,5]`
+  0.31 above it, so the floor branch and the working branch are both robust to any plausible
+  revision.
+
 - **`mean_score` hides effects that `success_rate` shows.** In-training rollouts log
   `mean_score` only; on lift it saturates at 1.000 for a policy that succeeds 0.76 of the
   time. All four M3 square cells sit at 0.76–0.94 in `mean_score` while spanning 0.12 in
@@ -596,6 +621,25 @@ checkpoints: no training, no rollouts, one forward pass per sample, then a close
 readout and a 2000-step MLP readout against two baselines that make the numbers mean
 something.
 
+**Setting.** One run per cell, on the **frozen** checkpoint — no training, no rollouts:
+
+```bash
+python tests/test_relpose_probe.py                       # CPU conventions, seconds
+python -u probe_relpose.py -d cuda:1 --mlp-steps 2000 \
+  -c data/outputs/run_square_<cell>_s42_200ep/checkpoints/latest.ckpt \
+  -o data/probe_relpose_square_<cell>
+```
+
+Cells: `m3on` (`use_plucker=True`, `use_eef_hist=True`) and `m3off` (both false), square, seed 42.
+Each sample is one forward pass; the readouts are a closed-form ridge and a 2000-step MLP
+against two controls that make the numbers mean something (a mean predictor and shuffled
+targets). Artifacts: `data/probe_relpose_square_{m3on,m3off}/probe_relpose.json`.
+
+> **These ran on the pre-schema-2 code path** (before the grid rewrite in *N-diversity ladder*),
+> so their `latent_stats` are superseded — see the note under the table. The geometry targets
+> below are unaffected: they were re-derived exactly by the grid run (see that section's
+> consistency check).
+
 **Results.** Square, 2000 dataset indices (4000 frames, mean **3.97** of 7 slots active —
 the N∈[1,7] draw is what it should be), 80/20 split, `n_train` 12,715 (`abs_pose`,
 `cam_eef`) / 18,076 (`rel_pose`). Rotation in degrees, translation in cm, each against the
@@ -620,6 +664,17 @@ view-invariant":
 |---|---|---|
 | `z_g` across view subsets of one state | 0.171 | 0.162 |
 | `z_v` across views within one draw | **0.466** | **0.224** |
+
+> **These two rows are superseded — do not quote them, and do not compare them to any later
+> number.** They came from the pre-schema-2 code path, in which the compared subset sizes were
+> governed by *each checkpoint's own* draw range, which is the incomparability the grid was
+> built to remove. `m3off`'s `z_g_across_view_subsets` is **0.162** here, **0.202** at its own
+> range in the grid run, and **0.252** at `[1,7]` in the same run — three numbers for one
+> quantity, the differences being the draw and the code path, not the model. **The comparison
+> the conclusion rests on survives**, because both cells above were measured identically: `z_v`
+> is 2.1× more view-discriminative under Plücker (0.466 vs 0.224) and `z_g` is similar in both
+> (0.171 vs 0.162). That is a within-run contrast and is unaffected by the absolute values
+> being superseded.
 
 **All four gates pass**, so the probe is measuring what it claims to. `shuffled_target` is
 worse than the fit in all six cells (the probe is not reading something other than
@@ -687,6 +742,44 @@ makes that corner in-distribution. A `[2,2]` cell never trains there, so its fai
 confounded three ways (≤2 views insufficient / N=1 inference out-of-distribution / no N=1
 samples at all). **So each rung varies only the upper end of the range**, and differs from
 `m3off` on exactly one axis.
+
+**Setting.** Five runs on **`m3_plucker_image_abs_multiview`** with
+`policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false` — `m3off`'s exact
+configuration — varying **one integer**:
+
+```bash
+python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
+  task=m3_plucker_image_abs_multiview task.task_name=square \
+  task.dataset.view_count_range="[1,N]" \
+  policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false \
+  training.seed=42 training.num_epochs=201 training.device=cuda:1 \
+  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view \
+  hydra.run.dir=data/outputs/run_square_m3v1<N>_s42_200ep
+```
+
+`task.dataset.view_count_range` **is** the experiment; every other flag matches `m3off`'s own
+`.hydra/overrides.yaml`, and they are listed rather than implied because four of them defeat
+config defaults that would otherwise change the run (`topk.k` 5→1, `num_workers` 4→14,
+`logging.project`, `resume` True→false). Seed 42, 201 epochs — not 200, since checkpoint and
+rollout fire on `epoch % 50 == 0` and there is no end-of-training save — and K=7 slots
+throughout, so `--m3-slots 7` and the encoder shape never move. Rungs `[1,1]` and `[1,7]` are
+the pre-existing `m3fixedn1` and `m3off`; `[1,2]`, `[1,3]`, `[1,5]` are `m3v12`, `m3v13`,
+`m3v15`. **No control run exists** — the ladder has no RNG-locked null (see the stop rule).
+
+Each rung is swept with **both** presets, 50 paired episodes:
+
+```bash
+python eval_novel_view.py -c <run>/checkpoints/latest.ckpt -d cuda:1 --m3-slots 7 \
+  --eef-hist-steps 4 --n-envs 14 --n-test-vis 0 \
+  -o data/eval_interp_square_<run> --preset azimuth_interp
+python eval_novel_view.py -c <run>/checkpoints/latest.ckpt -d cuda:1 --m3-slots 7 \
+  --eef-hist-steps 4 --n-envs 14 --n-test-vis 0 \
+  -o data/eval_el_square_<run> --preset elevation_az0
+```
+
+Artifacts: `data/eval_{interp,el}_square_{m3v12,m3v13,m3v15}/eval_log.json`, committed with
+each rung's `logs.json.txt`.
 
 **Pre-registered 2026-09-24, before Stage 1 was launched.** Read on the **trained mean**
 `success_rate` (mean over `az_m60,m30,0,p30,p60`), held-out mean as a supporting read. Noise
@@ -838,8 +931,8 @@ lies somewhere between 2.0 and 4.0. Stage 3 is `[1,5]` (mean 3.0), launched 2026
 large jump, per the stop-rule resolution, rather than a crawl.
 
 **And the transition is not a collapse boundary.** `[1,3]` fails with a *healthy* encoder
-(see the correction in the next section), so locating where behaviour switches on will not
-simultaneously locate where collapse ends. The two phenomena have come apart, which is what
+(shown next), so locating where behaviour switches on will not simultaneously locate where
+collapse ends. The two phenomena have come apart, which is what
 makes the second failure mode an open question rather than a restatement of the first.
 
 ### Stage 3 — `[1,5]` (mean N 3.0) breaks the floor, and the ladder is graded after all
@@ -893,94 +986,6 @@ threshold-plus-dose. The five-rung curve is the last of those, and each earlier 
 overconfident about a curve drawn from two points. The pre-registered Stage-1 prediction
 (0.15–0.40 for `[1,2]`) was falsified outright. That is the record; the ladder closed at five
 rungs and no further rung is planned.
-
-### The second failure mode is downstream of the encoder
-
-**The hypothesis this tests.** A healthy *spread* is not information — an encoder can vary
-richly along directions carrying nothing about the scene. So the natural account of `[1,3]`
-was "it varies, but uselessly". The grid probe measures decodable content directly, so the
-hypothesis is falsifiable either way.
-
-**It is refuted.** Ridge readouts (closed-form, so they cannot diverge — see the anomaly
-below), same grid and seed for every cell:
-
-| target | `m3off` `[1,7]` WORKS | `m3v12` `[1,2]` collapsed | **`m3v13` `[1,3]` floor** | mean-predictor floor |
-|---|---|---|---|---|
-| `abs_pose` | 24.45 cm / 12.53° | 41.45 cm / 38.49° | **23.98 cm / 13.44°** | 42.19 cm / 37.94° |
-| `cam_eef` | 19.19 cm | 22.78 cm | **16.62 cm** | 22.85 cm |
-| `rel_pose` | 51.23 cm / 31.07° | 55.13 cm / 64.77° | **44.16 cm / 29.71°** | 55.75 cm / 65.35° |
-
-`m3v12` sits at the floor on every column, which is what a collapsed encoder must look like —
-a useful confirmation that the probe tracks the collapse it was built alongside. But
-**`m3v13` beats the working cell on every single column** while scoring 0.080. So `[1,3]`'s
-representation is healthy *and* more linearly decodable than the cell that works, and it still
-fails.
-
-**Therefore the failure is entirely downstream of the encoder** — in the fusion, or in whether
-the policy uses its conditioning at all. This is the first time in this document that a
-failure has been localised *past* the encoder, and it redirects the question the ladder
-created: the second failure mode is not a representation problem.
-
-**Consistency check.** The grid run reproduces the earlier step-1a probe on `m3off` exactly
-(`abs_pose` ridge 24.45 cm / 12.53° in both), so the `--view-count-range` override and the
-schema-2 changes did not perturb what is collected — the numbers in this table are the same
-quantity as the ones in the step-1a section.
-
-**An anomaly, flagged rather than explained.** The MLP readout *diverged* on `m3v13`'s
-translation dims — 727 cm against a 42 cm floor, i.e. **worse than predicting the mean** —
-while its rotation dims were fine (4.04°). A fit landing worse than the mean predictor
-indicates divergence, not absent information, so it is an artefact; but it is unexplained, and
-the MLP column should not be quoted for this cell until it is. The ridge columns are
-authoritative here precisely because a closed-form fit cannot diverge.
-
-### Neither the fusion nor the action head ignores the image — so what fails in `[1,3]`?
-
-**The fused latent is fine too.** The policy never sees `z_v`; `forward` hands the UNet `z_g`
-alone, so a decodable `z_v` does not imply a decodable `z_g`, and the fusion was the obvious
-remaining suspect. It is refuted — decoding each frame's own camera pose from `z_g` at N=1
-(the inference condition), equal `n` for every cell:
-
-| cell | `z_g` rot err | gain over floor | `z_v` rot err (readable run) |
-|---|---|---|---|
-| `m3off` `[1,7]` works | 19.58° | 1.98× | 12.53° |
-| **`m3v13` `[1,3]` floor** | **18.68°** | **2.08×** | 13.44° |
-| `m3v12` `[1,2]` collapsed | 33.49° | 1.16× | 38.49° |
-
-`m3v13` beats the working cell at **both** stages and still scores 0.080. So the refutation
-chain is now: not the encoder's variance, not its decodability, and not the fusion.
-
-**Which leaves the action head — and it is not ignoring the image either.**
-`screen_conditioning.py` holds the diffusion sampling noise fixed and varies one input path at
-a time, so any change in the output is attributable to that input:
-
-| cell | image-only | proprio-only |
-|---|---|---|
-| `m3off` `[1,7]` works | 0.0068 | 0.0386 |
-| `m3v13` `[1,3]` floor | 0.0067 | **0.0674** |
-| `m3v12` `[1,2]` collapsed | **0.0000** | 0.0686 |
-
-**The `0.0000` is the cleanest single result in this document.** Changing `[1,2]`'s *entire*
-image leaves its action bit-identical: the image path is **severed**, which is exactly what an
-encoder collapsed to a constant must produce. The collapse finding, previously inferred from
-the representation, is now confirmed **end-to-end and behaviourally**.
-
-> **A confound worth recording, because it produced a wrong answer first.**
-> `global_cond` is `concat([z_global, low-dim])`, and the low-dim keys are 9 dims of
-> proprioception that vary across samples too. Measured without separating them, the collapsed
-> cell came out the **most** observation-sensitive of the three (0.0686) — its constant image
-> riding along with normally-varying proprioception. The naive version of this measurement
-> would have said the collapsed policy "uses its observation more", which is the opposite of
-> the truth.
-
-**So the two floor cells fail for different, now-measured reasons.** `[1,2]`: the image path is
-severed. `[1,3]`: the image path is intact and its sensitivity is *identical* to the working
-cell's (0.0067 vs 0.0068) — the only difference is balance, leaning ~1.75× harder on
-proprioception (0.0674 vs 0.0386), and proprioception cannot see where the nut is.
-
-**Caveats.** The image-sensitivity equality is 0.0067 vs 0.0068, which is no difference at all
-— so what is solid here is the `0.0000`, not the balance reading. n=8 observations, one seed,
-one crude ratio, `mean` over the action chunk. The balance reading is a hypothesis with a
-plausible mechanism, not a measurement.
 
 ### The floor is an encoder collapse, not a generalisation failure
 
@@ -1101,43 +1106,60 @@ open question is not canonicity but **what makes training collapse**, and it is 
 
 ### The whole table, screened — and `m3n1gate` sharpens the mechanism
 
-Every surviving checkpoint, screened with `screen_collapse.py` (~2 min each, no training):
+**Setting.** `screen_collapse.py`, one run per checkpoint, ~2 min each, no training:
 
-| cell | views per sample | behaviour | relative spread |
-|---|---|---|---|
-| random init, `ViewConditionedObsEncoder` | — | — | 5.1e-03 |
-| random init, `MultiImageObsEncoder` | — | — | 1.3e-02 |
-| **`m3n1gate`** | **1, FIXED (`view_pool=[6]`)** | **works at az_0 (0.94), view-tied** | **5.93e-02** |
-| `m3on` square / can | [1,7] random | works | 4.26e-02 / 4.45e-02 |
-| `m3off` square / can | [1,7] random | works | 3.31e-02 / 2.04e-02 |
-| L1 lift | 1, random of 7 | works | 2.49e-02 |
-| L1 square s42 / s43 | 1, random of 7 | fails | 1.49e-04 / 1.99e-04 |
-| L1 can | 1, random of 7 | fails | 3.05e-05 |
-| `m3v12` | [1,2] random | floor | 5.4e-07 |
+```bash
+python screen_collapse.py -d cuda:0 -c <run>/checkpoints/latest.ckpt \
+  --view-count-range 7,7 -o data/screen_collapse/<cell>_latest.json          # trained
+python screen_collapse.py -d cuda:0 -c <run>/checkpoints/latest.ckpt \
+  --view-count-range 7,7 --random-init -o data/screen_collapse/<cell>_RANDOM_INIT.json
+```
 
-> **CORRECTION (2026-09-25, same session).** The table above was measured with each cell
+It reports the encoder's **relative output spread**: `std` across 16 consecutive dataset
+states, max over dims, divided by the mean feature norm — dividing by the norm is what makes
+the number comparable between encoders of different magnitude. `--random-init` discards the
+weights and re-measures, which is the control that distinguishes "training collapsed this" from
+"this architecture always looks like that". Artifacts: `data/screen_collapse/*.json`.
+
+**Anchors.** The random-init baseline is **per-architecture** and must be measured, never
+borrowed: **1.27e-02** (lift) and **1.25e-02** (square) for L1's `MultiImageObsEncoder`,
+**5.1e-03** for M3's `ViewConditionedObsEncoder`.
+
+> **CORRECTION (2026-09-25, same session).** The first version of this table measured each cell
 > drawing from **its own** `view_count_range`, which is a confound: `[1,2]` sees 1–2 active
 > views while `[1,7]` sees up to 7, and the live-view count moves the fused output's spread.
-> That is the same incomparability removed from the probe, and it was not removed here — the
-> tell was `[1,3]` appearing *above* `m3off` (4.13e-02 vs 3.31e-02). Re-measured under a
-> **matched** draw, every cell given the same views:
+> That is the *same* incomparability the probe's grid had just been built to remove, and it was
+> not removed here — the tell was `[1,3]` appearing *above* `m3off` (4.13e-02 vs 3.31e-02).
+> Everything below is re-measured with a **matched draw**.
 
-| cell | behaviour | at `[7,7]` | at `[1,7]` |
-|---|---|---|---|
-| `m3v12` `[1,2]` | floor | **1.83e-07** collapsed | **2.63e-07** collapsed |
-| **`m3v13` `[1,3]`** | **floor** | **1.36e-02 healthy** | **2.79e-02 healthy** |
-| `m3off` `[1,7]` | works | 1.72e-02 healthy | 3.31e-02 healthy |
+Results, every surviving checkpoint, matched at `[7,7]`:
 
-> **`[1,3]` is at the floor with a healthy encoder** — within ~1.3× of the working cell at
-> both settings. So **collapse is not necessary for failure**, and "unifying" was wrong: there
-> are at least two failure modes. What survives: `[1,2]`'s floor *is* collapse (5 orders of
-> magnitude below its neighbours under a matched draw); and the **L1 task split correlation
-> stands**, because all three L1 runs use the identical `view_subset` draw and were therefore
-> matched all along.
+| cell | behaviour | relative spread | vs its random-init | verdict |
+|---|---|---|---|---|
+| random init, `MultiImageObsEncoder` | — | 1.27e-02 / 1.25e-02 | — | baseline |
+| random init, `ViewConditionedObsEncoder` | — | 5.1e-03 | — | baseline |
+| L1 **lift** | works | 2.49e-02 | 2.0× above | healthy |
+| L1 **square** s42 / s43 | fails | 1.49e-04 / 1.99e-04 | 65–84× below | **collapsed** |
+| L1 **can** | fails | 3.05e-05 | 408× below | **collapsed** |
+| `m3off` `[1,7]` | works | 1.72e-02 | 3.4× above | healthy |
+| `m3v15` `[1,5]` | **works** | 2.23e-02 | 4.4× above | healthy |
+| `m3v13` `[1,3]` | **floor** | 1.36e-02 | 2.7× above | healthy |
+| `m3v12` `[1,2]` | floor | **1.83e-07** | **28,000× below** | **collapsed** |
 
-**The separation is clean across both architectures** *for the cells so far measured under
-matched draws*: healthy ~1e-02 and above, collapsed ~1e-07, with nothing between. `[1,3]`
-sits in the healthy band and still fails, so the band predicts collapse, not failure.
+**Conclusion.** `[1,2]`'s floor *is* collapse — five orders of magnitude below every other
+cell. And the **L1 task-split correlation stands**: square and can collapsed, lift did not, and
+that comparison is confound-free by construction, since all four L1 runs use the identical
+`view_subset` draw and were therefore matched to each other all along.
+
+**But collapse is not necessary for failure.** `m3v13` is at the floor with a healthy encoder —
+2.7× *above* its own baseline, within ~1.3× of the working cell. So "unifying" was wrong: there
+are at least two failure modes, and this screen predicts **collapse**, not failure. A healthy
+reading means a cell will not fail *this way*, not that it will work.
+
+**The band, and the one cell that sits oddly in it.** Healthy cells span 1.36e-02–2.49e-02 and
+collapsed ones 1.8e-07–3.1e-05, with nothing between — a gap of two to three orders of
+magnitude. `m3n1gate` (5.93e-02) is measured at its **own** range because it *cannot* be
+matched — see the caveat below.
 
 **`m3n1gate` is the cell that sharpens the mechanism: it trains at N=1 and is perfectly
 healthy (5.93e-02).** So collapse is *not* caused by "too few views".
@@ -1149,15 +1171,17 @@ healthy (5.93e-02).** So collapse is *not* caused by "too few views".
 > the slot count, and the contrast above carries both confounds. It remains suggestive — the
 > view *count* is nearly matched to `m3v12` (1 versus 1–2) while the *variability* differs,
 > which is the axis in question — but it is not a matched comparison and should not be quoted
-> as one. The contrast is with `m3v12` — both
-have N ≤ 2 samples, but `m3n1gate` always sees the **same** view while `m3v12` sees a **random**
-one from a 7-view pool, and L1 (random single view, collapsed on square/can) fits the same
-pattern. The destabiliser is therefore **view variation the encoder cannot yet reconcile**:
-with a fixed view the image→action mapping is learnable and the encoder stays healthy; with a
-randomly varying view at low N, the same scene arrives from different angles carrying the
-same action label, and if the encoder cannot build a view-invariant representation from too
-few views, ignoring the input entirely is the loss-minimising degenerate solution. Many views
-supply enough signal to build the invariant instead.
+> as one.
+>
+> The contrast it *does* support is with `m3v12` — both have N ≤ 2 samples, but `m3n1gate`
+> always sees the **same** view while `m3v12` sees a **random** one from a 7-view pool, and L1
+> (random single view, collapsed on square/can) fits the same pattern. The destabiliser is
+> therefore **view variation the encoder cannot yet reconcile**: with a fixed view the
+> image→action mapping is learnable and the encoder stays healthy; with a randomly varying view
+> at low N, the same scene arrives from different angles carrying the same action label, and if
+> the encoder cannot build a view-invariant representation from too few views, ignoring the
+> input entirely is the loss-minimising degenerate solution. Many views supply enough signal to
+> build the invariant instead.
 
 That reframes the N>1 headline once more: the ingredient is not "more than one view" but
 **enough views to make the varying-view objective solvable**. It also gives a reason lift
@@ -1165,14 +1189,25 @@ resists — it is the task whose actions depend least on precise spatial localis
 conflicting view information costs it least. Both statements are hypotheses on this evidence,
 not measurements.
 
-**When the collapse happens, as far as existing runs can say.** `m3v12` keeps two checkpoints,
-so both were screened: it is already fully collapsed at **epoch 100** (6.3e-07) and unchanged
-at epoch 200 (5.4e-07). Collapse is therefore not a late-training artefact — it is established
-by a third of the way through and stable after. **What cannot be established from any existing
-run is whether collapse *precedes* the behavioural failure**, because the workspace saves only
-`topk` and `latest` per run — there is no per-epoch series to order the two against. Answering
-that needs a run configured to checkpoint periodically, and recording it as a limitation here
-is the honest alternative to inferring an ordering the data does not contain.
+**When the collapse happens, as far as existing runs can say.** `m3v12` was screened at both of
+its checkpoints: already fully collapsed at **epoch 100** (6.3e-07) and unchanged at epoch 200
+(5.4e-07). Collapse is therefore not a late-training artefact — it is established by a third of
+the way through and stable after.
+
+> **That bound is no longer reproducible, and the reason belongs in the record.** The
+> epoch-100 checkpoint was **deleted on 2026-09-25** to free disk (4 GiB, reclaimed when the
+> volume hit 100% during the `[1,5]` run). `data/outputs/run_square_m3v12_s42_200ep/checkpoints/`
+> now holds `latest.ckpt` only, while `m3v13` and `m3v15` each still hold their topk.
+> `PROGRESS.md`'s protocol note above cites both files as present and now describes a directory
+> that no longer exists. The epoch-100 numbers were real when measured, and the deletion was
+> made under `NOTES.md`'s rule — that cell's latent *had* been probed — but **the measurement
+> cannot be repeated without re-training**, so the bound stands on an artifact that is gone.
+
+**What cannot be established from any existing run is whether collapse *precedes* the
+behavioural failure**, because the workspace saves only `topk` and `latest` per run — there is
+no per-epoch series to order the two against. Answering that needs a run configured to
+checkpoint periodically, and recording it as a limitation here is the honest alternative to
+inferring an ordering the data does not contain.
 
 **Limits.** `random init` is per-architecture and must never be borrowed across families
 (5.1e-03 vs 1.3e-02 here). `m3fixedn1` — the cell that would have tested "N=1 varying view"
@@ -1181,19 +1216,183 @@ directly — cannot be screened: its weights were deleted before this question e
 establish whether *the original single-view baseline was itself collapsed*, which would make
 this one story from M1 onward rather than two.
 
+### The second failure mode is downstream of the encoder
+
+**The hypothesis this tests.** A healthy *spread* is not information — an encoder can vary
+richly along directions carrying nothing about the scene. So the natural account of `[1,3]`
+was "it varies, but uselessly". The grid probe measures decodable content directly, so the
+hypothesis is falsifiable either way.
+
+**Setting.** `probe_relpose.py` under its schema-2 grid (see *N-diversity ladder* for the
+rewrite), one run per cell, on frozen checkpoints:
+
+```bash
+python -u probe_relpose.py -d cuda:0 --view-count-range 1,7 \
+  --stability-ranges "1,2;1,4;1,7;7,7" --stability-states 256 --stability-repeats 6 \
+  --n-samples 2000 --mlp-steps 2000 --num-threads 4 \
+  -c data/outputs/run_square_<cell>_s42_200ep/checkpoints/latest.ckpt \
+  -o data/probe_relpose_grid_square_<cell>
+```
+
+`--view-count-range 1,7` makes the *geometry* target comparable across cells — without it each
+draws from its own range, which is the confound the override exists to remove. Artifacts:
+`data/probe_relpose_grid_square_{m3off,m3v12,m3v13}/probe_relpose.json`.
+
+**It is refuted.** Ridge readouts (closed-form, so they cannot diverge — see the anomaly
+below), same grid and seed for every cell:
+
+| target | `m3off` `[1,7]` WORKS | `m3v12` `[1,2]` collapsed | **`m3v13` `[1,3]` floor** | mean-predictor floor |
+|---|---|---|---|---|
+| `abs_pose` | 24.45 cm / 12.53° | 41.45 cm / 38.49° | **23.98 cm / 13.44°** | 42.19 cm / 37.94° |
+| `cam_eef` | 19.19 cm | 22.78 cm | **16.62 cm** | 22.85 cm |
+| `rel_pose` | 51.23 cm / 31.07° | 55.13 cm / 64.77° | **44.16 cm / 29.71°** | 55.75 cm / 65.35° |
+
+`m3v12` sits at the floor on every column, which is what a collapsed encoder must look like —
+a useful confirmation that the probe tracks the collapse it was built alongside. But
+**`m3v13` beats the working cell on every single column** while scoring 0.080. So `[1,3]`'s
+representation is healthy *and* more linearly decodable than the cell that works, and it still
+fails.
+
+**Therefore the failure is entirely downstream of the encoder** — in the fusion, or in whether
+the policy uses its conditioning at all. This is the first time in this document that a
+failure has been localised *past* the encoder, and it redirects the question the ladder
+created: the second failure mode is not a representation problem.
+
+**Consistency check.** The grid run reproduces the earlier step-1a probe on `m3off` exactly
+(`abs_pose` ridge 24.45 cm / 12.53° in both), so the `--view-count-range` override and the
+schema-2 changes did not perturb what is collected — the numbers in this table are the same
+quantity as the ones in the step-1a section.
+
+**An anomaly, flagged rather than explained.** The MLP readout *diverged* on `m3v13`'s
+translation dims — 727 cm against a 42 cm floor, i.e. **worse than predicting the mean** —
+while its rotation dims were fine (4.04°). A fit landing worse than the mean predictor
+indicates divergence, not absent information, so it is an artefact; but it is unexplained, and
+the MLP column should not be quoted for this cell until it is. The ridge columns are
+authoritative here precisely because a closed-form fit cannot diverge.
+
+### Neither the fusion nor the action head ignores the image — so what fails in `[1,3]`?
+
+**The fused latent is fine too.** The policy never sees `z_v`; `forward` hands the UNet `z_g`
+alone, so a decodable `z_v` does not imply a decodable `z_g`, and the fusion was the obvious
+remaining suspect.
+
+**Setting.** An extension to `probe_relpose.py` (schema 2) that decodes each frame's own camera
+pose from `z_g` at single-view draws — the inference condition, and the case where `z_g` is an
+unambiguous function of one view's `z_v`. One run per cell:
+
+```
+python -u probe_relpose.py -d cuda:0 --view-count-range 1,2 --stability-ranges "1,1" \
+  --stability-states 512 --stability-repeats 8 --n-samples 200 --num-threads 4 \
+  -c data/outputs/run_square_<cell>_s42_200ep/checkpoints/latest.ckpt \
+  -o data/probe_zg_square_<cell>
+```
+
+4096 single-view draws, `n_train` 3276 / `n_test` 820, **equal `n` for every cell** so the
+comparison is valid even where regularisation biases the absolute values. Artifacts:
+`data/probe_zg_square_{m3off,m3v12,m3v13}/probe_relpose.json`, field
+`latent_grid["1,1"].zg_abs_pose`. The `z_v` column is from the readable `[1,7]` grid run
+(`n_train` ≈ 12,700).
+
+| cell | `z_g` rot err | gain over floor | `z_v` rot err (readable run) |
+|---|---|---|---|
+| `m3off` `[1,7]` works | 19.58° | 1.98× | 12.53° |
+| **`m3v13` `[1,3]` floor** | **18.68°** | **2.08×** | 13.44° |
+| `m3v12` `[1,2]` collapsed | 33.49° | 1.16× | 38.49° |
+
+`m3v13` beats the working cell at **both** stages and still scores 0.080. So the refutation
+chain is now: not the encoder's variance, not its decodability, and not the fusion.
+
+**Read the rotation column only — the translation column is an unresolved artefact in *every*
+cell, including the one that works.** Ridge `t_rmse_cm` for `z_g` is 190.95 for `m3off` against
+a 42.60 floor (4.5× *worse* than predicting the mean), 30.53 for `m3v13` against 42.60, and
+38.48 for `m3v12`. A fit landing worse than the mean predictor indicates **divergence**, not
+absent information — the same signature already flagged above for `m3v13`'s MLP column, and it
+is present for `m3off` too, which is what rules out reading it as a property of the failing
+cells. At 6.4 rows per feature this decode is under the ≳10:1 the ridge needs (*Noise and
+resolution*), so the translation dims — the hardest to fit — overfit first. Rotation is the
+column that recovers signal above the floor, and it is the column the conclusion rests on.
+
+**Which leaves the action head — and it is not ignoring the image either.**
+
+**Setting.** `screen_conditioning.py`, one run per cell:
+`python screen_conditioning.py -d cuda:0 -c data/outputs/run_square_<cell>_s42_200ep/checkpoints/latest.ckpt -o data/screen_conditioning/square_<cell>_latest.json`
+(flags at defaults: `--n-obs 8`, `--seed 0`). It holds the diffusion sampling noise fixed
+(`torch.manual_seed(0)` before every `predict_action`) and varies one input path at a time, so
+a change in the output is attributable to that input rather than to the sampler. Reported
+quantity: `std` across the 8 observations, over the action chunk, normalised by the chunk's
+mean absolute value. Artifacts: `data/screen_conditioning/square_{m3off,m3v13,m3v12}_latest.json`.
+
+| cell | image-only | proprio-only | artifact |
+|---|---|---|---|
+| `m3off` `[1,7]` works | 0.0068 | 0.0386 | `square_m3off_latest.json` |
+| `m3v13` `[1,3]` floor | 0.0067 | **0.0674** | `square_m3v13_latest.json` |
+| `m3v12` `[1,2]` collapsed | **2.59e-05** | 0.0686 | `square_m3v12_latest.json` |
+
+**`[1,2]`'s image path is severed.** Changing its *entire* image moves the action by 2.6e-05 —
+about **256×** below `m3v13`'s 0.0067 — which is what an encoder collapsed to a constant must
+produce. The collapse finding, previously inferred from the representation, is now confirmed
+**end-to-end and behaviourally**.
+
+> **Correction (2026-09-25).** This section first reported `m3v12`'s image-only value as
+> **`0.0000`**, described as the action being "**bit-identical**". The artifact says
+> **2.5911e-05**. The error was mine and purely mechanical: `screen_conditioning.py` prints
+> with `:.4f`, so the console showed `0.0000`, and "bit-identical" was written from that
+> console line rather than from the JSON the same run had just written. The conclusion is
+> unchanged — 2.6e-05 is ~256× below the other cells' 0.0067 and ~2600× below their
+> proprioception, so the path is severed by any reasonable reading — but it rests on that
+> margin, not on identity. **"Bit-identical" was never measured.** Recorded rather than
+> silently edited, because a document that quietly repairs its own headline is worth less than
+> one that shows the repair.
+
+> **A confound worth recording, because it produced a wrong answer first.**
+> `global_cond` is `concat([z_global, low-dim])`, and the low-dim keys are 9 dims of
+> proprioception that vary across samples too. Measured without separating them, the collapsed
+> cell came out the **most** observation-sensitive of the three (0.0686) — its constant image
+> riding along with normally-varying proprioception. The naive version of this measurement
+> would have said the collapsed policy "uses its observation more", which is the opposite of
+> the truth.
+
+**So the two floor cells fail for different, now-measured reasons.** `[1,2]`: the image path is
+severed. `[1,3]`: the image path is intact and its sensitivity is *identical* to the working
+cell's (0.0067 vs 0.0068) — the only difference is balance, leaning ~1.75× harder on
+proprioception (0.0674 vs 0.0386), and proprioception cannot see where the nut is.
+
+**Caveats.** The image-sensitivity equality is 0.0067 vs 0.0068, which is no difference at all
+— so what is solid here is the **severed** path (2.6e-05 against 0.0067), not the balance
+reading. n=8 observations, one seed, one crude ratio, `mean` over the action chunk; the
+`[1,2]` value is three orders of magnitude below the others, so its exact figure is not the
+point and its order of magnitude is. The balance reading is a hypothesis with a plausible
+mechanism, not a measurement.
+
 ## Open questions
 
-- **How much diversity is enough?** `view_count_range=[2,2]` answers PROPOSAL §7's "2
-  demo views, or many poses?" directly — one config line, ~2 h. `[2,7]` separates "N>1
-  needed" from "variable N needed".
+- **The second failure mode — the most open question here.** `[1,3]` sits at the floor (0.080)
+  with a representation that beats the working cell at four separately-measured stages: encoder
+  variance, `z_v` decodability, `z_g` decodability, and image→action sensitivity. Every
+  instrument built here asks *whether information is present*; the difference between those two
+  cells is evidently not presence. So the question is what the policy *learned to do* with
+  correct information — and no probe in this repository can currently see it.
+- **What makes training collapse?** Known: not "too few views" (`m3n1gate` trains at N=1 and is
+  healthy), established by epoch ~100, and task-dependent (L1 collapses on square and can, not
+  lift). Unknown: the mechanism, the layer, and whether collapse is a cause or a symptom. Also
+  unknown and worth stating because it rules out the cheapest design — **whether collapse
+  precedes the behavioural failure** — since no existing run has a per-epoch checkpoint series.
+- **M1's baselines were never screened**, their weights having been deleted before the question
+  existed. Re-training one would establish whether *the original single-view baseline was itself
+  collapsed*, which would make this one story from M1 onward rather than two.
+- ~~**How much diversity is enough?**~~ — **answered**: a knee between mean-N 2.0 (0.080) and
+  3.0 (**0.456**), then graded to 4.0 (0.764). See *N-diversity ladder*. The related `[2,7]`
+  cell ("N>1 needed" vs "*variable* N needed") remains untested and is now *more* interesting
+  than it was: min-N 2 with mean-N 4.5, so if it works while `[1,2]` and `[1,3]` collapse, the
+  ingredient is mean view count rather than the presence of N=1.
 - **Lift is untested for M3.** It is the one task where L1 already wins (0.76–0.96), so an
   M3-on run there is a genuine "did we break it" question rather than a result. ~1 h
   (lift is 127 batches/epoch).
-- **Second seed.** Every number in this document is n=1 at a resolution worse than ±0.05.
-  A second seed on one M3 or M4 cell would materially strengthen the nulls, which are
-  "indistinguishable at this resolution", not "proven identical".
+- **Second seed.** Every *behavioural* number in this document is n=1 at a resolution worse
+  than ±0.05. A second seed on one M3 or M4 cell would materially strengthen the nulls, which
+  are "indistinguishable at this resolution", not "proven identical".
 - **The elevation asymmetry.** Square collapses at `el_m15` for every M3 cell while can
-  holds 0.22. Unexplained.
+  holds 0.22; `[1,5]` holds `el_p15` (0.26) and not `el_m15` (0.00). Unexplained.
 - ~~**What separates lift from square/can**~~ — **answered for L1**: its encoder **collapses**
   on the two tasks it destroys and not on the one it solves (lift 2.49e-02 vs square 1.49e-04
   and can 3.05e-05, against an identical random-init baseline of 1.3e-02; seed-robust; and
@@ -1216,6 +1415,8 @@ Every milestone lands as new files; these are them.
 | M3 | `model/vision/plucker.py`, `model/vision/view_conditioned_obs_encoder.py`, `env_runner/cam_key_image_runner.py`, `config/task/m3_plucker_image_abs_{multiview,n1}.yaml`, `config/train_diffusion_unet_image_workspace_m3.yaml`, `tests/test_view_conditioned_obs_encoder.py`, `preview_viewpoints.py` |
 | M4 | `policy/diffusion_unet_image_policy_aux.py`, `model/vision/per_view_aux_head.py`, `config/task/m4_aux_image_abs_multiview.yaml`, `config/train_diffusion_unet_image_workspace_m4.yaml`, `tests/test_aux_action_heads.py` |
 | step 1a | `probe_relpose.py`, `tests/test_relpose_probe.py` (a measurement, not a method — no training) |
+| N-diversity ladder | **no new files**: five runs varying one CLI integer (`task.dataset.view_count_range`), plus the `view_count_range` guard relaxation in `dataset/multiview_image_dataset.py` (a fork-added file) and its regression test in `tests/test_view_conditioned_obs_encoder.py` |
+| collapse + screens | `screen_collapse.py`, `screen_conditioning.py` (measurement tools, no training; `screen_collapse.py` works on any image encoder, including L1's non-slot one). `probe_relpose.py` gained the schema-2 grid, the fusion-free `zv_pair_ratio`, the null-not-NaN rule, the draw fingerprint, the random-init control, and the `zg_abs_pose` block |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE

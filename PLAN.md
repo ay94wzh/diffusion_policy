@@ -1,7 +1,7 @@
 # Plan: view-aware policy, milestones M1–M5
 
 Direction and the original predictions: `PROPOSAL.md`. Results: `PROGRESS.md`.
-Operational detail: `NOTES.md`. Last updated 2026-09-24.
+Operational detail: `NOTES.md`. Last updated 2026-09-25.
 
 ## Constraints
 
@@ -26,41 +26,41 @@ Operational detail: `NOTES.md`. Last updated 2026-09-24.
 | **M4** — per-view aux action heads | ✅ done | `aux_loss` 52× down; `m4on − m4off` +0.02/+0.04 | PROGRESS *M4* |
 | **architectural confound** | ✅ resolved | fixed-N=1 scores 0.04/0.05 → **N>1** is load-bearing | PROGRESS *N>1* |
 | **M5** — single-novel-view inference | ⬜ not coded | — | below |
-| **relational supervision** (`z_v`, `z_g`) | ⬜ retired by 1a's result — not cost | 1a measured the geometry 1b would supervise is *already* in `z_v` | *Next* above |
+| **relational supervision** (`z_v`, `z_g`) | ⬜ retired by 1a's result — not cost | 1a measured the geometry 1b would supervise is *already* in `z_v` | PROGRESS *Relational probe (step 1a)* |
 | **N-diversity ladder** | ✅ **closed at five rungs** | knee between mean-N 2.0 (0.080) and 3.0 (**0.456**), then graded to 4.0 (0.764). The pre-registered Stage-1 prediction was falsified; `[1,2]`'s floor is collapse, `[1,3]`'s is not | PROGRESS *N-diversity ladder* |
-| **collapse** | measuring encoder output spread across failing vs working cells | ⚠️ **a failure mode, not the failure mode** — explains `[1,2]`'s floor and answers the L1 task split (open since L1), but `[1,3]` is at the floor with a *healthy* encoder, so a second failure mode exists | PROGRESS *Collapse is a failure mode* |
+| **collapse** | ✅ characterised across every surviving checkpoint, matched-draw, with random-init controls | ⚠️ **a failure mode, not *the* failure mode** — explains `[1,2]`'s floor (5 orders of magnitude below its neighbours) and answers the L1 task split, but `[1,3]` is at the floor with a *healthy* encoder, so a second failure mode exists | PROGRESS *Collapse is a failure mode* |
+| **second failure mode** | ⬜ open — the live question | `[1,3]` beats the working cell on variance, `z_v`, `z_g` **and** image→action sensitivity, and still scores 0.080 | *Next* above |
 
-## Next: what makes training collapse? (opened 2026-09-25)
+## Next: why does `[1,3]` fail? (opened 2026-09-25)
 
-**The question the ladder was built to answer turned out to be downstream of this one.** The
-ladder asked how much view diversity the policy needs; the answer so far is that at mean-N ≤ 2
-the encoder *collapses* (output near-constant, `m3v12` at 5.4e-07 relative spread against its
-own architecture's 5.1e-03 random-init baseline), and at mean-N 4 it does not. So "how much
-diversity" is really "how much diversity is needed to avoid collapse". And the same failure
-mode explains L1's task split, which had been open since L1.
+**Answering the ladder's question produced a bigger one.** The ladder asked how much view
+diversity the policy needs, and it has an answer: a knee between mean-N 2.0 (0.080) and 3.0
+(**0.456**), graded to 0.764 at 4.0 (`PROGRESS.md` *N-diversity ladder*). But chasing *why* the
+floor cells fail turned up two findings that outrank the ladder's own question:
 
-**The cheapest decisive measurement is already nearly free.** `screen_collapse.py` needs only a
-checkpoint and ~2 minutes, so every existing run can be screened without training anything:
+1. **`[1,2]`'s floor is an encoder collapse** — five orders of magnitude below its neighbours
+   under a matched draw, with its image→action path behaviourally severed (2.6e-05 against
+   0.0067), and it explains L1's task split, which had been open since L1.
+2. **`[1,3]`'s floor is not.** Its representation beats the working cell on **four**
+   separately-measured stages — encoder variance, `z_v` decodability, `z_g` decodability, and
+   image→action sensitivity — and it still scores 0.080.
 
-| # | what | why |
-|---|---|---|
-| 1 | screen `m3v13` (`[1,3]`, mean N 2.0) | if it is collapsed, the collapse boundary and the behavioural boundary coincide between mean-N 2.0 and 4.0 — the mechanism closes |
-| 2 | screen the M1 baselines (if re-trained; their weights were deleted) | M1 collapses at ±15°, the same signature — is the *single-view baseline itself* collapsed, which would make this one story from M1 onward? |
-| 3 | screen `m3on` vs `m3off` | both work (0.76/0.55), so both should be healthy — a check that the screen separates on the axis it claims to, not just on task |
-| 4 | screen every remaining checkpoint | 10 minutes, and it turns the whole table into a collapse/no-collapse column |
+Every instrument this project has built asks *whether information is present*. The difference
+between `[1,3]` and `[1,7]` is evidently not presence, and that is why (2) has no explanation.
 
-**Then the causal question, which is the real one.** Collapse is measured as a *correlation*
-and is explicitly not traced to a cause. Two designs would separate cause from symptom:
-(a) **does the collapse precede the behavioural failure?** — screen checkpoints at epochs
-0/50/100/150/200 of an existing run; if collapse is already present at epoch 25 while
-behaviour is still moving, collapse is upstream. (b) **can it be prevented?** — a run with an
-explicit anti-collapse term (or simply a wider range at the same mean-N) tests sufficiency.
-(a) is free if per-epoch checkpoints exist; (b) costs a run.
+**Ranked next steps.**
 
-**Ranked behind it.** `[1,5]` (the pre-registered bisect, mean N 3.0) locates the boundary in
-mean-N; `[2,7]` (~4 h) still answers "N>1 vs *variable* N" and is now *more* interesting, since
-`[2,7]` has min-N 2 yet mean-N 4.5 — if it works while `[1,2]` and `[1,3]` collapse, the
-ingredient is mean view count, not the presence of N=1.
+| # | what | why | cost |
+|---|---|---|---|
+| 1 | **an instrument sensitive to *correctness*, not presence** | all three tools are presence-tests; the gap is what the policy learned to *do* with correct information | design work, no GPU |
+| 2 | screen the M1 baselines (re-train first — weights deleted) | was the *original single-view baseline itself* collapsed? If so this is one story from M1 onward rather than two | ~1–2.5 h per task |
+| 3 | `[2,7]` | the only cell answering "N>1 vs *variable* N": min-N 2 with mean-N 4.5, so if it works while `[1,2]`/`[1,3]` collapse, the ingredient is mean view count | ~4 h |
+| 4 | a run with **per-epoch** checkpoints | the only way to order collapse against the behavioural failure — **not recoverable from any existing run**, which save only `topk` + `latest` | 1 run |
+| 5 | second seed on `[1,5]` | the working rung is n=1, and its held-out number (0.373) is the one the project would build on | ~2 h |
+
+**Ranked out, with reasons.** `[1,4]` (skipped by the stop-rule resolution at
+`PROGRESS.md`); an anti-collapse term (a solution to a mechanism not yet understood); M5's
+distillation (premise still unestablished — `PROGRESS.md` *Open questions*).
 
 ## Next: relational supervision on `z_v` (opened 2026-09-24, **retired 2026-09-24**)
 
@@ -167,15 +167,19 @@ reference the whole project exists to beat.
 Deferred deliberately, each one config line or one rerun. Listed in the order they would
 add information per GPU-hour; full rationale in `PROGRESS.md`'s open questions.
 
-| run | answers | cost |
+| run | status | cost |
 |---|---|---|
-| ~~`view_count_range=[2,2]`~~ | superseded — now a conditional Stage 2 *confound probe* (it never trains at N=1, so a floor is unreadable on its own) | ~3 h |
-| `view_count_range=[2,7]` | "N>1 needed" vs "*variable* N needed" — the only cell that answers it directly | **~4 h, not ~2 h** (mean active N = 4.5 exceeds `m3off`'s 4.0) |
-| `view_count_range=[1,2]` / `[1,3]` / `[1,4]` | how much diversity is enough (PROPOSAL §7), with N=1 in-distribution at every rung | ~2.8 / ~3.0 / ~3.2 h all-in |
+| `view_count_range=[1,2]` / `[1,3]` | ✅ **run** — 0.028/0.043 and 0.080/0.073, both floor | done |
+| `view_count_range=[1,5]` | ✅ **run** — **0.456/0.373**, the knee | done |
+| `view_count_range=[2,7]` | open — "N>1 needed" vs "*variable* N needed", the only cell that answers it directly | **~4 h, not ~2 h** (mean active N = 4.5 exceeds `m3off`'s 4.0) |
+| ~~`view_count_range=[1,4]`~~ | skipped deliberately — the stop-rule resolution chose a large jump over a crawl | — |
+| ~~`view_count_range=[2,2]`~~ | rejected — it never trains at N=1, so a floor is unreadable on its own (either "≤2 views insufficient" or "N=1 inference out of distribution") | — |
+| re-train M1's baselines | was the *original single-view baseline itself* collapsed? Would make the collapse story one story from M1 onward rather than two | 1–2.5 h per task |
+| a run with per-epoch checkpoints | the only way to order collapse against the behavioural failure | 1 run |
+| second seed on `[1,5]` | the working rung is n=1, and its held-out number is the one the project would build on | ~2 h |
 | lift + `m3on` | do we regress the one task L1 already solves | ~1 h |
-| second seed on one M3/M4 cell | whether the nulls hold at a resolution better than n=1 | ~1 h each |
 | ±60° training pool | how much view *quality* alone buys | one render + run |
-| can `m3plucker` / `m3eef` | the cheap way back into the conditioning question | ~2 h each |
+| can `m3plucker` / `m3eef` | the cheap way back into the conditioning question — but their **checkpoints were deleted** 2026-09-24, so this is now a re-train | ~2 h each + 9 GB |
 
 ## Out of scope for now
 
