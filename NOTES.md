@@ -56,6 +56,27 @@ python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
   hydra.run.dir=data/outputs/run_square_m3off_s42_200ep
 #   N=1 fidelity gate: task=m3_plucker_image_abs_n1
 #   single-view cell:  task.dataset.view_count_range=[1,1]
+#   N-diversity ladder: the m3off line above with ONE override --
+#     task.dataset.view_count_range="[1,N]" -> hydra.run.dir=data/outputs/run_square_m3v1<N>_s42_200ep
+#   Committed rungs (mean active N): [1,1] 1.0 m3fixedn1 | [1,2] 1.5 m3v12 | [1,3] 2.0 m3v13
+#                                    [1,5] 3.0 m3v15    | [1,7] 4.0 m3off
+
+# Proprioception dropout -- the `[1,3]` balance test. No new config: a policy
+#   _target_ override, and the dropout lives in compute_loss only (so rollouts,
+#   eval, screen_conditioning.py and probe_relpose.py are untouched).
+python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
+  task=m3_plucker_image_abs_multiview task.task_name=square \
+  task.dataset.view_count_range="[1,3]" policy.proprio_dropout=0.5 \
+  policy._target_=diffusion_policy.policy.diffusion_unet_image_policy_propdrop.DiffusionUnetImagePolicyPropDrop \
+  policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false \
+  training.seed=42 training.num_epochs=201 training.device=cuda:1 \
+  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view training.resume=false \
+  hydra.run.dir=data/outputs/run_square_m3v13_pdrop_s42_200ep
+#   launch gate: grep -q propdrop <log>  -- the policy prints an ACTIVE banner at
+#   construction, so a silently-dropped override cannot be read as "dropout didn't help"
+#   ~29 s/epoch at mean-N 2.0; ~43 s means view_count_range did not take
+#   CPU test first: python tests/test_prop_dropout.py
 
 # M4 aux heads (control: policy.aux_loss_weight=0.0)
 python train.py --config-name=train_diffusion_unet_image_workspace_m4 \
@@ -117,6 +138,7 @@ prefix (`0..k_active-1`); the rest are zero with mask 0.
 python eval_novel_view.py -c <run>/checkpoints/latest.ckpt -o data/eval_interp_square_m3off \
   -d cuda:0 --preset azimuth_interp --m3-slots 7 --eef-hist-steps 4 --n-envs 14 --n-test-vis 0
 #   presets: azimuth_sweep5 / azimuth_interp / azimuth_sweep3 / elevation_az0
+#   ladder rungs sweep BOTH presets: -o data/eval_interp_square_<run> and -o data/eval_el_square_<run>
 #   fast smoke: --preset azimuth_sweep3 --n-test 4 --n-test-vis 2 --n-envs 4
 
 python summarize_novel_view.py <dir>/eval_log.json     # degradation table
@@ -229,6 +251,20 @@ Send back each run's `data/probe_relpose_*/probe_relpose.json`; the numbers go i
 geometry, step 1b's head is a post-hoc fit and the *objective* -- not the head -- is what
 has to change.
 
+**Single-view `z_g` decode** -- is the FUSED latent decodable at the inference condition
+(N=1)? 4096 single-view draws (512 states x 8 repeats), **equal `n` for every cell** so the
+comparison is valid even where regularisation biases the absolute values. Read the rotation
+column only -- the translation dims diverge in every cell, including the one that works.
+
+```bash
+python -u probe_relpose.py -d cuda:0 --view-count-range 1,2 --stability-ranges "1,1" \
+  --stability-states 512 --stability-repeats 8 --n-samples 200 --num-threads 4 \
+  -c data/outputs/run_square_<cell>_s42_200ep/checkpoints/latest.ckpt \
+  -o data/probe_zg_square_<cell>
+```
+
+The readout is `latent_grid["1,1"].zg_abs_pose` in the same `probe_relpose.json`.
+
 ### Collapse screen (`screen_collapse.py`)
 
 **Run this before believing any training run is healthy. Always with `--random-init`, always
@@ -301,6 +337,21 @@ over the action chunk, normalised by the chunk's mean absolute value.
   varying proprioception — which is the opposite of the truth.
 - Anchors: `m3off` 0.0068 / 0.0386 (image / proprio), `m3v13` 0.0067 / 0.0674, `m3v12`
   2.59e-05 / 0.0686.
+- **Replicate before believing the balance reading.** Those anchors are `--n-obs 8 --seed 0`, and
+  the `[1,3]`-vs-`m3off` proprio contrast is the *only* mechanism anyone has proposed for
+  `[1,3]`'s floor — so it gets re-measured at scale before it is worth GPU-hours. Pre-registered
+  rule: the hypothesis lives only if `m3v13`'s proprio/image ratio exceeds `m3off`'s by **≥1.5×
+  across all three seeds**; at parity, the intervention below is off and the missing instrument
+  is the only route left.
+
+```bash
+for s in 0 1 2; do for c in m3v13 m3off m3v12; do
+python screen_conditioning.py -d cuda:0 --n-obs 64 --seed $s \
+  -c data/outputs/run_square_${c}_s42_200ep/checkpoints/latest.ckpt \
+  -o data/screen_conditioning/square_${c}_n64_s${s}.json
+done; done
+# reference points, also on disk: L1 lift (works, non-slot encoder) and L1 square (collapsed)
+```
 - **Print with `:.6g`, not `:.4f`.** The `:.4f` format turned 2.59e-05 into `0.0000`, which
   was then written up as "bit-identical"; the number is 256× below the other cells, not zero.
 
