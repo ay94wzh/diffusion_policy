@@ -1,0 +1,7 @@
+{
+  "image_only": 2.7175254217581823e-05,
+  "proprio_only": 0.3469439446926117,
+  "action_scale": 0.4876099228858948,
+  "n_obs": 64,
+  "checkpoint": "data/outputs/run_square_m3v12_s42_200ep/checkpoints/latest.ckpt"
+}

@@ -461,6 +461,30 @@ reading") rather than contradicting it. The control still works: `m3v12`'s image
 - **Print with `:.6g`, not `:.4f`.** The `:.4f` format turned 2.59e-05 into `0.0000`, which
   was then written up as "bit-identical"; the number is 256× below the other cells, not zero.
 
+**Read the two arms at very different resolutions — this is the operational rule, and it cost
+this session a gate.** After the fix the tool is **bit-reproducible** at a fixed
+`(checkpoint, flags, seed)` (verified: `0.00752622` twice to 6 s.f.), so any remaining
+difference is real. But the two arms have different real variance:
+
+| arm | reproducibility | usable resolution |
+|---|---|---|
+| `proprio_only` | across-seed spread ≤ **0.4%**; draw-independent | resolves ~1% differences; **trust this one** |
+| `image_only` | across-seed spread **1.9–2.5×**, *even with the draw matched* | **cannot resolve anything below ~2×**; only a severed path (~300× down) is readable |
+
+- **Matching the draw does NOT reduce the image arm's spread** — measured, 1.92–2.50× matched
+  against 2.27–2.47× unmatched, so the earlier explanation (unseeded `np.random` + per-cell
+  ranges) was wrong even though both defects were real and the fix is still worth having.
+- **The deeper problem: `image_only` is not a scalar.** At a fixed `[7,7]` range `k` is always
+  7, so every cell sees the *same* view order for a given seed (verified directly) — the
+  comparison is matched, differing only in the weights — and **the cell rank still flips**:
+  the `m3v13`/`m3off` ratio runs 0.512 / 0.272 / 1.362 across seeds 0/1/2. Same inputs,
+  opposite conclusion. So a cross-cell `image_only` comparison needs either a design whose
+  verdict does not depend on the probe ensemble, or many seeds — **not** more `--n-obs`.
+- Corollary for the gate that used it: the `R = proprio/image` ratio inherits the image arm's
+  instability and cannot carry a 1.5× decision. The pre-registered n=64 gate failed
+  (min ratio 0.567) for that reason, and the balance hypothesis was settled instead on
+  `proprio_only`, which is the arm that is stable.
+
 ### Resume and long campaigns
 
 Resume with the same run dir and `training.num_epochs=<epochs still wanted>`; the loop runs
@@ -641,7 +665,7 @@ failed gate (see the runbook).
 | training logs (`logs.json.txt`) | `data/outputs/run_*/` | ✅ for M1/L1/M3/M4 runs |
 | aux-probe evidence | `data/probe_m4_square_logs.json.txt` | ✅ |
 | relational-probe (step 1a) results | `data/probe_relpose_square_{m3on,m3off}/probe_relpose.json` | ✅ |
-| probe grid + fused-latent (`z_g`) runs | `data/probe_relpose_grid_square_*`, `data/probe_zg_square_*` | ✅ |
+| probe grid + fused-latent (`z_g`) runs | `data/probe_relpose_grid_square_*`, `data/probe_zg_square_*` | ✅ **since 2026-09-25 — before that, the `probe_zg_*` row was a false claim: none of the four dirs were tracked, and PROGRESS.md's *second failure mode* Stage 2 reads `latent_grid["1,1"].zg_abs_pose` straight out of them. The `.gitignore` whitelist covered `probe_relpose_*` only. Fixed, and all four are now committed.** |
 | **collapse screens** | `data/screen_collapse/*.json` (trained + `_RANDOM_INIT` controls) | ✅ |
 | **conditioning screens** | `data/screen_conditioning/*.json` | ✅ |
 | N-diversity ladder sweeps | `data/eval_{interp,el}_square_{m3v12,m3v13,m3v15}/` | ✅ |

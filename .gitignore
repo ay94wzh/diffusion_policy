@@ -11,6 +11,12 @@ data/*
 # measurement artifact -- every number is re-derivable from it without re-running.
 !data/probe_relpose_*/
 !data/probe_relpose_*/**
+# the single-view z_g decode (same probe, --stability-ranges "1,1"). PROGRESS.md's Stage 2
+# of *the second failure mode* reads latent_grid["1,1"].zg_abs_pose straight out of these,
+# and until 2026-09-25 NONE of them were tracked -- the Artifacts table in NOTES.md claimed
+# otherwise, so a committed headline result rested on box-only files.
+!data/probe_zg_*/
+!data/probe_zg_*/**
 # collapse screens (screen_collapse.py): one small JSON per checkpoint, ditto.
 !data/screen_collapse/
 !data/screen_collapse/**
@@ -36,6 +42,18 @@ data/outputs/run_*_m3*_s42_200ep/*
 !data/outputs/run_*_m4*_s42_200ep/
 data/outputs/run_*_m4*_s42_200ep/*
 !data/outputs/run_*_m4*_s42_200ep/logs.json.txt
+# M1 re-train (2026-09-25): recovers the single-view baseline weights that were deleted
+# 2026-09-19, so its ENCODER can be collapse-screened -- the question is whether the
+# original baseline was itself collapsed. Same rule: logs only, never the checkpoints.
+!data/outputs/run_*_abs_single_*200ep/
+data/outputs/run_*_abs_single_*200ep/*
+!data/outputs/run_*_abs_single_*200ep/logs.json.txt
+# L1 (randview) runs: the s43 seed-mate of L1 square was missed by the original whitelist,
+# so one committed number's only training record was absent from git. L1's seed-robustness
+# claim (collapse screens agree to 26% across s42/s43) rests on that run.
+!data/outputs/run_*_randview_s*_200ep/
+data/outputs/run_*_randview_s*_200ep/*
+!data/outputs/run_*_randview_s*_200ep/logs.json.txt
 data_local
 .vscode
 _wandb

@@ -1,0 +1,232 @@
+{
+  "schema": 2,
+  "checkpoint": "data/outputs/run_square_m3off_s42_200ep/checkpoints/latest.ckpt",
+  "checkpoint_bytes": 4640840292,
+  "checkpoint_mtime": "2026-09-18 22:30:54",
+  "stats": {
+    "n_frames": 400,
+    "n_slots": 7,
+    "dim": 512,
+    "mean_active": 1.4500000476837158,
+    "n_dataset": 28150,
+    "effective_range": [
+      1,
+      2
+    ],
+    "cell_view_count_range": [
+      1,
+      7
+    ]
+  },
+  "use_plucker": false,
+  "use_eef_hist": false,
+  "targets": {
+    "abs_pose": {
+      "ridge": {
+        "t_rmse_cm": 1178.3674298357855,
+        "t_median_cm": 93.7831210759285,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 56.810561937643314,
+        "r_median_deg": 37.88553506057651
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 42.03949526827175,
+        "t_median_cm": 41.4766782301789,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 37.62685351842986,
+        "r_median_deg": 40.633472497793434
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 1181.80958849484,
+        "t_median_cm": 125.13704907721986,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 66.47554473128724,
+        "r_median_deg": 54.42258008779875
+      },
+      "n_train": 464,
+      "n_test": 116
+    },
+    "cam_eef": {
+      "ridge": {
+        "t_rmse_cm": 1313.519267809566,
+        "t_median_cm": 102.39699344246095,
+        "target_median_cm": 70.71943553442225
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 21.168830377547522,
+        "t_median_cm": 19.363082197099292,
+        "target_median_cm": 70.71943553442225
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 1319.2479802919283,
+        "t_median_cm": 111.11248949072213,
+        "target_median_cm": 70.71943553442225
+      },
+      "n_train": 464,
+      "n_test": 116
+    },
+    "rel_pose": {
+      "ridge": {
+        "t_rmse_cm": 211.69321007835876,
+        "t_median_cm": 77.7978995647871,
+        "target_median_cm": 49.99999932694132,
+        "r_mean_deg": 65.5689324358948,
+        "r_median_deg": 49.444581607284945
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 55.910809758057184,
+        "t_median_cm": 55.83538264490412,
+        "target_median_cm": 49.99999932694132,
+        "r_mean_deg": 65.44771989544365,
+        "r_median_deg": 55.40376958277086
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 215.84085452575286,
+        "t_median_cm": 128.95778422723018,
+        "target_median_cm": 49.99999932694132,
+        "r_mean_deg": 73.10972763072945,
+        "r_median_deg": 73.02110688442914
+      },
+      "n_train": 288,
+      "n_test": 72
+    }
+  },
+  "cell_view_count_range": [
+    1,
+    7
+  ],
+  "grid_ranges": [
+    [
+      1,
+      1
+    ]
+  ],
+  "latent_grid": {
+    "1,1": {
+      "n_states": 512,
+      "n_repeats": 8,
+      "draw_fingerprint": {
+        "size_hist": {
+          "1": 512
+        },
+        "first_views": [
+          [
+            0
+          ],
+          [
+            2
+          ],
+          [
+            6
+          ],
+          [
+            6
+          ]
+        ]
+      },
+      "zg_across_view_subsets": 0.3018391932309896,
+      "zg_by_size": {
+        "1|1": {
+          "mean": 0.3018391932309896,
+          "n": 14336
+        }
+      },
+      "zv_within_draw_by_size": {},
+      "zg_permutation_floor": null,
+      "zv_pair_matrix": null,
+      "zv_across_states": null,
+      "zv_pair_ratio": null,
+      "half_split": null,
+      "zg_abs_pose": {
+        "ridge": {
+          "t_rmse_cm": 190.9490990647554,
+          "t_median_cm": 20.993660266847584,
+          "target_median_cm": 143.96180249088403,
+          "r_mean_deg": 19.581262036186885,
+          "r_median_deg": 11.873070340740103
+        },
+        "mean_predictor": {
+          "t_rmse_cm": 42.604562237328935,
+          "t_median_cm": 42.88463161078857,
+          "target_median_cm": 143.96180249088403,
+          "r_mean_deg": 38.82623240269335,
+          "r_median_deg": 42.810292982841396
+        },
+        "shuffled_target": {
+          "t_rmse_cm": 200.11241937912686,
+          "t_median_cm": 63.592895025998445,
+          "target_median_cm": 143.96180249088403,
+          "r_mean_deg": 54.59157922041963,
+          "r_median_deg": 47.44171300800536
+        },
+        "n_train": 3276,
+        "n_test": 820
+      },
+      "amp": null
+    }
+  },
+  "latent_stats": {
+    "n_states": 512,
+    "n_repeats": 8,
+    "draw_fingerprint": {
+      "size_hist": {
+        "1": 512
+      },
+      "first_views": [
+        [
+          0
+        ],
+        [
+          2
+        ],
+        [
+          6
+        ],
+        [
+          6
+        ]
+      ]
+    },
+    "zg_across_view_subsets": 0.3018391932309896,
+    "zg_by_size": {
+      "1|1": {
+        "mean": 0.3018391932309896,
+        "n": 14336
+      }
+    },
+    "zv_within_draw_by_size": {},
+    "zg_permutation_floor": null,
+    "zv_pair_matrix": null,
+    "zv_across_states": null,
+    "zv_pair_ratio": null,
+    "half_split": null,
+    "zg_abs_pose": {
+      "ridge": {
+        "t_rmse_cm": 190.9490990647554,
+        "t_median_cm": 20.993660266847584,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 19.581262036186885,
+        "r_median_deg": 11.873070340740103
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 42.604562237328935,
+        "t_median_cm": 42.88463161078857,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 38.82623240269335,
+        "r_median_deg": 42.810292982841396
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 200.11241937912686,
+        "t_median_cm": 63.592895025998445,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 54.59157922041963,
+        "r_median_deg": 47.44171300800536
+      },
+      "n_train": 3276,
+      "n_test": 820
+    },
+    "amp": null
+  },
+  "zv_n_agnostic_max_abs_diff": 1.9960105419158936e-05,
+  "latent_controls": null
+}

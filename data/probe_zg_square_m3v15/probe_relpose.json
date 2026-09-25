@@ -1,0 +1,232 @@
+{
+  "schema": 2,
+  "checkpoint": "data/outputs/run_square_m3v15_s42_200ep/checkpoints/latest.ckpt",
+  "checkpoint_bytes": 4640840292,
+  "checkpoint_mtime": "2026-09-25 06:00:07",
+  "stats": {
+    "n_frames": 400,
+    "n_slots": 7,
+    "dim": 512,
+    "mean_active": 1.4500000476837158,
+    "n_dataset": 28150,
+    "effective_range": [
+      1,
+      2
+    ],
+    "cell_view_count_range": [
+      1,
+      5
+    ]
+  },
+  "use_plucker": false,
+  "use_eef_hist": false,
+  "targets": {
+    "abs_pose": {
+      "ridge": {
+        "t_rmse_cm": 1034.004204765844,
+        "t_median_cm": 99.58725304417771,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 53.38237776123255,
+        "r_median_deg": 41.93683778173785
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 42.03949526827175,
+        "t_median_cm": 41.4766782301789,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 37.62685351842986,
+        "r_median_deg": 40.633472497793434
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 1037.0629002987157,
+        "t_median_cm": 110.02462149729837,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 64.13745915677569,
+        "r_median_deg": 54.167960717565606
+      },
+      "n_train": 464,
+      "n_test": 116
+    },
+    "cam_eef": {
+      "ridge": {
+        "t_rmse_cm": 403.4590580934617,
+        "t_median_cm": 64.78454704000663,
+        "target_median_cm": 70.71943553442225
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 21.168830377547522,
+        "t_median_cm": 19.363082197099292,
+        "target_median_cm": 70.71943553442225
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 404.39360138994954,
+        "t_median_cm": 69.74801109254543,
+        "target_median_cm": 70.71943553442225
+      },
+      "n_train": 464,
+      "n_test": 116
+    },
+    "rel_pose": {
+      "ridge": {
+        "t_rmse_cm": 555.3594483796693,
+        "t_median_cm": 127.46889103793069,
+        "target_median_cm": 49.99999932694132,
+        "r_mean_deg": 67.40188013700089,
+        "r_median_deg": 66.32271401490468
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 55.910809758057184,
+        "t_median_cm": 55.83538264490412,
+        "target_median_cm": 49.99999932694132,
+        "r_mean_deg": 65.44771989544365,
+        "r_median_deg": 55.40376958277086
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 552.2202587681811,
+        "t_median_cm": 164.9987503405134,
+        "target_median_cm": 49.99999932694132,
+        "r_mean_deg": 77.8346838999191,
+        "r_median_deg": 66.76515316802967
+      },
+      "n_train": 288,
+      "n_test": 72
+    }
+  },
+  "cell_view_count_range": [
+    1,
+    5
+  ],
+  "grid_ranges": [
+    [
+      1,
+      1
+    ]
+  ],
+  "latent_grid": {
+    "1,1": {
+      "n_states": 512,
+      "n_repeats": 8,
+      "draw_fingerprint": {
+        "size_hist": {
+          "1": 512
+        },
+        "first_views": [
+          [
+            0
+          ],
+          [
+            2
+          ],
+          [
+            6
+          ],
+          [
+            6
+          ]
+        ]
+      },
+      "zg_across_view_subsets": 0.22970870572628752,
+      "zg_by_size": {
+        "1|1": {
+          "mean": 0.22970870572628752,
+          "n": 14336
+        }
+      },
+      "zv_within_draw_by_size": {},
+      "zg_permutation_floor": null,
+      "zv_pair_matrix": null,
+      "zv_across_states": null,
+      "zv_pair_ratio": null,
+      "half_split": null,
+      "zg_abs_pose": {
+        "ridge": {
+          "t_rmse_cm": 220.0554981598972,
+          "t_median_cm": 19.34587637114023,
+          "target_median_cm": 143.96180249088403,
+          "r_mean_deg": 25.600886737760874,
+          "r_median_deg": 9.081884205520975
+        },
+        "mean_predictor": {
+          "t_rmse_cm": 42.604562237328935,
+          "t_median_cm": 42.88463161078857,
+          "target_median_cm": 143.96180249088403,
+          "r_mean_deg": 38.82623240269335,
+          "r_median_deg": 42.810292982841396
+        },
+        "shuffled_target": {
+          "t_rmse_cm": 220.26925744506013,
+          "t_median_cm": 59.119325888387934,
+          "target_median_cm": 143.96180249088403,
+          "r_mean_deg": 53.40583117808174,
+          "r_median_deg": 45.25236058295333
+        },
+        "n_train": 3276,
+        "n_test": 820
+      },
+      "amp": null
+    }
+  },
+  "latent_stats": {
+    "n_states": 512,
+    "n_repeats": 8,
+    "draw_fingerprint": {
+      "size_hist": {
+        "1": 512
+      },
+      "first_views": [
+        [
+          0
+        ],
+        [
+          2
+        ],
+        [
+          6
+        ],
+        [
+          6
+        ]
+      ]
+    },
+    "zg_across_view_subsets": 0.22970870572628752,
+    "zg_by_size": {
+      "1|1": {
+        "mean": 0.22970870572628752,
+        "n": 14336
+      }
+    },
+    "zv_within_draw_by_size": {},
+    "zg_permutation_floor": null,
+    "zv_pair_matrix": null,
+    "zv_across_states": null,
+    "zv_pair_ratio": null,
+    "half_split": null,
+    "zg_abs_pose": {
+      "ridge": {
+        "t_rmse_cm": 220.0554981598972,
+        "t_median_cm": 19.34587637114023,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 25.600886737760874,
+        "r_median_deg": 9.081884205520975
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 42.604562237328935,
+        "t_median_cm": 42.88463161078857,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 38.82623240269335,
+        "r_median_deg": 42.810292982841396
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 220.26925744506013,
+        "t_median_cm": 59.119325888387934,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 53.40583117808174,
+        "r_median_deg": 45.25236058295333
+      },
+      "n_train": 3276,
+      "n_test": 820
+    },
+    "amp": null
+  },
+  "zv_n_agnostic_max_abs_diff": 0.00016801804304122925,
+  "latent_controls": null
+}

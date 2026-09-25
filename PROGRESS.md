@@ -21,6 +21,9 @@ Last updated 2026-09-25.
 | **`[1,2]`** | N-diversity ladder, first rung | **floor** — 0.028/0.043, indistinguishable from `[1,1]`; the N>1 gain is not reachable at max-N = 2 |
 | **ladder** | the N-diversity ladder closed: mean-N 1.0 / 1.5 / 2.0 / 3.0 / 4.0 | **knee between 2.0 and 3.0** (0.080 → 0.456), then graded to 0.764; and `[1,5]` is *more* view-general than `[1,7]` |
 | **collapse** | measured the encoder's output spread across every surviving checkpoint, matched-draw, with random-init controls | **a failure mode, not *the* failure mode** — explains `[1,2]`'s floor and answers L1's task split, but `[1,3]` fails while healthy, so a second failure mode exists |
+| **`m3v15` probe** | filled the one rung missing from every latent table (fingerprint gate passed) | **the `[1,3]` anomaly is a monotone ladder-wide trend** — as mean-N falls, `z_g` gets *more* view-invariant and `z_v` *less* view-aware while behaviour gets worse |
+| **propdrop gate** | the balance hypothesis ("`[1,3]` leans 1.75× harder on proprioception") re-measured at n=64 × 3 seeds, pre-registered | **refuted; intervention retired unlaunched** — the draw-independent proprio arm is 1.008× and flat across all four rungs (0.5% spread), and the gate itself failed (min ratio 0.567) |
+| **screen instrument** | fixed the unseeded draw + per-cell draw ranges, then ran the matched control the fix was pre-registered with | **the tool is now bit-reproducible, but the diagnosis was wrong** — matching the draw did not reduce the 2× spread, and at matched inputs the cell rank order *flips* across seeds, so `image_only` is not a scalar |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -55,7 +58,12 @@ conditioning and §2.4's auxiliary heads are both inert.**
 
 **The open question** is conclusion 5's second half: the difference between `[1,3]` and the
 working cells is evidently not whether information is *present*, and every instrument in this
-repository asks exactly that. See *The second failure mode — `[1,3]`*.
+repository asks exactly that. See *The second failure mode — `[1,3]`*. **The one mechanism that
+was proposed to answer it — balance — has since been refuted and its intervention retired
+unlaunched** (*Proprioception dropout*), so the question now stands without a candidate
+mechanism, but with a sharper specification: the instrument that answers it cannot be built by
+tightening `image→action sensitivity`, because that quantity's cell ranking flips across probe
+ensembles.
 
 Every behavioural number below is **one model, 50 paired episodes**, at the resolution of
 *Noise and resolution* — treat differences below ~0.1 as unmeasured. The probe and screen
@@ -1249,11 +1257,190 @@ asks *whether information is present*; the difference between those two cells is
 presence. So the question is what the policy *learned to do* with correct information — and no
 probe in this repository can currently see it.
 
+## Proprioception dropout — the `[1,3]` balance test, retired at its own gate
+
+**Why this was run.** *The second failure mode* left exactly one mechanism standing: **balance**.
+`[1,3]`'s image→action sensitivity was identical to the working cell's (0.0067 vs 0.0068 at
+n=8) and the only measured difference was that it leaned **~1.75× harder on proprioception**
+(0.0674 vs 0.0386) — and proprioception cannot see where the nut is. A falsifying intervention
+was coded and left ready: `DiffusionUnetImagePolicyPropDrop`, which drops proprioception for a
+random half of training samples, in `compute_loss` only, so rollouts and every probe are
+untouched. In front of it stood a **pre-registered gate**: the balance reading was n=1, so it
+had to be re-measured at n=64 over three seeds before it was worth GPU-hours, with the rule
+fixed in advance — *the hypothesis lives only if `m3v13`'s proprio/image ratio exceeds
+`m3off`'s by ≥1.5× across all three seeds; at parity the intervention is off*.
+
+**Setting.** Nine `screen_conditioning.py` runs, `--n-obs 64`, `m3v13`/`m3off`/`m3v12` × seeds
+0/1/2. Artifacts: `data/screen_conditioning/square_*_n64_s*.json`. The formalisation
+(`min_s R_m3v13/R_m3off >= 1.5`, and 2-of-3 is *not* support) was committed before any n=64
+number existed.
+
+### Result 1 — the gate fails, and the intervention is off
+
+| seed | `R_m3v13` | `R_m3off` | ratio | gate (≥1.5) |
+|---|---|---|---|---|
+| 0 | 38.53 | 22.59 | 1.705 | PASS |
+| 1 | 40.05 | 12.60 | 3.179 | PASS |
+| 2 | 16.20 | 28.56 | **0.567** | fail |
+
+`min` over seeds = **0.567**, so the pre-registered *gate failed, reading ambiguous* branch
+applies. **By pre-registration the intervention is off and the run was not launched** — a
+decision taken before its justification was examined, which is the point of registering it.
+
+### Result 2 — the clean quantity refutes the balance hypothesis outright
+
+The gate's own statistic turned out to be the wrong thing to lean on. `image_only` swings
+**2.27×–2.47×** across the three seeds, so the ratio is not a measurement; but `proprio_only`
+is **draw-independent** — the proprio keys are the same 64 low-dim rows whichever views are
+live — and it is stable to **0.2–0.4%** within each cell across all three runs:
+
+| cell | `proprio_only` (mean of 3) | across-seed spread |
+|---|---|---|
+| `m3v13` | 0.35003 | 1.002× |
+| `m3off` | 0.34726 | 1.004× |
+| `m3v12` | 0.34704 | 1.001× |
+
+The proprio contrast is **1.008×**, so the n=8 claim of a 1.75× gap does not reproduce: **the
+balance hypothesis as stated is refuted**, on the one arm the view draw cannot touch and
+independently of the gate's instability. This *confirms* a suspicion already on record above
+("what is solid here is the severed path, not the balance reading") rather than contradicting
+anything. The control still works: `m3v12`'s image arm is 2.4–5.0e-05, ~256× below the others,
+so the severed-path detector is intact at n=64.
+
+### Result 3 — the gate's instability is *not* the confound it was diagnosed as
+
+`screen_conditioning.py` had two verified defects: it seeded `torch` only (so `np.random`, which
+draws each sample's view subset, was never seeded), and it instantiated each cell's dataset from
+that cell's own cfg — so `m3v13` drew `[1,3]` (mean 2.0) while `m3off` drew `[1,7]` (mean 4.0).
+The second is *the same confound the project already corrected for `screen_collapse` on
+2026-09-25*. Both were fixed (`np.random.seed(seed)`; an optional `--view-count-range`
+mirroring `screen_collapse.py`'s, with the effective range recorded in the JSON), and the gate
+was re-run at a **matched `[7,7]` draw** across all four ladder rungs × 3 seeds.
+
+**The fix works and the diagnosis is wrong.** Same cell, same seed, same flags is now
+*bit-reproducible* (0.00752622 twice, 6 s.f.) — but matching the draw **did not reduce the
+spread at all**:
+
+| cell | mean-N | image spread, unmatched | image spread, matched `[7,7]` |
+|---|---|---|---|
+| `m3v12` | 1.5 | — | 1.92× |
+| `m3v13` | 2.0 | 2.47× | 2.09× |
+| `m3off` | 4.0 | 2.27× | 2.50× |
+
+So the unseeded draw was not the cause. What the matched control *did* establish is sharper
+than "noisy": at a fixed `[7,7]` range `k` is always 7, so the RNG consumption is identical and
+**every cell sees the same view order for a given seed** (verified directly) — the per-seed
+comparison is genuinely matched, differing only in the weights. And under that matched
+comparison **the rank order still flips**: the `m3v13`/`m3off` image ratio is 0.512 (s0),
+0.272 (s1), 1.362 (s2). Same inputs, opposite conclusion. So *"image→action sensitivity" is not
+a well-defined scalar for these policies* — it depends on the probe ensemble, and which cell
+looks more image-driven depends on that ensemble. That is why this instrument cannot answer the
+use question, and it is a stronger statement than a noise complaint.
+
+The corresponding pre-registered prediction — `image_only` declines monotonically with mean-N
+(`m3off` > `m3v15` > `m3v13` > `m3v12`) — is **falsified** on the `m3v15`/`m3off` pair
+(measured 2.99e-02 / 1.84e-02 / 1.04e-02 / 3.5e-05). The named competing outcome, "flat across
+cells", is **not** established either: 1.6× sits inside a 2× spread. The honest third outcome is
+that the image arm is unresolvable at three seeds, and it is recorded as that rather than as
+whichever of the two pre-registered branches reads better.
+
+### Result 4 — the balance question is dead ladder-wide, not just for `[1,3]`
+
+The matched control was run on all four surviving rungs, and `proprio_only` is **flat across
+the whole ladder**: means 0.347035 / 0.348878 / 0.347636 / 0.347262 for
+`m3v12`/`m3v13`/`m3v15`/`m3off` — a **0.5% spread over four rungs**, with ≤0.4% across-seed
+spread within each. Combined with Result 2, no rung leans harder on proprioception than any
+other, so the axis the balance mechanism was proposed on does not vary across the ladder at all.
+
+### Conclusion
+
+**The balance hypothesis is retired, and it was retired by a pre-registered gate rather than by
+an argument.** The intervention it motivated was never launched. The measurement that killed it
+is the one arm of the instrument that is draw-independent and reproducible to 0.3%.
+
+**What survives, and what it costs the open question.** The session's negative results are
+methodological and they narrow PLAN.md's rank-1 item rather than closing it. `image→action
+sensitivity` — the quantity the "presence vs use" question most naturally reaches for — is
+**not a scalar** for these policies: at matched inputs its rank order between cells flips across
+probe ensembles. So the missing instrument cannot be built by tightening this statistic; it needs
+a design whose verdict does not depend on which scenes are probed. That is now the concrete
+specification of the open question, rather than a restatement of it.
+
+**Limits.** One task (square), one seed per cell for the behaviour, three seeds for the screens,
+one checkpoint each. The n=8 anchors are superseded as *method* (they came from the unseeded
+path and are not reproducible under the fixed code) though their qualitative finding — `m3v12`'s
+severed path — stands at n=64. The `image_only` spread is characterised on three seeds only;
+a larger study could still bound it, but the rank flip at matched input says the problem is not
+merely the size of the error bar.
+
+## The `m3v15` latent gap, and the anti-correlation across the whole ladder
+
+**Why.** `m3v15` (`[1,5]`, the rung that first broke the floor) was the **only** surviving cell
+that had never been latent-probed — every latent table in this document is missing it. Free to
+fill: the probe needs only the checkpoint. Artifacts: `data/probe_relpose_grid_square_m3v15/`,
+`data/probe_zg_square_m3v15/`.
+
+**Gates, all passing.** `draw_fingerprint` is **byte-identical** to all three existing grid
+cells (`{'size_hist': {'1': 136, '2': 120}, 'first_views': [[2], [2, 12], [4, 8], [4, 8]]}`),
+which is what makes the comparison valid rather than assumed; `mean_active` is **3.97**, so the
+`[1,7]` override took (a silently-ignored one reads ~1.5).
+
+**Result.** With the rung filled in, `[1,3]`'s anomaly is no longer an anomaly — it is the
+middle of a **monotone trend**:
+
+| cell | mean-N | `zg_across_view_subsets` `[1,7]` | `zv_pair_ratio` `[7,7]` | behaviour (trained) |
+|---|---|---|---|---|
+| `m3off` `[1,7]` | 4.0 | 0.1469 | 0.581 | **0.764** |
+| `m3v15` `[1,5]` | 3.0 | 0.1131 | 0.491 | **0.456** |
+| `m3v13` `[1,3]` | 2.0 | 0.0636 | 0.382 | 0.080 |
+| `m3v12` `[1,2]` | 1.5 | 2.4e-06 *(collapsed)* | 1.277 *(degenerate)* | 0.028 |
+
+**Conclusion.** As view diversity falls, `z_g` becomes **more view-invariant** and `z_v`
+**less view-aware** — i.e. the latents move toward exactly what PROPOSAL §2.2 calls the goal —
+while behaviour gets monotonically **worse**. So the project's central latent claim
+*anti-correlates with success across the entire working range*, not merely in one anomalous
+cell. That is a sharper framing of *the second failure mode*: the representational statistics
+built here do not just fail to explain `[1,3]`, they point the wrong way across four
+independently trained rungs.
+
+**Limits.** Same instrument caveats as the rest of the probe section: decodability by a readout
+is an upper bound on presence, the two latent columns are single statistics on one task, and
+`m3v12`'s row is degenerate rather than informative. Read the **ordering** as the finding.
+
 ## Record of corrections and superseded numbers
+
 
 Dated, newest first. These are kept because a document that quietly repairs its own headline
 is worth less than one that shows the repair — read them before quoting any number they
 touch.
+
+- **2026-09-25 — the balance hypothesis is refuted and its intervention retired at the gate.**
+  The propdrop run was never launched. The n=8 reading (proprio 0.0674 vs 0.0386, a 1.75× gap)
+  does not reproduce at n=64: the draw-independent `proprio_only` is **1.008×** between
+  `m3v13` and `m3off`, and **flat across all four rungs** (0.5% spread). Anything in this
+  document that treats "`[1,3]` leans harder on proprioception" as a live mechanism is
+  superseded. See *Proprioception dropout — the `[1,3]` balance test*.
+- **2026-09-25 — this session's own diagnosis of the screen's instability was wrong, and its
+  own control is what caught it.** The n=64 gate's spread was diagnosed as the unseeded numpy
+  view draw and the per-cell draw range, both recorded in `NOTES.md` and committed as
+  pre-registration *before* the control existed. The matched `[7,7]` re-run left the spread
+  **unchanged** (1.92–2.50× against 2.27–2.47×), so neither was the cause — the seeding fix
+  made the tool bit-reproducible but did not buy comparability. The explanation that survives is
+  that at matched inputs the *rank order between cells flips across seeds* (ratio 0.512 / 0.272
+  / 1.362), i.e. `image_only` is ensemble-dependent rather than a scalar. The prediction
+  registered alongside the fix (monotone decline with mean-N) is falsified, and its named
+  competing outcome ("flat") is not established either.
+- **2026-09-25 — the n=8 conditioning anchors are superseded *as method*.** They came from the
+  unseeded code path, so they are not reproducible under the fixed tool even at identical flags.
+  Their qualitative finding survives at n=64: `m3v12`'s image path is severed (2.4–5.0e-05,
+  ~256× below the others). The absolute values 0.0067/0.0068/0.0674/0.0386/0.0686 should not be
+  quoted or compared against any n=64 number — the arm samples `dataset[0..n-1]` and the reading
+  scales with n (proprio moved 5.2× from n=8 to n=64).
+- **2026-09-25 — `m3v15`'s absent latent reading is filled**, and it changes the `[1,3]` story
+  from an anomaly into a monotone trend across four rungs: as mean-N falls 4.0 → 3.0 → 2.0,
+  `z_g` becomes *more* view-invariant and `z_v` *less* view-aware while behaviour gets worse. Any
+  earlier sentence framing the latent/behaviour mismatch as particular to `[1,3]` is superseded
+  by the ladder-wide version.
 
 - **2026-09-25 — `screen_conditioning`'s image-only value was misread as `0.0000`.** The
   artifact says **2.5911e-05** for `m3v12`; the console showed `0.0000` because the script
@@ -1305,7 +1492,12 @@ touch.
   instrument built here asks *whether information is present*; the difference between those two
   cells is evidently not presence. So the question is what the policy *learned to do* with
   correct information — and no probe in this repository can currently see it. See *The second
-  failure mode — `[1,3]`*.
+  failure mode — `[1,3]`*. **Updated 2026-09-25:** the one proposed mechanism (balance) is now
+  refuted and the `m3v15` probe shows the latent/behaviour mismatch is monotone across all four
+  rungs, so this is a property of the ladder rather than of `[1,3]`; and the natural candidate
+  statistic, `image→action sensitivity`, is **not a scalar** — at matched inputs its cell ranking
+  flips across probe ensembles, which is a specification for the missing instrument rather than a
+  reason to iterate on this one.
 - **What makes training collapse?** Known: not "too few views" (`m3n1gate` trains at N=1 and is
   healthy), established by epoch ~100, and task-dependent (L1 collapses on square and can, not
   lift). Unknown: the mechanism, the layer, and whether collapse is a cause or a symptom. Also
@@ -1316,9 +1508,11 @@ touch.
   collapsed*, which would make this one story from M1 onward rather than two.
 - ~~**How much diversity is enough?**~~ — **answered**: a knee between mean-N 2.0 (0.080) and
   3.0 (**0.456**), then graded to 4.0 (0.764). See *N-diversity ladder*. The related `[2,7]`
-  cell ("N>1 needed" vs "*variable* N needed") remains untested and is now *more* interesting
-  than it was: min-N 2 with mean-N 4.5, so if it works while `[1,2]` and `[1,3]` collapse, the
-  ingredient is mean view count rather than the presence of N=1.
+  cell ("N>1 needed" vs "*variable* N needed") is **in flight as of 2026-09-25**: min-N 2 with
+  mean-N 4.5, so if it works while `[1,2]` and `[1,3]` collapse, the ingredient is mean view
+  count rather than the presence of N=1. It also adds the first rung *above* `m3off` on the
+  mean-N axis, which tests whether the latent anti-correlation of *The `m3v15` latent gap*
+  continues past 4.0 rather than turning over.
 - **Lift is untested for M3.** It is the one task where L1 already wins (0.76–0.96), so an
   M3-on run there is a genuine "did we break it" question rather than a result. ~1 h
   (lift is 127 batches/epoch).

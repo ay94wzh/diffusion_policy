@@ -1,0 +1,232 @@
+{
+  "schema": 2,
+  "checkpoint": "data/outputs/run_square_m3v12_s42_200ep/checkpoints/latest.ckpt",
+  "checkpoint_bytes": 4640840292,
+  "checkpoint_mtime": "2026-09-24 23:40:57",
+  "stats": {
+    "n_frames": 400,
+    "n_slots": 7,
+    "dim": 512,
+    "mean_active": 1.4500000476837158,
+    "n_dataset": 28150,
+    "effective_range": [
+      1,
+      2
+    ],
+    "cell_view_count_range": [
+      1,
+      2
+    ]
+  },
+  "use_plucker": false,
+  "use_eef_hist": false,
+  "targets": {
+    "abs_pose": {
+      "ridge": {
+        "t_rmse_cm": 41.5112458267618,
+        "t_median_cm": 43.26011460643346,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 38.44917717182405,
+        "r_median_deg": 43.141008822448164
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 42.03949526827175,
+        "t_median_cm": 41.4766782301789,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 37.62685351842986,
+        "r_median_deg": 40.633472497793434
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 42.425201133129214,
+        "t_median_cm": 42.451417747513155,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 38.01032795054479,
+        "r_median_deg": 39.50581534014866
+      },
+      "n_train": 464,
+      "n_test": 116
+    },
+    "cam_eef": {
+      "ridge": {
+        "t_rmse_cm": 21.160097727321304,
+        "t_median_cm": 19.21308334682851,
+        "target_median_cm": 70.71943553442225
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 21.168830377547522,
+        "t_median_cm": 19.363082197099292,
+        "target_median_cm": 70.71943553442225
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 21.673026842629163,
+        "t_median_cm": 19.37332491806538,
+        "target_median_cm": 70.71943553442225
+      },
+      "n_train": 464,
+      "n_test": 116
+    },
+    "rel_pose": {
+      "ridge": {
+        "t_rmse_cm": 61.47976860850211,
+        "t_median_cm": 59.82666619028634,
+        "target_median_cm": 49.99999932694132,
+        "r_mean_deg": 75.6005377221947,
+        "r_median_deg": 70.33591636992826
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 55.910809758057184,
+        "t_median_cm": 55.83538264490412,
+        "target_median_cm": 49.99999932694132,
+        "r_mean_deg": 65.44771989544365,
+        "r_median_deg": 55.40376958277086
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 57.03799834587596,
+        "t_median_cm": 53.635153728411865,
+        "target_median_cm": 49.99999932694132,
+        "r_mean_deg": 64.45850816762119,
+        "r_median_deg": 56.10049750623391
+      },
+      "n_train": 288,
+      "n_test": 72
+    }
+  },
+  "cell_view_count_range": [
+    1,
+    2
+  ],
+  "grid_ranges": [
+    [
+      1,
+      1
+    ]
+  ],
+  "latent_grid": {
+    "1,1": {
+      "n_states": 512,
+      "n_repeats": 8,
+      "draw_fingerprint": {
+        "size_hist": {
+          "1": 512
+        },
+        "first_views": [
+          [
+            0
+          ],
+          [
+            2
+          ],
+          [
+            6
+          ],
+          [
+            6
+          ]
+        ]
+      },
+      "zg_across_view_subsets": 5.0264827907793174e-06,
+      "zg_by_size": {
+        "1|1": {
+          "mean": 5.0264827907793174e-06,
+          "n": 14336
+        }
+      },
+      "zv_within_draw_by_size": {},
+      "zg_permutation_floor": null,
+      "zv_pair_matrix": null,
+      "zv_across_states": null,
+      "zv_pair_ratio": null,
+      "half_split": null,
+      "zg_abs_pose": {
+        "ridge": {
+          "t_rmse_cm": 38.50904436573729,
+          "t_median_cm": 33.93524783582588,
+          "target_median_cm": 143.96180249088403,
+          "r_mean_deg": 33.48708351027665,
+          "r_median_deg": 28.35928030472872
+        },
+        "mean_predictor": {
+          "t_rmse_cm": 42.604562237328935,
+          "t_median_cm": 42.88463161078857,
+          "target_median_cm": 143.96180249088403,
+          "r_mean_deg": 38.82623240269335,
+          "r_median_deg": 42.810292982841396
+        },
+        "shuffled_target": {
+          "t_rmse_cm": 45.34779343894629,
+          "t_median_cm": 41.50173105120597,
+          "target_median_cm": 143.96180249088403,
+          "r_mean_deg": 41.07352175974322,
+          "r_median_deg": 40.75131720040507
+        },
+        "n_train": 3276,
+        "n_test": 820
+      },
+      "amp": null
+    }
+  },
+  "latent_stats": {
+    "n_states": 512,
+    "n_repeats": 8,
+    "draw_fingerprint": {
+      "size_hist": {
+        "1": 512
+      },
+      "first_views": [
+        [
+          0
+        ],
+        [
+          2
+        ],
+        [
+          6
+        ],
+        [
+          6
+        ]
+      ]
+    },
+    "zg_across_view_subsets": 5.0264827907793174e-06,
+    "zg_by_size": {
+      "1|1": {
+        "mean": 5.0264827907793174e-06,
+        "n": 14336
+      }
+    },
+    "zv_within_draw_by_size": {},
+    "zg_permutation_floor": null,
+    "zv_pair_matrix": null,
+    "zv_across_states": null,
+    "zv_pair_ratio": null,
+    "half_split": null,
+    "zg_abs_pose": {
+      "ridge": {
+        "t_rmse_cm": 38.50904436573729,
+        "t_median_cm": 33.93524783582588,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 33.48708351027665,
+        "r_median_deg": 28.35928030472872
+      },
+      "mean_predictor": {
+        "t_rmse_cm": 42.604562237328935,
+        "t_median_cm": 42.88463161078857,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 38.82623240269335,
+        "r_median_deg": 42.810292982841396
+      },
+      "shuffled_target": {
+        "t_rmse_cm": 45.34779343894629,
+        "t_median_cm": 41.50173105120597,
+        "target_median_cm": 143.96180249088403,
+        "r_mean_deg": 41.07352175974322,
+        "r_median_deg": 40.75131720040507
+      },
+      "n_train": 3276,
+      "n_test": 820
+    },
+    "amp": null
+  },
+  "zv_n_agnostic_max_abs_diff": 2.9802322387695312e-08,
+  "latent_controls": null
+}
