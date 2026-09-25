@@ -64,9 +64,34 @@ python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
 # Proprioception dropout -- the `[1,3]` balance test. No new config: a policy
 #   _target_ override, and the dropout lives in compute_loss only (so rollouts,
 #   eval, screen_conditioning.py and probe_relpose.py are untouched).
+#
+#   `+policy.proprio_dropout=0.5` -- the `+` is REQUIRED, and the runbook's original
+#   bare `policy.proprio_dropout=0.5` (commit 61e82c4) is rejected at launch. Hydra 1.2
+#   sets struct mode unconditionally on the config root
+#   (hydra/_internal/config_loader_impl.py:256-259: "One must use + to add new fields
+#   to them"), and the key is declared in NO config -- unlike M4's `aux_loss_weight`,
+#   which works bare only because it lives in train_..._m4.yaml.
+#   DO NOT "fix" it by declaring the key in the shared m3 config instead: that config
+#   is used by plain-M3 runs whose _target_ is DiffusionUnetImagePolicy, which would
+#   swallow the unknown kwarg into self.kwargs and forward it to scheduler.step --
+#   a TypeError at ROLLOUT time, hours in (the same trap the policy docstring names).
+#
+#   Gate, pre-registered 2026-09-25 BEFORE the run: a NON-NULL lift at [1,3] is
+#   consistent with the balance mechanism but does not establish it -- proprio dropout
+#   is also a generic regulariser. The separating control is an arm the mechanism
+#   predicts NO lift for: m3v12 ([1,2]), which fails by a severed image path (collapsed
+#   encoder), so dropout should not rescue it (~1.35 h + a sweep). The mechanism claim
+#   is not made until that control is run and does not lift. A NULL at [1,3] needs no
+#   control and is decisive on its own.
+#
+#   No p=0 control run is needed either: at proprio_dropout=0.0 the class delegates to
+#   super().compute_loss before drawing any RNG, so a p=0 rerun is bit-identical to
+#   m3v13 -- m3v13 IS the p=0 arm. The p=0.5 arm is NOT RNG-locked to it (the mask draw
+#   precedes the noise draw), so this is a run-to-run comparison at the usual n=1
+#   resolution: a delta below ~0.1 is unmeasured.
 python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
   task=m3_plucker_image_abs_multiview task.task_name=square \
-  task.dataset.view_count_range="[1,3]" policy.proprio_dropout=0.5 \
+  task.dataset.view_count_range="[1,3]" +policy.proprio_dropout=0.5 \
   policy._target_=diffusion_policy.policy.diffusion_unet_image_policy_propdrop.DiffusionUnetImagePolicyPropDrop \
   policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false \
   training.seed=42 training.num_epochs=201 training.device=cuda:1 \
@@ -76,6 +101,9 @@ python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
 #   launch gate: grep -q propdrop <log>  -- the policy prints an ACTIVE banner at
 #   construction, so a silently-dropped override cannot be read as "dropout didn't help"
 #   ~29 s/epoch at mean-N 2.0; ~43 s means view_count_range did not take
+#   val_loss is a THIRD incomparable val_loss: self.training is always True in this
+#   workspace (it evals the EMA copy, never putting self.model in eval mode), so
+#   dropout is live during validation. Compare it only at matched epochs.
 #   CPU test first: python tests/test_prop_dropout.py
 
 # M4 aux heads (control: policy.aux_loss_weight=0.0)
@@ -344,13 +372,35 @@ over the action chunk, normalised by the chunk's mean absolute value.
   across all three seeds**; at parity, the intervention below is off and the missing instrument
   is the only route left.
 
+**Gate reading, formalised and pre-registered 2026-09-25 — committed BEFORE any n=64 screen
+was run, so it cannot be renegotiated against the numbers.** With `R_cell(s) =
+proprio_only / image_only` read from each run's JSON:
+
+- **Pass** iff `min over s in {0,1,2} of R_m3v13(s) / R_m3off(s) >= 1.5`.
+- **2-of-3 seeds above 1.5 is NOT support.** The rule says "across all three seeds"; a partial
+  result is recorded as *gate failed, reading ambiguous* — neither pass nor a clean parity.
+- **Clean parity** (every seed below 1.5, or ratios ≈ 1) is the branch that retires the
+  intervention: the only proposed mechanism for `[1,3]`'s floor dies, and the missing
+  instrument becomes the only route left.
+- **Structural note, so the statistic is not misread as more than it is.** The two image arms
+  are *equal by measurement* (0.0067 vs 0.0068 — no difference at all), so `R_m3v13/R_m3off`
+  is carried almost entirely by the proprio arm: 0.0674/0.0386 = **1.75×** at the default.
+  The gate therefore asks whether a 1.75× proprio gap survives replication, not whether a
+  two-factor contrast does.
+- `m3v12` rides along as a **control, not part of the rule**: its encoder is collapsed, so its
+  image arm should stay ~2.6e-05 and its reading cannot support anything.
+
 ```bash
+# -d cuda:1: GPU 0 holds ~13 GB from another user (NOTES.md *Machine and timing*).
+# -o is NOT optional -- without it the number exists only in scrollback.
 for s in 0 1 2; do for c in m3v13 m3off m3v12; do
-python screen_conditioning.py -d cuda:0 --n-obs 64 --seed $s \
+python screen_conditioning.py -d cuda:1 --n-obs 64 --seed $s \
   -c data/outputs/run_square_${c}_s42_200ep/checkpoints/latest.ckpt \
   -o data/screen_conditioning/square_${c}_n64_s${s}.json
 done; done
 # reference points, also on disk: L1 lift (works, non-slot encoder) and L1 square (collapsed)
+# smoke ONE cell (-o /tmp/smoke.json) first: the tool has no assertions, and n_obs=1 would
+# print 0 for both arms -- the same misreading class as the :.4f bug below.
 ```
 - **Print with `:.6g`, not `:.4f`.** The `:.4f` format turned 2.59e-05 into `0.0000`, which
   was then written up as "bit-identical"; the number is 256× below the other cells, not zero.
