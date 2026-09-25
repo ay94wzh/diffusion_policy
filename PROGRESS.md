@@ -24,6 +24,8 @@ Last updated 2026-09-25.
 | **`m3v15` probe** | filled the one rung missing from every latent table (fingerprint gate passed) | **the `[1,3]` anomaly is a monotone ladder-wide trend** — as mean-N falls, `z_g` gets *more* view-invariant and `z_v` *less* view-aware while behaviour gets worse |
 | **propdrop gate** | the balance hypothesis ("`[1,3]` leans 1.75× harder on proprioception") re-measured at n=64 × 3 seeds, pre-registered | **refuted; intervention retired unlaunched** — the draw-independent proprio arm is 1.008× and flat across all four rungs (0.5% spread), and the gate itself failed (min ratio 0.567) |
 | **screen instrument** | fixed the unseeded draw + per-cell draw ranges, then ran the matched control the fix was pre-registered with | **the tool is now bit-reproducible, but the diagnosis was wrong** — matching the draw did not reduce the 2× spread, and at matched inputs the cell rank order *flips* across seeds, so `image_only` is not a scalar |
+| **`[2,7]`** | the ladder's one remaining cell: min-N 2, mean-N 4.5, so it never trains at N=1 | **indistinguishable from `[1,7]`** (Δ trained +0.104 inside the 0.15 band, Δ held-out +0.003) — so the *availability* of N=1 samples is not the ingredient, and N=1 **inference** works without ever training at N=1 |
+| **M1 re-train + screen** | re-trained the deleted single-view baseline (fidelity-verified against its committed curve), then collapse-screened it | **not collapsed** — 17.5× *above* its own random-init baseline, so M1's view-tiedness is a *different* failure mode from collapse; the story is not one story from M1 onward |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -1407,6 +1409,101 @@ independently trained rungs.
 is an upper bound on presence, the two latent columns are single statistics on one task, and
 `m3v12`'s row is degenerate rather than informative. Read the **ordering** as the finding.
 
+## `[2,7]` — min-N 2 matches `[1,7]`, so the availability of N=1 samples is not the ingredient
+
+**Why this cell.** The ladder varied only the *upper* end of `view_count_range`, so every rung
+kept N=1 in its range. That leaves "N>1 is needed" and "*variable* N is needed" inseparable —
+and `[2,7]` is the only cell that separates them: **min-N 2, mean-N 4.5**, so it never trains at
+N=1 at all. Its prediction was registered in advance: *if it works while `[1,2]`/`[1,3]`
+collapse, the ingredient is mean view count rather than the presence of N=1.*
+
+**Setting.** `m3_plucker_image_abs_multiview`, `use_plucker=false`, `use_eef_hist=false`, seed
+42, 201 epochs — `m3off`'s exact configuration with one integer changed. Both presets, 50 paired
+episodes. Artifacts: `data/eval_{interp,el}_square_m3v27/eval_log.json`,
+`data/outputs/run_square_m3v27_s42_200ep/logs.json.txt`.
+
+**Gates.** The 50 episode seed keys are **set-identical to `m3off`'s** (the mechanical proof the
+episodes are paired); `|el_0 − az_0| = 0.080`, inside the band; the `[2,7]` override was verified
+against 200 real draws (k = 4.31 per frame against an expected 4.5, with `[1,3]` reading 2.06
+against 2.0 in the same check).
+
+**Results.** Strict `success_rate`, 50 paired episodes:
+
+| model | mean-N | trained | held-out | retention |
+|---|---|---|---|---|
+| `m3fixedn1` `[1,1]` | 1.0 | 0.036 | 0.047 | — |
+| `m3v12` `[1,2]` | 1.5 | 0.028 | 0.043 | — |
+| `m3v13` `[1,3]` | 2.0 | 0.080 | 0.073 | — |
+| `m3v15` `[1,5]` | 3.0 | 0.456 | 0.373 | 82% |
+| `m3off` `[1,7]` | 4.0 | 0.764 | 0.550 | 72% |
+| **`m3v27` `[2,7]`** | **4.5** | **0.868** | **0.547** | **63%** |
+
+`[2,7]` clears the floor cells by an order of magnitude, and against `[1,7]` it is
+**indistinguishable on both axes**: Δ trained **+0.104**, inside the pre-registered 0.15 band,
+and Δ held-out **+0.003**, dead even. The in-training curve agrees — az_0 `mean_score` reads
+0.00 / 0.52 / 0.70 / 0.82 / 0.74 (mean 0.556) against `m3off`'s 0.496 and `m3v15`'s 0.244.
+Elevation is the same shape too (0.800 / 0.220 / 0.040 against `m3off`'s 0.88 / 0.30 / 0.04),
+including the holds-up-fails-down asymmetry.
+
+**Conclusion 1 — the ladder's question is answered.** A model that **never sees N=1 during
+training** performs the same as one that sees it with probability 1/7. So the ingredient is
+having *enough views on average*, not the availability of single-view samples. Per the
+pre-registered reading, "N>1 needed" is the losing branch.
+
+**Conclusion 2 — and it corrects the project's own stated rationale.** `[2,7]` is evaluated at
+**N=1 inference** like every other number here, and scores 0.547 held-out — the same as `[1,7]`.
+So the N=1 inference path does not need N=1 training samples to work. M3's design rationale —
+*"N is randomized so that the N=1 setting used by rollouts, evaluation, and M5 is in
+distribution rather than a shift"* — is therefore **not necessary** for the capability it was
+invoked to protect. That does not retroactively invalidate any measurement (every committed cell
+did have N=1 in range, so nothing is confounded), but the *reason* given for the design is now
+empirically refuted for the working regime. See *Record of corrections*.
+
+**Limits.** One task, one seed, one checkpoint. And a confound this cell cannot remove:
+mean-N 4.5 against 4.0 is ~12% more encoder compute per sample, so "more views" and "more
+compute" are not fully separated — which means `[2,7]`*should* have been modestly ahead if view
+count were the whole story, and it is not measurably ahead. The retention column also moves the
+opposite way to the N=1 story: `[2,7]` retains **63%** against `[1,7]`'s 72%, extending the
+pattern `[1,5]` started (82%) — more diversity buys absolute performance and costs
+generalization.
+
+## M1's baseline was **not** collapsed — view-tiedness and collapse are distinct failure modes
+
+**Why.** `[1,2]`'s floor is an encoder collapse, and the same signature explains L1's task
+split. That raised the question PLAN.md ranked second: **was the original single-view baseline
+itself collapsed?** If so the collapse story would be *one* story running from M1 onward. M1's
+weights were deleted on 2026-09-19, so the question needed a re-train (~3.3 h under two-run
+contention), then a screen.
+
+**Fidelity gate first, because the screen runs on a re-train and not the original.** The
+re-train reproduces the original's *committed* rollout curve within **max |Δ| 0.06** (mean Δ
++0.000) across all five rollout epochs, with `val_loss` tracking to ~0.004 — well inside the
+~0.14 per-viewpoint noise. So the re-train is a faithful reproduction, and the screen transfers
+to the question about the original.
+
+**Result.** `screen_collapse.py`, relative spread across 16 consecutive states, against a
+random-init baseline **measured on this cell rather than borrowed**:
+
+| | relative spread | vs its own random init |
+|---|---|---|
+| M1 re-train, random init | 6.97e-03 | — |
+| **M1 re-train, trained** | **0.1221** | **17.5× ABOVE** |
+| *L1 square (fails, collapsed)* | *1.49e-04* | *84× BELOW* |
+| *L1 lift (works)* | *2.49e-02* | *2.0× above* |
+
+**Conclusion.** M1's encoder is **emphatically not collapsed** — 17.5× above its own baseline,
+and higher in absolute terms than even the working L1 lift. So M1's failure at ±15° is **not**
+the collapse failure mode: it is view-tiedness with a healthy, richly-varying encoder.
+**View-tiedness (M1) and collapse (L1 square/can, `[1,2]`) are distinct**, and the collapse story
+is not "one story from M1 onward". PLAN.md's rank-2 item closes as a **negative** — which is the
+useful direction, because it stops two unrelated failures being folded into one narrative.
+
+**Limits.** One task, one seed; the screen is 16 frames and is correlation, not causation; and
+the re-train is a reproduction rather than the original artifact, bounded by the fidelity gate
+above rather than by identity. This M1's random-init baseline is 6.97e-03 against L1 square's
+1.25e-02 — same encoder family, different data source (hdf5 against the multiview zarr), which
+is precisely why the rule is to measure the baseline and never borrow it.
+
 ## Record of corrections and superseded numbers
 
 
@@ -1414,6 +1511,27 @@ Dated, newest first. These are kept because a document that quietly repairs its 
 is worth less than one that shows the repair — read them before quoting any number they
 touch.
 
+- **2026-09-25 — M3's stated reason for randomising N is empirically refuted.** This document
+  has said, since M3 and again in *N-diversity ladder* ("why every rung keeps N=1 in the
+  range"), that randomising N keeps the N=1 corner *in distribution* rather than a shift.
+  `[2,7]` never trains at N=1 and infers at N=1 as well as `[1,7]` does — 0.547 held-out against
+  0.550 — so the N=1 inference path does not require N=1 training samples, and the rationale is
+  not necessary for the capability it was invoked to protect. **No measurement is invalidated**
+  (every committed cell did have N=1 in range, so nothing was confounded by the belief), but the
+  *reason* is superseded. Note the related earlier step: `[1,2]`'s secondary result had already
+  killed the out-of-distribution explanation for a `[2,2]`-style floor.
+- **2026-09-25 — "the collapse story is one story from M1 onward" is wrong.** M1's re-trained
+  encoder screens at 0.1221, **17.5× above** its own random-init baseline, so the original
+  single-view baseline was *not* collapsed. M1's failure at ±15° is view-tiedness with a healthy
+  encoder, which is a **different** failure mode from L1 square/can and `[1,2]`. Any sentence
+  that folds M1 into the collapse account is superseded. The re-train's fidelity to the deleted
+  original is bounded by the curve comparison in that section (max |Δ| 0.06), not by identity.
+- **2026-09-25 — "N>1 needed" vs "*variable* N needed" is answered: neither the *presence* of
+  N>1 nor the availability of N=1.** `[2,7]` (min-N 2, mean-N 4.5) is indistinguishable from
+  `[1,7]` on both axes (Δ trained +0.104, inside the pre-registered 0.15 band; Δ held-out
+  +0.003), while clearing the floor cells by an order of magnitude. The ingredient is having
+  enough views on average. The section *N-diversity ladder* framed this as open; it is closed,
+  with the confound that mean-N 4.5 against 4.0 also carries ~12% more compute per sample.
 - **2026-09-25 — the balance hypothesis is refuted and its intervention retired at the gate.**
   The propdrop run was never launched. The n=8 reading (proprio 0.0674 vs 0.0386, a 1.75× gap)
   does not reproduce at n=64: the draw-independent `proprio_only` is **1.008×** between
@@ -1503,16 +1621,17 @@ touch.
   lift). Unknown: the mechanism, the layer, and whether collapse is a cause or a symptom. Also
   unknown and worth stating because it rules out the cheapest design — **whether collapse
   precedes the behavioural failure** — since no existing run has a per-epoch checkpoint series.
-- **M1's baselines were never screened**, their weights having been deleted before the question
-  existed. Re-training one would establish whether *the original single-view baseline was itself
-  collapsed*, which would make this one story from M1 onward rather than two.
+- ~~**M1's baselines were never screened**~~ — **answered 2026-09-25.** The square baseline was
+  re-trained (fidelity-verified to its committed curve within max |Δ| 0.06) and screened:
+  **17.5× above** its own random-init baseline, so *the original single-view baseline was not
+  itself collapsed*, and the collapse account does **not** extend back to M1. See *M1's baseline
+  was not collapsed*.
 - ~~**How much diversity is enough?**~~ — **answered**: a knee between mean-N 2.0 (0.080) and
-  3.0 (**0.456**), then graded to 4.0 (0.764). See *N-diversity ladder*. The related `[2,7]`
-  cell ("N>1 needed" vs "*variable* N needed") is **in flight as of 2026-09-25**: min-N 2 with
-  mean-N 4.5, so if it works while `[1,2]` and `[1,3]` collapse, the ingredient is mean view
-  count rather than the presence of N=1. It also adds the first rung *above* `m3off` on the
-  mean-N axis, which tests whether the latent anti-correlation of *The `m3v15` latent gap*
-  continues past 4.0 rather than turning over.
+  3.0 (**0.456**), then graded to 4.0 (0.764). See *N-diversity ladder*. ~~The related `[2,7]`
+  cell ("N>1 needed" vs "*variable* N needed") is **in flight as of 2026-09-25**~~ — **run and
+  answered 2026-09-25:** `[2,7]` (min-N 2, mean-N 4.5, so it never trains at N=1) is
+  indistinguishable from `[1,7]` on both axes, so the ingredient is *enough views on average*
+  and neither the presence of N>1 nor the availability of N=1. See *`[2,7]`*.
 - **Lift is untested for M3.** It is the one task where L1 already wins (0.76–0.96), so an
   M3-on run there is a genuine "did we break it" question rather than a result. ~1 h
   (lift is 127 batches/epoch).

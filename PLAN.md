@@ -33,7 +33,8 @@ Operational detail: `NOTES.md`. Last updated 2026-09-25.
 | **`m3v15` latent probe** | ✅ done | filled the only rung missing from every latent table; fingerprint gate passed | PROGRESS *The `m3v15` latent gap* |
 | **propdrop gate** | ✅ done — **refuted** | the draw-independent proprio arm is 1.008× (`m3v13`/`m3off`) and flat across all four rungs; gate failed (min ratio 0.567) | PROGRESS *Proprioception dropout* |
 | **screen instrument fix** | ✅ done — fix works, **diagnosis refuted** | now bit-reproducible, but matching the draw did not reduce the 2× spread; at matched inputs the cell rank flips across seeds | PROGRESS *Result 3* |
-| **`[2,7]`** | 🔄 **in flight 2026-09-25** | first rung above `m3off` on the mean-N axis | below |
+| **`[2,7]`** | ✅ **done 2026-09-25** | indistinguishable from `[1,7]` on both axes (Δ trained +0.104 inside the 0.15 band, Δ held-out +0.003); never trains at N=1 and still infers at N=1 | PROGRESS *`[2,7]`* |
+| **M1 re-train + screen** | ✅ **done 2026-09-25** | **not collapsed** — 17.5× above its own random-init baseline, so M1's view-tiedness is a distinct failure mode from collapse | PROGRESS *M1's baseline was not collapsed* |
 
 ## Next: why does `[1,3]` fail? (opened 2026-09-25)
 
@@ -52,15 +53,17 @@ floor cells fail turned up two findings that outrank the ladder's own question:
 Every instrument this project has built asks *whether information is present*. The difference
 between `[1,3]` and `[1,7]` is evidently not presence, and that is why (2) has no explanation.
 
-**Ranked next steps.** *(Updated 2026-09-25 after the propdrop gate: item 1 is unchanged but
-now has a sharper specification, item 3 is in flight, and a sixth item — `image→action
-sensitivity` is not a scalar — is what the session's negative results actually bought.)*
+**Ranked next steps.** *(Updated 2026-09-25: items 2, 3 and 6 are closed — the M1 screen came
+back negative-but-useful, `[2,7]` answered the ladder's last question, and the balance mechanism
+was refuted at its own gate. Item 1 is unchanged but now has a sharper specification, bought by
+the session's other negative result: `image→action sensitivity` is not a scalar, so the missing
+instrument cannot be built by tightening it.)*
 
 | # | what | why | cost |
 |---|---|---|---|
 | 1 | **an instrument sensitive to *correctness*, not presence** — and its verdict must not depend on which scenes are probed | all three tools are presence-tests; the gap is what the policy learned to *do* with correct information. **New constraint:** `image_only`'s cell ranking *flips* across probe ensembles at matched inputs, so tightening that statistic cannot build this instrument | design work, no GPU |
-| 2 | screen the M1 baselines (re-train first — weights deleted) | was the *original single-view baseline itself* collapsed? If so this is one story from M1 onward rather than two. **In flight 2026-09-25** (`run_square_abs_single_s42_retrain200ep`) | ~1.2 h |
-| 3 | `[2,7]` | the only cell answering "N>1 vs *variable* N": min-N 2 with mean-N 4.5, so if it works while `[1,2]`/`[1,3]` collapse, the ingredient is mean view count. **In flight 2026-09-25** — and it is the first rung above `m3off` on the mean-N axis, so it tests whether the latent anti-correlation continues past 4.0 | ~2.2 h train + 52 min sweep |
+| 2 | ~~screen the M1 baselines~~ | **done 2026-09-25, negative and useful**: the original single-view baseline was *not* collapsed (17.5× above its own random-init), so view-tiedness and collapse are distinct failure modes and the collapse account does not extend back to M1 | done |
+| 3 | ~~`[2,7]`~~ | **done 2026-09-25**: indistinguishable from `[1,7]`, so the ingredient is enough views *on average* — not the presence of N>1, and not the availability of N=1. Also refutes M3's stated rationale for randomising N | done |
 | 4 | a run with **per-epoch** checkpoints | the only way to order collapse against the behavioural failure — **not recoverable from any existing run**, which save only `topk` + `latest`. Note `training.checkpoint_every` exists but `latest.ckpt` is overwritten each epoch, so per-epoch *history* needs a light in-loop hook that saves latents (≈3.7 MB/epoch), not checkpoints (4.6 GB) | 1 run, ~1 GB |
 | 5 | second seed on `[1,5]` | the working rung is n=1, and its held-out number (0.373) is the one the project would build on | ~2 h |
 | 6 | ~~the balance mechanism~~ | **retired 2026-09-25**: refuted at n=64 (proprio contrast 1.008×, flat across all four rungs) — the intervention was never launched | — |
