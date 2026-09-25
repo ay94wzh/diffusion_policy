@@ -1,7 +1,9 @@
-# Plan: view-aware policy, milestones M1–M5
+# Plan: view-generalizable policy
 
-Direction and the original predictions: `PROPOSAL.md`. Results: `PROGRESS.md`.
-Operational detail: `NOTES.md`. Last updated 2026-09-25.
+Direction and the original predictions: `PROPOSAL.md`. The module and its measured behaviour:
+`PROGRESS.md`; the full protocol, the investigation log and the appendices (tables index,
+parked investigations, corrections): `PROGRESS_DETAIL.md`.
+Operational detail, runbooks and traps: `NOTES.md`. Last updated 2026-09-26.
 
 ## Constraints
 
@@ -10,186 +12,142 @@ Operational detail: `NOTES.md`. Last updated 2026-09-25.
   documented seams and only when unavoidable.
 - Baselines first, then one part added at a time. Models are planned here, coded in their
   own milestone, and each milestone reads its result before the next one is committed to.
-- Runs happen on the box, and **this checkout is the box** — verified 2026-09-24: 2× RTX
-  5090, the `run_square_m3*` checkpoints and `data/multiview/*_ring13.zarr` present
-  locally — so the runbooks in `NOTES.md` execute in place from the repo root. Disk is the
-  binding constraint: check `df -h` first, it has sat at 97–99%.
+- **Where things run.** This checkout is the **coding and documents** machine: code, documents
+  and the committed records (`data/eval_*/eval_log.json`, `data/outputs/run_*/logs.json.txt`,
+  `data/screen_*`, `data/probe_*`) live here. The demonstrations, the multi-view zarrs and every
+  checkpoint live on the **remote training machine**. Runs are prepared here and launched there;
+  the results come back as `eval_log.json` + `logs.json.txt` and are written into `PROGRESS.md`.
+  Check disk on the training machine before a campaign — a checkpoint is 4.6 GB and `topk.k=1`
+  roughly doubles a run's footprint.
+- Every run uses **201 epochs, not 200**: checkpoint and rollout fire on `epoch % 50 == 0` and
+  there is no save at the end of training, so 201 makes epoch 200 fire.
 
 ## Status
 
-| milestone | status | the number that decided it | detail |
+Numbers and their provenance live in `PROGRESS.md` (and, for the parked investigations, in
+`PROGRESS_DETAIL.md`); this table is verdicts only.
+
+| milestone | status | verdict | detail |
 |---|---|---|---|
-| **M1** — single-view baseline + novel-view harness | ✅ done | 0.82/0.98/0.76 at az_0 → ≈0 at ±15° | PROGRESS *M1* |
-| **M2** — multi-view data (13-pose ring) | ✅ done | 819k images, 4.5 GB, N=1 gate reproduces M1's curve | PROGRESS *M2* |
-| **L1** — view diversity only | ✅ done | lift 0.76–0.96 to ±75°; square/can ≤0.08 | PROGRESS *L1* |
-| **M3** — view-conditioned encoder + fusion | ✅ done | 0.50–0.57 / 0.74–0.77 held-out on square/can; conditioning inert | PROGRESS *M3* |
-| **M4** — per-view aux action heads | ✅ done | `aux_loss` 52× down; `m4on − m4off` +0.02/+0.04 | PROGRESS *M4* |
-| **architectural confound** | ✅ resolved | fixed-N=1 scores 0.04/0.05 → **N>1** is load-bearing | PROGRESS *N>1* |
-| **M5** — single-novel-view inference | ⬜ not coded | — | below |
-| **relational supervision** (`z_v`, `z_g`) | ⬜ retired by 1a's result — not cost | 1a measured the geometry 1b would supervise is *already* in `z_v` | PROGRESS *Relational probe (step 1a)* |
-| **N-diversity ladder** | ✅ **closed at five rungs** | knee between mean-N 2.0 (0.080) and 3.0 (**0.456**), then graded to 4.0 (0.764). The pre-registered Stage-1 prediction was falsified; `[1,2]`'s floor is collapse, `[1,3]`'s is not | PROGRESS *N-diversity ladder* |
-| **collapse** | ✅ characterised across every surviving checkpoint, matched-draw, with random-init controls | ⚠️ **a failure mode, not *the* failure mode** — explains `[1,2]`'s floor (5 orders of magnitude below its neighbours) and answers the L1 task split, but `[1,3]` is at the floor with a *healthy* encoder, so a second failure mode exists | PROGRESS *Collapse is a failure mode* |
-| **second failure mode** | ⬜ open — the live question, now without a candidate mechanism | the one proposed mechanism (balance) is refuted and its intervention retired (*Proprioception dropout*); the `m3v15` probe shows the latent/behaviour mismatch is monotone across four rungs | below |
-| **`m3v15` latent probe** | ✅ done | filled the only rung missing from every latent table; fingerprint gate passed | PROGRESS *The `m3v15` latent gap* |
-| **propdrop gate** | ✅ done — **refuted** | the draw-independent proprio arm is 1.008× (`m3v13`/`m3off`) and flat across all four rungs; gate failed (min ratio 0.567) | PROGRESS *Proprioception dropout* |
-| **screen instrument fix** | ✅ done — fix works, **diagnosis refuted** | now bit-reproducible, but matching the draw did not reduce the 2× spread; at matched inputs the cell rank flips across seeds | PROGRESS *Result 3* |
-| **`[2,7]`** | ✅ **done 2026-09-25** | indistinguishable from `[1,7]` on both axes (Δ trained +0.104 inside the 0.15 band, Δ held-out +0.003); never trains at N=1 and still infers at N=1 | PROGRESS *`[2,7]`* |
-| **M1 re-train + screen** | ✅ **done 2026-09-25** | **not collapsed** — 17.5× above its own random-init baseline, so M1's view-tiedness is a distinct failure mode from collapse | PROGRESS *M1's baseline was not collapsed* |
+| **M1** — single-view baseline + novel-view harness | ✅ done | collapses to ≈0 at ±15° azimuth | PROGRESS *M1* |
+| **M2** — multi-view data (13-pose ring) | ✅ done | validated; ±75°/±90° views are low value | PROGRESS *M2* |
+| **L1** — view diversity only | ✅ done | solves lift, destroys square/can | PROGRESS *L1* |
+| **M3** — view-conditioned encoder + fusion | ✅ done | solves square/can at held-out views; conditioning inert | PROGRESS *M3* |
+| **M4** — per-view aux action heads | ✅ done | mechanism real, behaviourally null | PROGRESS *M4* |
+| **architectural confound** | ✅ resolved | multi-view sampling is the load-bearing ingredient | PROGRESS *N>1* |
+| **N-diversity ladder** | ✅ closed at five rungs | a knee, then a graded rise; `[1,5]` is the more view-general working cell | PROGRESS *N-diversity ladder* |
+| **`[2,7]`** | ✅ done | enough views *on average* is the ingredient; N=1 inference needs no N=1 training samples | PROGRESS *`[2,7]`* |
+| **M1 re-screen** | ✅ done | the single-view baseline was **not** collapsed — view-tiedness ≠ collapse | PROGRESS *M1's baseline was not collapsed* |
+| **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded | below |
+| parked (5 items) | ⬜ stopped, findings kept | encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics | DETAIL Appendix B |
 
-## Next: why does `[1,3]` fail? (opened 2026-09-25)
+## Main line — the three runs and the M5 write-up
 
-**Answering the ladder's question produced a bigger one.** The ladder asked how much view
-diversity the policy needs, and it has an answer: a knee between mean-N 2.0 (0.080) and 3.0
-(**0.456**), graded to 0.764 at 4.0 (`PROGRESS.md` *N-diversity ladder*). But chasing *why* the
-floor cells fail turned up two findings that outrank the ladder's own question:
+Each run fills a hole the record itself names. All three are prepared here and launched on the
+training machine; runbook commands, launch gates and epoch-time checks are in `NOTES.md`.
 
-1. **`[1,2]`'s floor is an encoder collapse** — five orders of magnitude below its neighbours
-   under a matched draw, with its image→action path behaviourally severed (2.6e-05 against
-   0.0067), and it explains L1's task split, which had been open since L1.
-2. **`[1,3]`'s floor is not.** Its representation beats the working cell on **four**
-   separately-measured stages — encoder variance, `z_v` decodability, `z_g` decodability, and
-   image→action sensitivity — and it still scores 0.080.
+| # | run | the hole it fills | config delta | ~cost |
+|---|---|---|---|---|
+| a | **lift + `m3on`** | M3 was never swept on lift — the one task L1 already solves, so this is a "did we break it" question, not a result | `task=m3_plucker_image_abs_multiview task.task_name=lift`, `use_plucker=true use_eef_hist=true` (= `m3on`), K=7, `[1,7]`, seed 42 | 46 min |
+| b | **second seed on `[1,5]`** | the working rung is n=1 and every behavioural null in the project is n=1 | `m3off` config with `view_count_range="[1,5]" training.seed=43` | 2.0 h |
+| c | **±60° pool at `[1,5]`** | "how much does view *quality* alone buy" — never measured | **new task yaml** (below) | 2.0 h |
 
-Every instrument this project has built asks *whether information is present*. The difference
-between `[1,3]` and `[1,7]` is evidently not presence, and that is why (2) has no explanation.
+**Run (c), precisely.** Ring index 0 = az −90°, step 15°, so index 12 = +90°; dropping the two
+±90° views (M2's low-value finding) means `view_pool=[2,4,6,8,10]` = (−60, −30, 0, +30, +60).
+The dataset enforces `n_slots <= len(view_pool)`, so this **cannot** be a CLI override of the
+7-slot config: it needs a new file
+`diffusion_policy/config/task/m3_plucker_image_abs_multiview_pm60.yaml` keeping **five** rgb slot
+keys, `view_count_range: [1,5]` and `env_runner.m3_slots: 5`. At `[1,5]` its mean active N is
+**3.0 — identical to `m3v15`**, which is what makes it an isolation of view quality from view
+count rather than a second diversity experiment. *(Likeliest mechanical error: dropping indices
+10/12 instead of 0/12, i.e. removing +60/+90 instead of ±90.)*
 
-**Ranked next steps.** *(Updated 2026-09-25: items 2, 3 and 6 are closed — the M1 screen came
-back negative-but-useful, `[2,7]` answered the ladder's last question, and the balance mechanism
-was refuted at its own gate. Item 1 is unchanged but now has a sharper specification, bought by
-the session's other negative result: `image→action sensitivity` is not a scalar, so the missing
-instrument cannot be built by tightening it.)*
+**Reading the three, fixed in advance.** Run (a) fails if any held-out azimuth lands below both
+L1's band (0.76–0.96) and its own M1 reference — it is a regression test with a named falsifier.
+Run (b)'s read is the **spread across the two seeds of one config**; if the trained means differ
+by more than the 0.15 band, the ladder's five-rung curve is re-read as two-population and the
+knee claim is restated at the new resolution — a registered consequence, not an after-the-fact
+rescue. Run (c) is compared against `m3v15` at matched mean-N.
 
-| # | what | why | cost |
-|---|---|---|---|
-| 1 | **an instrument sensitive to *correctness*, not presence** — and its verdict must not depend on which scenes are probed | all three tools are presence-tests; the gap is what the policy learned to *do* with correct information. **New constraint:** `image_only`'s cell ranking *flips* across probe ensembles at matched inputs, so tightening that statistic cannot build this instrument | design work, no GPU |
-| 2 | ~~screen the M1 baselines~~ | **done 2026-09-25, negative and useful**: the original single-view baseline was *not* collapsed (17.5× above its own random-init), so view-tiedness and collapse are distinct failure modes and the collapse account does not extend back to M1 | done |
-| 3 | ~~`[2,7]`~~ | **done 2026-09-25**: indistinguishable from `[1,7]`, so the ingredient is enough views *on average* — not the presence of N>1, and not the availability of N=1. Also refutes M3's stated rationale for randomising N | done |
-| 4 | a run with **per-epoch** checkpoints | the only way to order collapse against the behavioural failure — **not recoverable from any existing run**, which save only `topk` + `latest`. Note `training.checkpoint_every` exists but `latest.ckpt` is overwritten each epoch, so per-epoch *history* needs a light in-loop hook that saves latents (≈3.7 MB/epoch), not checkpoints (4.6 GB) | 1 run, ~1 GB |
-| 5 | second seed on `[1,5]` | the working rung is n=1, and its held-out number (0.373) is the one the project would build on | ~2 h |
-| 6 | ~~the balance mechanism~~ | **retired 2026-09-25**: refuted at n=64 (proprio contrast 1.008×, flat across all four rungs) — the intervention was never launched | — |
-
-**Ranked out, with reasons.** `[1,4]` (skipped by the stop-rule resolution at
-`PROGRESS.md`); an anti-collapse term (a solution to a mechanism not yet understood); M5's
-distillation (premise still unestablished — `PROGRESS.md` *Open questions*).
-
-## Next: relational supervision on `z_v` (opened 2026-09-24, **retired 2026-09-24**)
-
-> **Retired on reading 1a, not on cost.** 1a measured that the geometry 1b would supervise is
-> *already* in `z_v` — the exact shape of intervention M4 found behaviourally null. And the
-> action head never sees `z_v`: `forward` hands the UNet `z_g` alone, so any per-view
-> supervision must reach behaviour through the fusion bottleneck. 1c is worse structurally:
-> fusion is a single learnable query, so there is no view-to-view term to bias, and at N=1
-> there is no pair at all. The section is kept for the reasoning, not as pending work. What
-> replaced it is the *N-diversity ladder* (PROGRESS.md).
-
-**The governing fact.** The scene is static, so the camera pose is recoverable from the
-RGB itself and a better-injected Plücker map carries no information the image lacks. That
-is the mechanism behind the measured conditioning null (KYC reports the same: static
-scenes leak pose through background cues; randomizing appearance is what makes explicit
-conditioning pay). So the lever is not *how* geometry is injected but **making geometry
-necessary** — supervise each latent in the frame it is supposed to represent:
-
-| latent | should be | supervised by |
-|---|---|---|
-| `z_v` | **view-aware** | a *relational* objective — predict `(R_ij, t_ij)` between two views |
-| `z_g` | **view-invariant** | *agreement* — across views, and across the action produced |
-
-Note the classical multi-view recipe (TCN) pulls simultaneous views *together*, i.e. it
-pushes invariance: right for `z_g`, wrong for `z_v`, which would delete the geometry.
-
-**Step 1 — relational supervision on `z_v`.**
-
-| # | what | gate before it counts |
-|---|---|---|
-| 1a | **probe on frozen checkpoints** — is the geometry already decodable from `z_v`? | ✅ **done 2026-09-24** — beats both controls in all six cells |
-| 1b | a relative-pose head + loss; the target is derived from the in-batch cam keys, so **no dataset change** | loss must reach well below the M4-style mean-collapse floor *before* any rollout |
-| 1c | feed the **predicted** relation into fusion as an attention bias | stays permutation-invariant, degenerates correctly at N=1 |
-
-**1a's answer, and what it does to 1b.** Yes — and *without any pose conditioning*. `m3off`
-(no Plücker, no EE history) recovers the relative pose between two views to **9.34° / 15.4 cm**
-against a 65.35° / 55.75 cm mean-predictor floor, and its own camera's absolute pose to
-**4.13°** against 37.94°. So the pre-registered rule fires: **a head alone would be a
-post-hoc fit**, and the objective is what has to change. But the probe also found the part
-the rule did not anticipate — `m3on` is **4.6× better** (2.02°) and its `z_v` is **2.1× more
-view-discriminative** (0.466 vs 0.224), so the Plücker path is **not inert in the latent**,
-only in the behaviour. Two consequences for 1b/1c:
-
-- The last cell of the original design — relpose-on + `use_plucker=False` — is no longer the
-  "first mechanistic live-ness test the conditioning has had"; 1a already supplied that, and
-  supplied it *positively*. 1c's attention bias is the more interesting target now, because
-  the model still has no explicit **view-to-view** geometry (each slot is encoded alone).
-- 1b's claimed value has to shift from "supplies information" to "organizes information the
-  encoder already has into a frame the policy can use". A head that only re-derives what the
-  MLP readout above already reads is the M4 result again at a different layer.
-
-Cells: relpose-on/off (RNG-locked), and relpose-on + `use_plucker=False` to test whether the
-objective can substitute for the ray map. Runbook: `NOTES.md`.
-
-**Ranked behind it.**
-
-- **Q1 — Plücker usage.** A separate ray stem, multi-scale/adapter injection, and
-  Plücker-into-the-policy are cheap and *predicted null* in a static scene; the two with a
-  real justification are the **pairwise relative-pose attention bias** (fixes the structural
-  gap that the model currently has no view-to-view geometry at all — delivered by 1c) and
-  **ray-conditioned view prediction** (makes the rays necessary), the strongest non-null
-  candidate.
-- **Q2 — camera pool.** Discrete ring → **dense continuous pose distribution**; InfiNoVA
-  (2026) does exactly this and reports 5.4× VISTA augmentation and 1.7× better than five
-  physical cameras. **Trap: N=1 per sample is L1, which already fails** — the pool must keep
-  N>1. Probe it for free first with *contiguous-window* sampling from the existing ring; the
-  full version holds out **regions** (elevation band / azimuth wedge), not poses. Costs:
-  render time and disk (~8 GB at 65 poses for square), not IO.
-- **Q3 — remaining constraints.** Epipolar/Plücker reprojection consistency (depth-free,
-  calibration only) as the geometric companion to 1b; cross-view **action** consistency (the
-  literature's version, with diffusion heads untested — but ±7-8pp is below the n=1 noise
-  floor, so 2 seeds or a wider shift must be decided *before* running); counterfactual
-  enforcement (MemCorr) as the antidote to ignored conditioning.
-
-Depth stays out of scope for now (RGB-only): the cost is that simulator-verified pixel
-correspondences are unavailable, leaving the epipolar form above.
+**Then the M5 write-up** — assembled from committed `eval_log.json` alone (no GPU): the M1 vs L1
+vs M3 degradation comparison across all three tasks, with lift filled in by run (a). See
+`PROGRESS.md` *`[2,7]`* and *M3* for the two capability statements it rests on.
 
 ## M5 — single-novel-view inference (+ optional distillation)
 
-**Most of it already exists, and that is the thing to decide about.** Fusion accepts
-N=1 and M3 was trained with randomized N precisely so that N=1 inference is *in
-distribution*: `eval_novel_view.py --m3-slots K` publishes the perturbed camera pose
-(read back from the simulator) into a single slot, and that path is already what produced
-every M3 number — square infers at N=1 with 0.55 success on held-out azimuths. So the
-capability M5 was written to deliver is measured, not pending.
+**Most of it already exists, and that is the thing to decide about.** Fusion accepts N=1 and the
+N=1 inference path is already what produced every M3 number: `eval_novel_view.py --m3-slots K`
+publishes the perturbed camera pose (read back from the simulator) into a single slot. Square
+infers at N=1 with 0.55 success on held-out azimuths. So the capability M5 was written to deliver
+is **measured, not pending**.
 
-What remains is the **optional distillation stage**: a single-view student encoder
-regressing the frozen teacher's multi-view fused latent `z_g`.
+What remains is the **optional distillation stage**: a single-view student encoder regressing the
+frozen teacher's multi-view fused latent `z_g`.
 
-**Premise, and why it should be re-examined first.** Distillation is only worth running
-if the fused latent carries something the single-view path cannot. The N>1 result shows
-the capability lives in the *training signal* — a model trained with one view per sample
-scores L1's floor — so the student would be distilling a latent whose advantage comes from
-training-time sample diversity, not from the inference-time computation. No result so far
-demonstrates that a student would gain anything. Before coding it, the deciding
-measurement is whether `z_g` at N=1 (single novel view) predicts behaviour better than the
-N=1 encoder's own output — pick a probe that can fail.
+**Premise, and why it should be re-examined first.** Distillation is only worth running if the
+fused latent carries something the single-view path cannot. The N>1 result shows the capability
+lives in the *training signal* — a model trained with one view per sample scores L1's floor — and
+`[2,7]` shows N=1 *inference* works without ever training at N=1. No result so far demonstrates
+that a student would gain anything. Before coding it, the deciding measurement is whether `z_g` at
+N=1 (single novel view) predicts behaviour better than the N=1 encoder's own output — pick a probe
+that can fail.
 
-**Gate if it is built:** final sweep tables against M1's degradation curves — the
-reference the whole project exists to beat.
+**Gate if it is built:** final sweep tables against M1's degradation curves — the reference the
+whole project exists to beat.
+
+## Backlog — training distribution (deferred)
+
+The next model update is a **training-distribution** change, not an architecture one: the ladder
+showed view count and view quality are what move behaviour, while the conditioning, the aux heads
+and the encoder architecture at N=1 are all inert. Ranked, none scheduled.
+
+1. **Dense / continuous camera-pose pool.** The full version samples from a continuous
+   distribution and holds out *regions* (an elevation band or azimuth wedge), not poses. InfiNoVA
+   (2026) does this and reports 5.4× VISTA augmentation and 1.7× better than five physical
+   cameras. Costs a render and disk (~8 GB at 65 poses for square), not IO. **Trap: N=1 per
+   sample is L1, which already fails** — the pool must keep N>1.
+2. **Contiguous-window probe first** — free, from the existing ring: sample *contiguous* azimuth
+   windows instead of uniform subsets, which approximates a dense pool's local structure without
+   any new render. This is the cheap test of whether (1) is worth its render.
+3. **A dense-pool experiment proper** needs **two arms** — the tight-window pool versus a matched
+   baseline on the same rebuilt pipeline — because new-distribution numbers cannot be compared
+   against committed ones without confounds.
+4. **A run with per-epoch checkpoints.** The only way to order collapse against the behavioural
+   failure, which no existing run can do (they save only `topk` + `latest`). Note
+   `training.checkpoint_every` exists but `latest.ckpt` is overwritten each epoch, so per-epoch
+   *history* needs a light in-loop hook saving latents (~3.7 MB/epoch), not checkpoints (4.6 GB).
+5. **An instrument sensitive to *correctness*, not presence** — the live specification of the
+   open question (DETAIL Appendix B3, and *Proprioception dropout* Result 3 in the same file).
+   Its verdict must not depend on which scenes are probed, because `image→action sensitivity` is
+   not a scalar. Design work, no GPU.
+
+## Parked — findings kept, investigation stopped
+
+One line each; the measurements, anchors and caveats are in `PROGRESS_DETAIL.md` Appendix B and
+Part 2.
+
+- **Encoder collapse** — explains `[1,2]`'s floor and L1's task split; not necessary for
+  failure, since `[1,3]` fails with a healthy encoder. (DETAIL *Collapse is a failure mode*.)
+- **The `[1,3]` second failure mode** — the live open question, now without a candidate
+  mechanism. (PROGRESS.md *The second failure mode*.)
+- **Proprioception / balance** — refuted at a pre-registered gate; the intervention was
+  never launched. (DETAIL Appendix B2.)
+- **The `m3v15` latent gap** — filled; turned the `[1,3]` anomaly into a ladder-wide
+  monotone anti-correlation between the latent statistics and success.
+  (DETAIL *The `m3v15` latent gap*.)
+- **Instrument diagnostics** — the rules a future measurement must obey. (DETAIL Appendix B3.)
 
 ## Cheap open runs
 
-Deferred deliberately, each one config line or one rerun. Listed in the order they would
-add information per GPU-hour; full rationale in `PROGRESS.md`'s open questions.
-
 | run | status | cost |
 |---|---|---|
-| `view_count_range=[1,2]` / `[1,3]` | ✅ **run** — 0.028/0.043 and 0.080/0.073, both floor | done |
-| `view_count_range=[1,5]` | ✅ **run** — **0.456/0.373**, the knee | done |
-| `view_count_range=[2,7]` | open — "N>1 needed" vs "*variable* N needed", the only cell that answers it directly | **~4 h, not ~2 h** (mean active N = 4.5 exceeds `m3off`'s 4.0) |
-| ~~`view_count_range=[1,4]`~~ | skipped deliberately — the stop-rule resolution chose a large jump over a crawl | — |
-| ~~`view_count_range=[2,2]`~~ | rejected — it never trains at N=1, so a floor is unreadable on its own (either "≤2 views insufficient" or "N=1 inference out of distribution") | — |
-| re-train M1's baselines | was the *original single-view baseline itself* collapsed? Would make the collapse story one story from M1 onward rather than two | 1–2.5 h per task |
-| a run with per-epoch checkpoints | the only way to order collapse against the behavioural failure | 1 run |
-| second seed on `[1,5]` | the working rung is n=1, and its held-out number is the one the project would build on | ~2 h |
-| lift + `m3on` | do we regress the one task L1 already solves | ~1 h |
-| ±60° training pool | how much view *quality* alone buys | one render + run |
-| can `m3plucker` / `m3eef` | the cheap way back into the conditioning question — but their **checkpoints were deleted** 2026-09-24, so this is now a re-train | ~2 h each + 9 GB |
+| lift + `m3on` | **promoted to main line (a)** | ~1 h |
+| ±60° pool at `[1,5]` | **promoted to main line (c)** | ~2 h |
+| `view_count_range=[2,7]` | ✅ done — indistinguishable from `[1,7]` | — |
+| re-train M1's baselines | ✅ done — not collapsed | — |
+| can `m3plucker` / `m3eef` | open, and now a **re-train**: their checkpoints were deleted 2026-09-24. The cheap way back into the conditioning question, already answered on square | ~2 h each |
+| second seed on `[1,5]` | **promoted to main line (b)** | ~2 h |
+| more rungs on the ladder | rejected — the ladder closed at five rungs and no further rung is planned | — |
 
 ## Out of scope for now
 

@@ -102,26 +102,45 @@ without re-collecting demonstrations for that camera.
 
 ## 6. Status and milestones
 
-See `PLAN.md` for the concrete milestone plan and `PROGRESS.md` for the current
-state of the work. In short:
+See `PLAN.md` for the live plan and `PROGRESS.md` for the evidence. In short, as of
+2026-09-26:
 
 - **M1 (done)** — single-view DP baseline + novel-view evaluation harness on
-  robomimic (Square/Lift/Can PH). Baselines trained and swept: success
-  collapses to ≈0 at ±15° azimuth on all tasks — the reference curve M3–M5
-  must beat. Results in `PROGRESS.md`.
-- **M2** — multi-view data: re-render demonstrations from many camera poses,
-  storing per-view images, camera parameters, and camera-frame actions.
-- **M3** — view-conditioned encoder + fusion (Plücker + action-history
-  conditioning); drop-in replacement for the existing obs encoder.
-- **M4** — per-view auxiliary action heads and their loss.
-- **M5** — single-novel-view inference (+ optional distillation), evaluated
-  against the M1 degradation curve.
+  robomimic (Square/Lift/Can PH). Success collapses to ≈0 at ±15° azimuth on all
+  three tasks — the reference curve the later milestones must beat.
+- **M2 (done)** — multi-view data: demonstrations re-rendered from a 13-pose
+  azimuth ring, validated by an N=1 fidelity gate that reproduces M1's whole
+  degradation curve.
+- **L1 (done)** — view diversity alone, with no pose information: it *solves* lift
+  out to ±75° and destroys square and can, failing even at the poses it trained on.
+- **M3 (done)** — view-conditioned encoder + fusion. It solves square and can at
+  held-out viewpoints. **§2.2's fusion works; §2.1's geometric conditioning does
+  not** — turning off the Plücker map and the camera-frame history changes nothing
+  measurable. What carries the gain is multi-view *sampling*: the same encoder
+  forced to one view per sample scores at L1's floor.
+- **M4 (done)** — per-view auxiliary heads. The mechanism learns (auxiliary loss
+  falls 52×) and the behaviour does not move (+0.02/+0.04); the information they
+  target was already in `z_v`.
+- **how much view diversity (answered)** — a knee between a mean of 3.0 and 4.0
+  active views, not a slope; and enough views *on average* is the ingredient, not
+  the presence of N>1.
+- **M5 (capability measured, distillation not coded)** — every M3 number is
+  already a single-camera N=1 inference at a novel pose, so the deployment setting
+  §3 asks for is measured rather than pending. The optional distillation stage
+  remains open, and its premise — that the fused latent carries something the
+  single-view path cannot — is not established.
 
 ## 7. Open questions
 
 - How much view diversity is needed for generalization — 2 demo views, or
-  re-rendered views at many poses?
+  re-rendered views at many poses? *(Answered: a knee between a mean of 2.0 and 3.0
+  active views, then graded — `PROGRESS.md` *N-diversity ladder*. Two demo views is
+  not enough, and the availability of N=1 samples is not the ingredient.)*
 - Do the per-view auxiliary heads need the camera-frame action history as
   *conditioning* as well as the Plücker map, or is one of the two sufficient?
+  *(Answered: neither moved behaviour — the conditioning is inert in the behaviour
+  while live in the latent, and the aux heads are behaviourally null either way.)*
 - How well does the method extrapolate beyond the azimuth range seen in
-  training?
+  training? *(Partly answered: on the elevation axis it holds going up — 0.18–0.34 at
+  ±15° where M1 is ≈0 — and fails going down on square. The asymmetry is
+  unexplained.)*

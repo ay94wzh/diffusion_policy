@@ -1,9 +1,19 @@
 # NOTES — environment, runbooks, operations
 
-Practical material for running this project on the remote training box. Results and
-methods live in `PROGRESS.md`; the milestone plan in `PLAN.md`.
+Practical material for running this project. Results live in `PROGRESS.md`; the full protocol,
+the investigation log and the appendices (tables index, parked investigations, corrections) in
+`PROGRESS_DETAIL.md`; the plan in `PLAN.md`. **This checkout is the coding-and-documents machine**: code, documents and the
+committed records live here; the demonstrations, the multi-view zarrs and every checkpoint live on
+the **remote training machine**, where the runbooks below execute. Closed runbooks are in
+Appendix N1/N2.
 
 ## Environment
+
+- **The multi-view zarrs and every checkpoint are on the training machine, not here.** A runbook
+  that names `data/outputs/run_*/checkpoints/latest.ckpt` or `data/multiview/*_ring13.zarr` is
+  talking about that machine. Locally, `data/` holds only the committed records.
+- **Disk on the training machine is the binding constraint of any campaign.** Check `df -h`
+  there as step 0. A checkpoint is 4.62 GB; `topk.k=1` plus `latest.ckpt` is ~9.2 GB per run.
 
 - conda env **`robodiff`**: torch **2.8.0+cu128** (sm_120), robosuite 1.2.0, robomimic
   0.2.0, mujoco_py 2.0.2.13, numcodecs 0.10.2, wandb 0.15.12.
@@ -29,11 +39,11 @@ methods live in `PROGRESS.md`; the milestone plan in `PLAN.md`.
 
 ## Runbook
 
-All commands run from the repo root. **201 epochs, not 200**: checkpoint and rollout fire
-on `epoch % 50 == 0` and there is no save at the end of training, so 201 makes epoch 200
-fire (200 would stop at 150).
+All commands run from the repo root, on the training machine. **201 epochs, not 200**: checkpoint
+and rollout fire on `epoch % 50 == 0` and there is no save at the end of training, so 201 makes
+epoch 200 fire (200 would stop at 150).
 
-### Training
+### Training (live)
 
 ```bash
 # M1 single-view baseline
@@ -61,51 +71,6 @@ python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
 #   Committed rungs (mean active N): [1,1] 1.0 m3fixedn1 | [1,2] 1.5 m3v12 | [1,3] 2.0 m3v13
 #                                    [1,5] 3.0 m3v15    | [1,7] 4.0 m3off
 
-# Proprioception dropout -- the `[1,3]` balance test. No new config: a policy
-#   _target_ override, and the dropout lives in compute_loss only (so rollouts,
-#   eval, screen_conditioning.py and probe_relpose.py are untouched).
-#
-#   `+policy.proprio_dropout=0.5` -- the `+` is REQUIRED, and the runbook's original
-#   bare `policy.proprio_dropout=0.5` (commit 61e82c4) is rejected at launch. Hydra 1.2
-#   sets struct mode unconditionally on the config root
-#   (hydra/_internal/config_loader_impl.py:256-259: "One must use + to add new fields
-#   to them"), and the key is declared in NO config -- unlike M4's `aux_loss_weight`,
-#   which works bare only because it lives in train_..._m4.yaml.
-#   DO NOT "fix" it by declaring the key in the shared m3 config instead: that config
-#   is used by plain-M3 runs whose _target_ is DiffusionUnetImagePolicy, which would
-#   swallow the unknown kwarg into self.kwargs and forward it to scheduler.step --
-#   a TypeError at ROLLOUT time, hours in (the same trap the policy docstring names).
-#
-#   Gate, pre-registered 2026-09-25 BEFORE the run: a NON-NULL lift at [1,3] is
-#   consistent with the balance mechanism but does not establish it -- proprio dropout
-#   is also a generic regulariser. The separating control is an arm the mechanism
-#   predicts NO lift for: m3v12 ([1,2]), which fails by a severed image path (collapsed
-#   encoder), so dropout should not rescue it (~1.35 h + a sweep). The mechanism claim
-#   is not made until that control is run and does not lift. A NULL at [1,3] needs no
-#   control and is decisive on its own.
-#
-#   No p=0 control run is needed either: at proprio_dropout=0.0 the class delegates to
-#   super().compute_loss before drawing any RNG, so a p=0 rerun is bit-identical to
-#   m3v13 -- m3v13 IS the p=0 arm. The p=0.5 arm is NOT RNG-locked to it (the mask draw
-#   precedes the noise draw), so this is a run-to-run comparison at the usual n=1
-#   resolution: a delta below ~0.1 is unmeasured.
-python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
-  task=m3_plucker_image_abs_multiview task.task_name=square \
-  task.dataset.view_count_range="[1,3]" +policy.proprio_dropout=0.5 \
-  policy._target_=diffusion_policy.policy.diffusion_unet_image_policy_propdrop.DiffusionUnetImagePolicyPropDrop \
-  policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false \
-  training.seed=42 training.num_epochs=201 training.device=cuda:1 \
-  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
-  logging.project=diffusion_policy_view training.resume=false \
-  hydra.run.dir=data/outputs/run_square_m3v13_pdrop_s42_200ep
-#   launch gate: grep -q propdrop <log>  -- the policy prints an ACTIVE banner at
-#   construction, so a silently-dropped override cannot be read as "dropout didn't help"
-#   ~29 s/epoch at mean-N 2.0; ~43 s means view_count_range did not take
-#   val_loss is a THIRD incomparable val_loss: self.training is always True in this
-#   workspace (it evals the EMA copy, never putting self.model in eval mode), so
-#   dropout is live during validation. Compare it only at matched epochs.
-#   CPU test first: python tests/test_prop_dropout.py
-
 # M4 aux heads (control: policy.aux_loss_weight=0.0)
 python train.py --config-name=train_diffusion_unet_image_workspace_m4 \
   task=m4_aux_image_abs_multiview task.task_name=square policy.aux_loss_weight=1.0 \
@@ -119,7 +84,64 @@ Multi-seed on a multi-GPU box: `ray start --head --num-gpus=3` then
 `ray_train_multirun.py --config-dir=. --config-name=<cfg> --seeds=42,43,44
 --monitor_key=test/mean_score -- multi_run.run_dir='...' multi_run.wandb_name_base='...'`.
 
+### The three main-line runs
+
+The three runs `PLAN.md` approves, with their launch gates. Each is one CLI override of an
+existing config plus, for the ±60° pool, one new task yaml.
+
+```bash
+# (a) M3 on lift -- the one task L1 already solves. ~46 min.
+python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
+  task=m3_plucker_image_abs_multiview task.task_name=lift \
+  policy.obs_encoder.use_plucker=true policy.obs_encoder.use_eef_hist=true \
+  training.seed=42 training.num_epochs=201 training.device=cuda:0 \
+  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view \
+  hydra.run.dir=data/outputs/run_lift_m3on_s42_200ep
+
+# (b) second seed on [1,5] -- the working rung is n=1. ~2.0 h.
+python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
+  task=m3_plucker_image_abs_multiview task.task_name=square \
+  task.dataset.view_count_range="[1,5]" training.seed=43 \
+  policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false \
+  training.num_epochs=201 training.device=cuda:1 \
+  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view training.resume=false \
+  hydra.run.dir=data/outputs/run_square_m3v15_s43_200ep
+
+# (c) ±60 deg view pool at [1,5] -- view QUALITY at matched mean-N 3.0. ~2.0 h.
+python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
+  task=m3_plucker_image_abs_multiview_pm60 task.task_name=square \
+  training.seed=42 training.num_epochs=201 training.device=cuda:1 \
+  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view training.resume=false \
+  hydra.run.dir=data/outputs/run_square_m3pm60_s42_200ep
+```
+
+**The ±60° config.** New file
+`diffusion_policy/config/task/m3_plucker_image_abs_multiview_pm60.yaml` — a copy of
+`m3_plucker_image_abs_multiview.yaml` with **five** rgb slot keys (`view_00_image` …
+`view_04_image`; drop the last two) and `train_view_pool: &train_view_pool [2, 4, 6, 8, 10]`.
+Ring index 0 = az −90°, step 15°, so `[2,4,6,8,10]` = (−60, −30, 0, +30, +60) — the two ±90° views
+are the ones dropped. `view_count_range: [1, 5]` and `env_runner.m3_slots: 5`. **The dataset
+enforces `n_slots <= len(view_pool)`**, so this cannot be done as an override of the 7-slot
+config. Likeliest mechanical error: dropping indices 10/12 instead of 0/12, i.e. removing +60/+90
+instead of ±90.
+
+**Launch gates, all three:**
+
+- **Epoch time must match the cost model** (~14 s/epoch for lift; ~36 s/epoch at mean-N 3.0,
+  which is what `view_count_range=[1,5]` should read). A far-off value means an override was
+  silently ignored — e.g. ~43 s means the range did not take.
+- **`--m3-slots` must equal the checkpoint's slot count** at eval time: `7` for runs (a) and (b),
+  **`5` for run (c)**.
+- **The sweep's 50 episode-seed keys must be set-identical** to the committed sweeps'
+  (`test_start_seed: 100000` is what pairs them).
+- `screen_collapse.py` on every new checkpoint — matched `--view-count-range`, `--random-init`,
+  and `-o` (see *Collapse screen*).
+
 ### View count (N per sample)
+
 
 `view_count_range` is drawn in **one place**, `multiview_image_dataset.py` `_m3_slots`:
 `k_active = np.random.randint(lo, hi + 1)` (uniform over the range, inclusive) then
@@ -156,7 +178,11 @@ prefix (`0..k_active-1`); the rest are zero with mask 0.
   evaluation here is **N=1** (`eval_novel_view.py::_serve_m3` puts the single live camera in
   slot 0 and zeroes the rest). At N=1 the fusion softmax is over one unmasked key, so the
   learnable query has *no effect* — that path is a degenerate corner of the module. M3
-  randomises N precisely so that corner stays in-distribution; a cell trained at `[2, 2]` or
+  randomises N so that corner stays in-distribution; **that reason is refuted (`[2,7]` infers at
+  N=1 as well as `[1,7]` without ever training there — `PROGRESS_DETAIL.md` Appendix C,
+  2026-09-25)**, but
+  the practice still stands on a different one: keeping N=1 in range is what makes each ladder
+  rung differ from `m3off` on exactly one axis. A cell trained at `[2, 2]` or
   `[k, k]` forfeits that, and a floor from it cannot be read as a diversity statement.
 
 ### Evaluation
@@ -180,40 +206,8 @@ regardless of the flags. `eval_log.json` is a flat dict keyed
 re-derived without re-running. `test_start_seed: 100000` in the env_runner config is what
 makes the episodes **paired** across viewpoints.
 
-### Relational probe, step 1a (`probe_relpose.py`)
-
-Measures what geometry a **frozen** checkpoint's latents already encode -- no training:
-absolute camera pose and camera-frame EE position from one view's `z_v`, relative pose
-from a view **pair**, and how stable `z_g` is across view subsets of the same state. It
-reads the checkpoint's own cfg, so it adapts to `use_plucker` / `use_eef_hist`.
-
-```bash
-# 0. step 1a is committed (87d1708). This checkout IS the box -- verified 2026-09-24: 2x
-#    RTX 5090, the run_square_m3*/checkpoints and data/multiview/square_ph_ring13.zarr all
-#    present locally -- so the runbook below runs in place. From another machine only:
-#    git push <remote> main && ssh <box> 'cd <repo> && git pull'
-
-# 0b. do the checkpoints still exist? disk has deleted weights here before (M1's went
-#     on 2026-09-19), so never assume the ones a runbook names are on the box
-ls -la data/outputs/run_square_m3*/checkpoints/ data/multiview/square_ph_ring13.zarr
-
-# 1. CPU checks first -- catches convention errors before trusting any number
-python tests/test_relpose_probe.py                  # seconds, no GPU, no data
-
-# 2. smoke: does the wiring work with the real zarr + checkpoint? MUST pass --mlp-steps,
-#    or the decisive column is skipped (see Traps -- the smoke passed while fit_mlp was
-#    broken). At this n the rel_pose numbers are underdetermined and mean nothing.
-python probe_relpose.py -c data/outputs/run_square_m3on_s42_200ep/checkpoints/latest.ckpt \
-  -o /tmp/probe_smoke -d cuda:1 --n-samples 64 --stability-states 8 --mlp-steps 200
-
-# 3. the pair that matters: rays on vs rays off (~50 s each). Runs 2026-09-24; results in
-#    PROGRESS.md *Relational probe (step 1a)*.
-for c in m3on m3off; do
-python -u probe_relpose.py -c data/outputs/run_square_${c}_s42_200ep/checkpoints/latest.ckpt \
-  -o data/probe_relpose_square_${c} -d cuda:1 --mlp-steps 2000
-done
-# m4on/m4off work too (same encoder, plus an inert aux head) -- optional third cell
-# -d cuda:1 unless cuda:0 is free -- another user habitually holds ~13 GB there
+For a K-slot model, `--m3-slots` must equal the **checkpoint's own** slot count — `7` for every
+M3 cell including `m3off`, `5` for the ±60° model.
 
 ### Latent grid (schema 2) — cross-cell comparison
 
@@ -339,152 +333,6 @@ python screen_collapse.py -c <run>/checkpoints/latest.ckpt -d cuda:0 \
   needs M3's per-slot cam keys). Since 2026-09-25 it also handles `view_subset` datasets (L1's),
   which have no `view_count_range` at all.
 
-### Conditioning screen (`screen_conditioning.py`)
-
-**This is the one that can see a policy failing while its representation is fine** — the other
-two tools measure whether information is *present*, and `m3v13` is the case where it is present
-and the policy still fails.
-
-```bash
-python screen_conditioning.py -c <run>/checkpoints/latest.ckpt -d cuda:0 \
-  -o data/screen_conditioning/<cell>_latest.json      # --n-obs 8 --seed 0 by default
-```
-
-It holds the diffusion sampling noise fixed (`torch.manual_seed(0)` before every
-`predict_action`) and varies one input path at a time, so a change in the output is
-attributable to that input rather than the sampler. Reported: `std` across the observations,
-over the action chunk, normalised by the chunk's mean absolute value.
-
-- **`image-only` near `0.0000` means the image path is severed** — the policy cannot see the
-  scene at all, which is what a collapsed encoder must produce. `m3v12` reads **2.59e-05**
-  against `m3off`'s 0.0068.
-- **Read the two paths separately, never their sum.** `global_cond` is
-  `concat([z_global, low-dim])` and the low-dim keys are 9 dims of proprioception that vary
-  across samples too. Measured together, the *collapsed* cell comes out the **most**
-  observation-sensitive (`m3v12` 0.0686) — its constant image riding along with normally
-  varying proprioception — which is the opposite of the truth.
-- Anchors: `m3off` 0.0068 / 0.0386 (image / proprio), `m3v13` 0.0067 / 0.0674, `m3v12`
-  2.59e-05 / 0.0686.
-- **Replicate before believing the balance reading.** Those anchors are `--n-obs 8 --seed 0`, and
-  the `[1,3]`-vs-`m3off` proprio contrast is the *only* mechanism anyone has proposed for
-  `[1,3]`'s floor — so it gets re-measured at scale before it is worth GPU-hours. Pre-registered
-  rule: the hypothesis lives only if `m3v13`'s proprio/image ratio exceeds `m3off`'s by **≥1.5×
-  across all three seeds**; at parity, the intervention below is off and the missing instrument
-  is the only route left.
-
-**Gate reading, formalised and pre-registered 2026-09-25 — committed BEFORE any n=64 screen
-was run, so it cannot be renegotiated against the numbers.** With `R_cell(s) =
-proprio_only / image_only` read from each run's JSON:
-
-- **Pass** iff `min over s in {0,1,2} of R_m3v13(s) / R_m3off(s) >= 1.5`.
-- **2-of-3 seeds above 1.5 is NOT support.** The rule says "across all three seeds"; a partial
-  result is recorded as *gate failed, reading ambiguous* — neither pass nor a clean parity.
-- **Clean parity** (every seed below 1.5, or ratios ≈ 1) is the branch that retires the
-  intervention: the only proposed mechanism for `[1,3]`'s floor dies, and the missing
-  instrument becomes the only route left.
-- **Structural note, so the statistic is not misread as more than it is.** The two image arms
-  are *equal by measurement* (0.0067 vs 0.0068 — no difference at all), so `R_m3v13/R_m3off`
-  is carried almost entirely by the proprio arm: 0.0674/0.0386 = **1.75×** at the default.
-  The gate therefore asks whether a 1.75× proprio gap survives replication, not whether a
-  two-factor contrast does.
-- `m3v12` rides along as a **control, not part of the rule**: its encoder is collapsed, so its
-  image arm should stay ~2.6e-05 and its reading cannot support anything.
-
-```bash
-# -d cuda:1: GPU 0 holds ~13 GB from another user (NOTES.md *Machine and timing*).
-# -o is NOT optional -- without it the number exists only in scrollback.
-for s in 0 1 2; do for c in m3v13 m3off m3v12; do
-python screen_conditioning.py -d cuda:1 --n-obs 64 --seed $s \
-  -c data/outputs/run_square_${c}_s42_200ep/checkpoints/latest.ckpt \
-  -o data/screen_conditioning/square_${c}_n64_s${s}.json
-done; done
-# reference points, also on disk: L1 lift (works, non-slot encoder) and L1 square (collapsed)
-# smoke ONE cell (-o /tmp/smoke.json) first: the tool has no assertions, and n_obs=1 would
-# print 0 for both arms -- the same misreading class as the :.4f bug below.
-```
-
-**Gate outcome, 2026-09-25 — FAILED, so the intervention is off and the propdrop run was NOT
-launched.** Read from the nine JSONs, not the console:
-
-| seed | `R_m3v13` | `R_m3off` | ratio | gate (≥1.5) |
-|---|---|---|---|---|
-| 0 | 38.53 | 22.59 | 1.705 | PASS |
-| 1 | 40.05 | 12.60 | 3.179 | PASS |
-| 2 | 16.20 | 28.56 | **0.567** | fail |
-
-`min` over seeds = **0.567** → the pre-registered *gate failed, reading ambiguous* branch
-(2-of-3 is not support). **Two defects in the instrument, both verified in code, are why it is
-ambiguous rather than clean parity:**
-
-1. **The observation draw was never seeded.** `screen_conditioning.py` seeds `torch` only
-   (line 75); `multiview_image_dataset` draws each sample's view subset with `np.random`
-   (lines 626/630). So every invocation draws a *different* view ensemble. `image_only` swings
-   **2.47×** (`m3v13`) and **2.27×** (`m3off`) across the three seeds — the whole instability.
-2. **The two cells were drawn at different view counts.** The dataset is instantiated from each
-   checkpoint's own cfg, so `m3v13` drew `[1,3]` (mean 2.0) while `m3off` drew `[1,7]`
-   (mean 4.0). Fewer live views → smaller ensemble spread → lower `image_only`, which is the
-   direction of the entire seed-0 gap. **This is the same confound the project already
-   corrected for `screen_collapse` on 2026-09-25.**
-
-**The clean quantity is decisive, and it is what the write-up rests on.** `proprio_only` is
-draw-independent — the proprio keys are the same 64 low-dim rows whichever views are live — and
-it is stable to 0.2–0.4% within each cell across all three runs: `m3v13` 0.35003, `m3off`
-0.34726, `m3v12` 0.34704. The proprio contrast is **1.008×**, so **the n=8 claim of a 1.75×
-proprio gap does not reproduce and the balance hypothesis as stated is refuted** — on the one
-arm the view draw cannot touch, independently of the gate's instability. This *confirms* the
-suspicion already recorded above ("what is solid here is the severed path, not the balance
-reading") rather than contradicting it. The control still works: `m3v12`'s image arm is
-2.4–5.0e-05, ~256× below the others.
-
-**Instrument fix, pre-registered 2026-09-25 before it was run.** `--view-count-range`
-(mirroring `screen_collapse.py`'s, via `probe_relpose._apply_range`) plus `np.random.seed(seed)`
-— **optional, default None = unchanged behaviour** so the flagless path stays as-is, and
-`cell_view_count_range` / `effective_range` are recorded in the JSON the way
-`screen_collapse.py` does, so the draw is auditable from the artifact.
-
-- **Role of the matched reading, fixed now.** It is a pre-declared *confound control*, following
-  the project's own precedent for this exact confound (the 2026-09-25 collapse-screen
-  correction, which re-measured matched and let the matched table supersede the first). It
-  **does not revisit the gate verdict** — that is closed: the intervention is off. Its purpose
-  is forward-looking, to give the project a *use*-sensitive instrument that is not
-  draw-confounded.
-- **Prediction, registered before the run.** If the ladder's latent anti-correlation extends
-  into behaviour-space, `image_only` at a matched `[7,7]` draw declines monotonically with
-  mean-N: `m3off` (4.0) > `m3v15` (3.0) > `m3v13` (2.0) > `m3v12` (1.5, at ~1e-05 — severed).
-  **The competing outcome is equally informative: `image_only` flat across cells**, meaning the
-  ladder's behavioural differences are invisible to this instrument too. Both are recorded as
-  results; neither is read as the other.
-- **Consequence to record, not to hide:** the three committed `*_latest.json` came from the
-  *unseeded* path, so they are **not reproducible** under the fixed code even at identical
-  flags. Their qualitative finding (m3v12's severed path) stands; their method is superseded.
-
-- **Print with `:.6g`, not `:.4f`.** The `:.4f` format turned 2.59e-05 into `0.0000`, which
-  was then written up as "bit-identical"; the number is 256× below the other cells, not zero.
-
-**Read the two arms at very different resolutions — this is the operational rule, and it cost
-this session a gate.** After the fix the tool is **bit-reproducible** at a fixed
-`(checkpoint, flags, seed)` (verified: `0.00752622` twice to 6 s.f.), so any remaining
-difference is real. But the two arms have different real variance:
-
-| arm | reproducibility | usable resolution |
-|---|---|---|
-| `proprio_only` | across-seed spread ≤ **0.4%**; draw-independent | resolves ~1% differences; **trust this one** |
-| `image_only` | across-seed spread **1.9–2.5×**, *even with the draw matched* | **cannot resolve anything below ~2×**; only a severed path (~300× down) is readable |
-
-- **Matching the draw does NOT reduce the image arm's spread** — measured, 1.92–2.50× matched
-  against 2.27–2.47× unmatched, so the earlier explanation (unseeded `np.random` + per-cell
-  ranges) was wrong even though both defects were real and the fix is still worth having.
-- **The deeper problem: `image_only` is not a scalar.** At a fixed `[7,7]` range `k` is always
-  7, so every cell sees the *same* view order for a given seed (verified directly) — the
-  comparison is matched, differing only in the weights — and **the cell rank still flips**:
-  the `m3v13`/`m3off` ratio runs 0.512 / 0.272 / 1.362 across seeds 0/1/2. Same inputs,
-  opposite conclusion. So a cross-cell `image_only` comparison needs either a design whose
-  verdict does not depend on the probe ensemble, or many seeds — **not** more `--n-obs`.
-- Corollary for the gate that used it: the `R = proprio/image` ratio inherits the image arm's
-  instability and cannot carry a 1.5× decision. The pre-registered n=64 gate failed
-  (min ratio 0.567) for that reason, and the balance hypothesis was settled instead on
-  `proprio_only`, which is the arm that is stable.
-
 ### Resume and long campaigns
 
 Resume with the same run dir and `training.num_epochs=<epochs still wanted>`; the loop runs
@@ -532,6 +380,9 @@ python generate_multiview_dataset.py \
   never read the zarr back. Check for all-zero *frames* (not zero pixels; square and can
   legitimately contain 3 and 1 pure-black pixels per 84,672).
 
+**The generated zarrs are on the training machine**; a runbook step that reads them must begin by
+checking they exist, and this runbook is live again whenever they must be rebuilt.
+
 ## Machine and timing
 
 2× RTX 5090 (32 GB each), 24 cores, 125 GB RAM, shared with other users — load spikes from
@@ -546,7 +397,7 @@ is moot).
 | M3 square | **43 s/epoch** at `num_workers=14` — **compute-bound**: 8 workers still gave 41 s under 2-GPU contention; **4 workers fell to 81 s** (decode-bound) |
 | M3 N=1 gate / can | 23 / ~30 s per epoch |
 | M3 rollout | ~6 min (n_envs=14, 56 episodes) |
-| `azimuth_interp` sweep | ~40 min (11 viewpoints × 50 episodes); ~46 min with two sweeps sharing the box |
+| `azimuth_interp` sweep | ~46 min (11 viewpoints × 50 episodes); ~52 min with two sweeps sharing the box |
 | `azimuth_sweep3` / `elevation_az0` | ~12 min |
 | fixed-N=1 cell | 21 s/epoch |
 
@@ -560,63 +411,34 @@ is moot).
 
 ## Disk
 
-Chronic constraint: the root volume ran at 97–100% during M1 and was still ~98% (47.8 GB
-free) at the start of the N>1 session. `/data` (15 TB) exists but is **owned by another
-user and not writable**. Check `df -h` as step 0 of any campaign — the M4 run matrix
-originally had no disk gate and that was the binding constraint all session.
+Chronic constraint on the **training machine**: check `df -h` as step 0 of any campaign. (This
+checkout has room; the volume that matters is the one holding the zarrs and the checkpoints.)
 
-- A checkpoint is **4.62 GB** (policy + EMA + Adam state); `topk.k=1` plus `latest.ckpt`
-  ≈ **9.2 GB per run**. Nine M3 runs needed ~83 GB.
-- **2026-09-25 session, in order — 15 GB → 18 GB free, having first paid 17.6 GB out.** Freed
-  four topks whose cells' questions were closed (`m3n1gate`, `square_randview_s42`,
-  `can_m3on`, `lift_randview`), each keeping its `latest.ckpt` so no cell lost probeability;
-  `m3off` untouched as always. Then two new runs (`m3v27`, `abs_single_..._retrain200ep`) took
-  17.4 GB. Then the **first byte-identical duplicate this project has found**: the M1 re-train's
-  `epoch=0200-*` topk was byte-identical to its own `latest.ckpt` (the case predicted above — a
-  topk named for the *final* epoch is saved back-to-back from the same in-memory state), which
-  released 4.4 GB for nothing. Prior `cmp` sweeps across 25 files had found none, so the rule had
-  released nothing until now.
-- **Before deleting anything, `cmp` it against its `latest.ckpt`** — and note that the M1 case
-  shows the payoff is real rather than theoretical. Deleting a *topk* never removes a cell's
-  probeability as long as `latest.ckpt` stays, which is what makes these deletions safe under the
-  probe-first rule.
-- **Size a run with `du`, never by counting checkpoint files.** `topk.k=1` writes a second
-  file only when the best rollout is *not* the final epoch, which is a per-run coin flip. As of
-  2026-09-25 (end of session), **two-file (8.7 GiB)** dirs: `m3v13`, `m3v15`, `m3v27`, `m4on`,
-  `m4off`, `can_randview`, `lift_n1gate`. **One-file (4.4 GiB)**: `m3off`, `m3on`, `m3v12`,
-  `m3n1gate`, both `square_randview` seeds, `can_m3on`, `lift_randview`,
-  `abs_single_retrain`. The *same* run dir can move between the two columns — `m3n1gate` went
-  2 → 1 when its topk was freed, `m3v27` arrived at 2 — so never carry an old count forward.
-  Estimating "3 × 4.4 GiB" for a deletion that in fact released 17 GiB is exactly the error this
-  note exists to prevent.
-- **The top-k file is often byte-identical to `latest.ckpt`** — the workspace saves both
-  back-to-back from the same in-memory state, so a topk named `epoch=0200-*` on a 201-epoch
-  run is a duplicate. **Compare with `cmp`, never by size**: of 19 checkpoints checked on
-  2026-09-24, exactly one was byte-identical while six others were the same size and genuinely
-  different models. **Re-checked 2026-09-25 across the then-current 25 files: none were
-  byte-identical**, so this rule released nothing on that date — the 4 GiB reclaimed came from
-  deleting an already-probed topk outright, not from a duplicate.
-- **The M1 (`*_abs_single`) weights were deleted on 2026-09-19** to make room for M3. Their
-  `logs.json.txt`, `media/` and `.hydra/` survive and every number derived from them is
-  committed. Recovery is a 1–2.5 h retrain per task from the runbook above.
-- **`run_square_{m3plucker,m3eef,m3fixedn1}_s42_200ep/checkpoints/` were deleted 2026-09-24**
-  (17 GiB, 20 → 37 GB free) for the N-diversity ladder. Delete **only** `checkpoints/` — the
-  git-tracked `logs.json.txt`, `media/` and `.hydra/` live beside it. All three cells' numbers
-  and sweeps are committed and their questions closed: `m3plucker`/`m3eef` by 1a's finding
-  that the conditioning is inert behaviourally, `m3fixedn1` by the resolved N>1 confound.
-  **`m3off` is never a deletion candidate** — it is the ladder's anchor and the only cheap
+- A checkpoint is **4.62 GB** (policy + EMA + Adam state); `topk.k=1` plus `latest.ckpt` ≈
+  **9.2 GB per run**. Size a run with `du`, never by counting checkpoint files — `topk.k=1` writes
+  a second file only when the best rollout is *not* the final epoch, which is a per-run coin flip,
+  and the same run dir can move between the two columns as files are freed. Estimating "3 × 4.4
+  GiB" for a deletion that in fact released 17 GiB is exactly the error this note exists to
+  prevent.
+- **Before deleting anything, `cmp` it against its `latest.ckpt`** — the top-k file is sometimes
+  byte-identical to it, because the workspace saves both back-to-back from the same in-memory
+  state. **Compare with `cmp`, never by size**: of 19 checkpoints checked on 2026-09-24, exactly
+  one was byte-identical while six others were the same size and genuinely different models. On
+  2026-09-25 the rule paid off exactly once — the M1 re-train's `epoch=0200-*` topk — and a later
+  `cmp` sweep across 25 files found none, the two statements being reconciled by order within the
+  day. *Flag if that ordering is wrong.*
+- **Delete only `checkpoints/`**, never the run dir: the git-tracked `logs.json.txt`, `media/` and
+  `.hydra/` live beside it.
+- **`m3off` is never a deletion candidate** — it is the ladder's anchor and the only cheap
   eval-path-drift check.
-- **Rule, learned the hard way on 2026-09-25: do not delete a cell's weights until its LATENT
-  has been probed, not merely its behaviour measured.** `m3fixedn1` was deleted the same day
-  its behavioural question closed — and within hours a mechanistic question arose (is the
-  floor an encoder collapse?) for which it was the natural second floor pole. It survives by
-  luck: `m3v12` turned out to be a *better* pole, because it moves mean-N where `m3fixedn1`
-  does not. A behavioural null does not close a cell; it only closes the behavioural question.
-  Probing is free and needs only the checkpoint, so the insurance costs nothing but a rule.
-- **`data/robomimic_image.zip` (84.75 GB) does not exist on this box** — only the three
-  `ph` tasks (`square`, `can`, `lift`) are available, with both `image.hdf5` and
+- **Do not delete a cell's weights until its LATENT has been probed, not merely its behaviour
+  measured.** Learned the hard way on 2026-09-25: `m3fixedn1` was deleted the day its behavioural
+  question closed, and within hours a mechanistic question arose for which it was the natural
+  pole. A behavioural null does not close a cell; it only closes the behavioural question.
+  Probing is free and needs only the checkpoint.
+- **`data/robomimic_image.zip` (84.75 GB) does not exist on the training machine** — only the
+  three `ph` tasks (`square`, `can`, `lift`) are available, with both `image.hdf5` and
   `image_abs.hdf5`. Anything sized against that archive needs re-checking.
-- No cleanup was needed for M2: the full run consumed 4.5 GB and left 23 GB free.
 
 ## Traps
 
@@ -632,6 +454,7 @@ convention against an independent numpy projector at **non-identity** poses and 
 mutation power checks; `tests/test_aux_action_heads.py` does the same for the rot6d
 transform, including the executable assertion that the wrong 6×6 shortcut *passes* at
 `R_c == I` and fails everywhere else.
+
 
 ### Silent degradation
 
@@ -667,11 +490,36 @@ the `rel_pose` ridge scored 23× *worse* than the mean predictor purely from
 underdetermination (566 train pairs against 1536 features); at full scale it beats it. A
 small-`n` ridge null on a bilinear target reads as "no geometry" and means nothing.
 
+
 ### M2-specific
 
 The generator's gates are computed only at the end of a run; `--limit-demos 5` is the
 mitigation. The driver should wipe each output before starting and abort the batch on a
 failed gate (see the runbook).
+
+### Hydra struct mode: new policy kwargs need a `+`
+
+A key that is declared in **no** config cannot be set with a bare `key=value` — Hydra 1.2 sets
+struct mode unconditionally on the config root (`hydra/_internal/config_loader_impl.py:256-259`:
+"One must use + to add new fields to them") and rejects the override at launch. Use
+`+policy.<key>=...`. M4's `aux_loss_weight` works bare only because it lives in
+`train_..._m4.yaml`.
+
+**Do not "fix" this by declaring the key in the shared m3 config**: that config is used by
+plain-M3 runs whose `_target_` is `DiffusionUnetImagePolicy`, which would swallow the unknown
+kwarg into `self.kwargs` and forward it to `scheduler.step` — a `TypeError` at **rollout** time,
+hours in (the same trap the policy docstring names).
+
+### Regenerating the multi-view zarr: the action convention is not checked
+
+`generate_multiview_dataset.py` converts actions with
+`_convert_actions(raw_actions, abs_action=True)` (`robomimic_replay_image_dataset.py:223`), which
+splits `pos(3) / axis-angle(3) / gripper(1)` and converts **only the rotation** to rot6d — the
+position dims pass through untouched. So it cannot repair a wrong position convention, and the
+generator's gates check **images** (gate 1) and the **projected gripper** (gate 2) only: **a
+wrong-action zarr would pass every gate silently.** If the zarrs are ever regenerated, gate the
+actions deliberately — gate 1 reproducing its committed per-256 values proves the states and
+images, not the actions.
 
 ## Artifacts
 
@@ -686,9 +534,10 @@ failed gate (see the runbook).
 | **conditioning screens** | `data/screen_conditioning/*.json` | ✅ |
 | N-diversity ladder sweeps | `data/eval_{interp,el}_square_{m3v12,m3v13,m3v15}/` | ✅ |
 | ladder failure-mode videos | `data/eval_smoke_square_m3v12/media/<viewpoint>/*.mp4` | ✅ |
-| weights (4.6 GB each) | `data/outputs/run_*/checkpoints/latest.ckpt` | ❌ — rsync only |
-| campaign logs (ordered, timestamped) | `data/m3_campaign.log`, `data/m4_campaign.log` | ❌ on the box |
-| multi-view zarrs | `data/multiview/<task>_ph_ring13.zarr` (819k images, 4.5 GB) | ❌ n/a |
+
+| weights (4.6 GB each) | `data/outputs/run_*/checkpoints/latest.ckpt` | ❌ — **on the training machine**; rsync only |
+| campaign logs (ordered, timestamped) | `data/m3_campaign.log`, `data/m4_campaign.log` | ❌ on the training machine |
+| multi-view zarrs | `data/multiview/<task>_ph_ring13.zarr` | ❌ — **on the training machine** |
 | robomimic PH datasets | `data/robomimic/datasets/<task>/ph/{image,image_abs}.hdf5` | ❌ n/a |
 
 Move weights between machines with
@@ -697,3 +546,165 @@ Move weights between machines with
 Training curves and rollout videos are on wandb, project **`diffusion_policy_view`**
 (account `zihan-wa23-tsinghua-university`); the M1 runs are square `runs/1h4oj5p6`, can
 `runs/q95ylpsc`, lift `runs/poearmxq`.
+
+## Appendix N1 — Closed runbooks
+
+### Relational probe, step 1a (`probe_relpose.py`)
+
+Measures what geometry a **frozen** checkpoint's latents already encode -- no training:
+absolute camera pose and camera-frame EE position from one view's `z_v`, relative pose
+from a view **pair**, and how stable `z_g` is across view subsets of the same state. It
+reads the checkpoint's own cfg, so it adapts to `use_plucker` / `use_eef_hist`.
+
+```bash
+# 0. step 1a is committed (87d1708). STEP 0b IS NOW THE BINDING ONE: this runbook needs
+#    the checkpoints and the ring13 zarr, which live on the TRAINING machine, not in this
+#    checkout (2026-09-26). Run it there, or rsync the weights over first.
+
+# 0b. do the checkpoints still exist? disk pressure has deleted weights before (M1's went
+#     on 2026-09-19), so never assume the ones a runbook names are there
+ls -la data/outputs/run_square_m3*/checkpoints/ data/multiview/square_ph_ring13.zarr
+
+# 1. CPU checks first -- catches convention errors before trusting any number
+python tests/test_relpose_probe.py                  # seconds, no GPU, no data
+
+# 2. smoke: does the wiring work with the real zarr + checkpoint? MUST pass --mlp-steps,
+#    or the decisive column is skipped (see Traps -- the smoke passed while fit_mlp was
+#    broken). At this n the rel_pose numbers are underdetermined and mean nothing.
+python probe_relpose.py -c data/outputs/run_square_m3on_s42_200ep/checkpoints/latest.ckpt \
+  -o /tmp/probe_smoke -d cuda:1 --n-samples 64 --stability-states 8 --mlp-steps 200
+
+# 3. the pair that matters: rays on vs rays off (~50 s each). Runs 2026-09-24; results in
+#    PROGRESS_DETAIL.md Part 2, *Relational probe (step 1a)*.
+for c in m3on m3off; do
+python -u probe_relpose.py -c data/outputs/run_square_${c}_s42_200ep/checkpoints/latest.ckpt \
+  -o data/probe_relpose_square_${c} -d cuda:1 --mlp-steps 2000
+done
+# m4on/m4off work too (same encoder, plus an inert aux head) -- optional third cell
+# -d cuda:1 unless cuda:0 is free -- another user habitually holds ~13 GB there
+
+### Conditioning screen (`screen_conditioning.py`)
+
+**This is the one that can see a policy failing while its representation is fine** — the other
+two tools measure whether information is *present*, and `m3v13` is the case where it is present
+and the policy still fails.
+
+```bash
+python screen_conditioning.py -c <run>/checkpoints/latest.ckpt -d cuda:0 \
+  -o data/screen_conditioning/<cell>_latest.json      # --n-obs 8 --seed 0 by default
+```
+
+It holds the diffusion sampling noise fixed (`torch.manual_seed(0)` before every
+`predict_action`) and varies one input path at a time, so a change in the output is
+attributable to that input rather than the sampler. Reported: `std` across the observations,
+over the action chunk, normalised by the chunk's mean absolute value.
+
+- **`image-only` near `0.0000` means the image path is severed** — the policy cannot see the
+  scene at all, which is what a collapsed encoder must produce. `m3v12` reads **2.59e-05**
+  against `m3off`'s 0.0068.
+- **Read the two paths separately, never their sum.** `global_cond` is
+  `concat([z_global, low-dim])` and the low-dim keys are 9 dims of proprioception that vary
+  across samples too. Measured together, the *collapsed* cell comes out the **most**
+  observation-sensitive (`m3v12` 0.0686) — its constant image riding along with normally
+  varying proprioception — which is the opposite of the truth.
+- Anchors: `m3off` 0.0068 / 0.0386 (image / proprio), `m3v13` 0.0067 / 0.0674, `m3v12`
+  2.59e-05 / 0.0686.
+
+> **Superseded 2026-09-25 — do not quote, do not compare.** Those anchors are `--n-obs 8` from the
+> unseeded code path, and the arm samples `dataset[0..n-1]`, so the readings scale with `n`
+> (`proprio` moved 5.2× from n=8 to n=64). Superseded *as method*; the severed-path finding
+> survives at n=64 (2.4–5.0e-05, ~256× below the others). Long form: `PROGRESS_DETAIL.md`
+> Appendix C.
+- **Replicate before believing the balance reading.** Those anchors are `--n-obs 8 --seed 0`, and
+  the `[1,3]`-vs-`m3off` proprio contrast is the *only* mechanism anyone has proposed for
+  `[1,3]`'s floor — so it gets re-measured at scale before it is worth GPU-hours. Pre-registered
+  rule: the hypothesis lives only if `m3v13`'s proprio/image ratio exceeds `m3off`'s by **≥1.5×
+  across all three seeds**; at parity, the intervention below is off and the missing instrument
+  is the only route left.
+
+**Gate reading, formalised and pre-registered 2026-09-25 — committed BEFORE any n=64 screen
+was run, so it cannot be renegotiated against the numbers.** With `R_cell(s) =
+proprio_only / image_only` read from each run's JSON:
+
+- **Pass** iff `min over s in {0,1,2} of R_m3v13(s) / R_m3off(s) >= 1.5`.
+- **2-of-3 seeds above 1.5 is NOT support.** The rule says "across all three seeds"; a partial
+  result is recorded as *gate failed, reading ambiguous* — neither pass nor a clean parity.
+- **Clean parity** (every seed below 1.5, or ratios ≈ 1) is the branch that retires the
+  intervention: the only proposed mechanism for `[1,3]`'s floor dies, and the missing
+  instrument becomes the only route left.
+- **Structural note, so the statistic is not misread as more than it is.** The two image arms
+  are *equal by measurement* (0.0067 vs 0.0068 — no difference at all), so `R_m3v13/R_m3off`
+  is carried almost entirely by the proprio arm: 0.0674/0.0386 = **1.75×** at the default.
+  The gate therefore asks whether a 1.75× proprio gap survives replication, not whether a
+  two-factor contrast does.
+- `m3v12` rides along as a **control, not part of the rule**: its encoder is collapsed, so its
+  image arm should stay ~2.6e-05 and its reading cannot support anything.
+
+```bash
+# -d cuda:1: GPU 0 holds ~13 GB from another user (NOTES.md *Machine and timing*).
+# -o is NOT optional -- without it the number exists only in scrollback.
+for s in 0 1 2; do for c in m3v13 m3off m3v12; do
+python screen_conditioning.py -d cuda:1 --n-obs 64 --seed $s \
+  -c data/outputs/run_square_${c}_s42_200ep/checkpoints/latest.ckpt \
+  -o data/screen_conditioning/square_${c}_n64_s${s}.json
+done; done
+# reference points, also on disk: L1 lift (works, non-slot encoder) and L1 square (collapsed)
+# smoke ONE cell (-o /tmp/smoke.json) first: the tool has no assertions, and n_obs=1 would
+# print 0 for both arms -- the same misreading class as the :.4f bug below.
+
+**The gate outcome, the instrument fix and the resolution table are findings, not runbook** — they
+live in `PROGRESS_DETAIL.md` *Proprioception dropout* (gate failed, min ratio 0.567; the balance
+hypothesis refuted on `proprio_only`, 1.008×) and in that section's Result 3 (the `:.6g` rule; the
+1.92–2.50× matched-versus-unmatched spread; the rank flip at matched inputs).
+
+## Appendix N2 — Proprioception dropout runbook (closed, never launched)
+
+Kept verbatim: it is a dated pre-registration plus the exact launch command, and compressing it
+would lose the record of what was registered *before* the gate was read.
+
+```bash
+# Proprioception dropout -- the `[1,3]` balance test. No new config: a policy
+#   _target_ override, and the dropout lives in compute_loss only (so rollouts,
+#   eval, screen_conditioning.py and probe_relpose.py are untouched).
+#
+#   `+policy.proprio_dropout=0.5` -- the `+` is REQUIRED, and the runbook's original
+#   bare `policy.proprio_dropout=0.5` (commit 61e82c4) is rejected at launch. Hydra 1.2
+#   sets struct mode unconditionally on the config root
+#   (hydra/_internal/config_loader_impl.py:256-259: "One must use + to add new fields
+#   to them"), and the key is declared in NO config -- unlike M4's `aux_loss_weight`,
+#   which works bare only because it lives in train_..._m4.yaml.
+#   DO NOT "fix" it by declaring the key in the shared m3 config instead: that config
+#   is used by plain-M3 runs whose _target_ is DiffusionUnetImagePolicy, which would
+#   swallow the unknown kwarg into self.kwargs and forward it to scheduler.step --
+#   a TypeError at ROLLOUT time, hours in (the same trap the policy docstring names).
+#
+#   Gate, pre-registered 2026-09-25 BEFORE the run: a NON-NULL lift at [1,3] is
+#   consistent with the balance mechanism but does not establish it -- proprio dropout
+#   is also a generic regulariser. The separating control is an arm the mechanism
+#   predicts NO lift for: m3v12 ([1,2]), which fails by a severed image path (collapsed
+#   encoder), so dropout should not rescue it (~1.35 h + a sweep). The mechanism claim
+#   is not made until that control is run and does not lift. A NULL at [1,3] needs no
+#   control and is decisive on its own.
+#
+#   No p=0 control run is needed either: at proprio_dropout=0.0 the class delegates to
+#   super().compute_loss before drawing any RNG, so a p=0 rerun is bit-identical to
+#   m3v13 -- m3v13 IS the p=0 arm. The p=0.5 arm is NOT RNG-locked to it (the mask draw
+#   precedes the noise draw), so this is a run-to-run comparison at the usual n=1
+#   resolution: a delta below ~0.1 is unmeasured.
+python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
+  task=m3_plucker_image_abs_multiview task.task_name=square \
+  task.dataset.view_count_range="[1,3]" +policy.proprio_dropout=0.5 \
+  policy._target_=diffusion_policy.policy.diffusion_unet_image_policy_propdrop.DiffusionUnetImagePolicyPropDrop \
+  policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false \
+  training.seed=42 training.num_epochs=201 training.device=cuda:1 \
+  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
+  logging.project=diffusion_policy_view training.resume=false \
+  hydra.run.dir=data/outputs/run_square_m3v13_pdrop_s42_200ep
+#   launch gate: grep -q propdrop <log>  -- the policy prints an ACTIVE banner at
+#   construction, so a silently-dropped override cannot be read as "dropout didn't help"
+#   ~29 s/epoch at mean-N 2.0; ~43 s means view_count_range did not take
+#   val_loss is a THIRD incomparable val_loss: self.training is always True in this
+#   workspace (it evals the EMA copy, never putting self.model in eval mode), so
+#   dropout is live during validation. Compare it only at matched epochs.
+#   CPU test first: python tests/test_prop_dropout.py
+```
