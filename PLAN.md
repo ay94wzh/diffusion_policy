@@ -1,9 +1,8 @@
 # Plan: view-generalizable policy
 
-Direction and the original predictions: `PROPOSAL.md`. The module and its measured behaviour:
-`PROGRESS.md`; the full protocol, the investigation log and the appendices (tables index,
-parked investigations, corrections): `PROGRESS_DETAIL.md`.
-Operational detail, runbooks and traps: `NOTES.md`. Last updated 2026-09-26.
+Direction and the original predictions: `PROPOSAL.md`. The module, its measured behaviour and
+the open questions: `PROGRESS.md`. Operational detail, runbooks and traps: `NOTES.md`.
+Last updated 2026-09-30.
 
 ## Constraints
 
@@ -24,22 +23,21 @@ Operational detail, runbooks and traps: `NOTES.md`. Last updated 2026-09-26.
 
 ## Status
 
-Numbers and their provenance live in `PROGRESS.md` (and, for the parked investigations, in
-`PROGRESS_DETAIL.md`); this table is verdicts only.
+Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 
-| milestone | status | verdict | detail |
-|---|---|---|---|
-| **M1** — single-view baseline + novel-view harness | ✅ done | collapses to ≈0 at ±15° azimuth | PROGRESS *M1* |
-| **M2** — multi-view data (13-pose ring) | ✅ done | validated; ±75°/±90° views are low value | PROGRESS *M2* |
-| **L1** — view diversity only | ✅ done | solves lift, destroys square/can | PROGRESS *L1* |
-| **M3** — view-conditioned encoder + fusion | ✅ done | solves square/can at held-out views; conditioning inert | PROGRESS *M3* |
-| **M4** — per-view aux action heads | ✅ done | mechanism real, behaviourally null | PROGRESS *M4* |
-| **architectural confound** | ✅ resolved | multi-view sampling is the load-bearing ingredient | PROGRESS *N>1* |
-| **N-diversity ladder** | ✅ closed at five rungs | a knee, then a graded rise; `[1,5]` is the more view-general working cell | PROGRESS *N-diversity ladder* |
-| **`[2,7]`** | ✅ done | enough views *on average* is the ingredient; N=1 inference needs no N=1 training samples | PROGRESS *`[2,7]`* |
-| **M1 re-screen** | ✅ done | the single-view baseline was **not** collapsed — view-tiedness ≠ collapse | PROGRESS *M1's baseline was not collapsed* |
-| **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded | below |
-| parked (5 items) | ⬜ stopped, findings kept | encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics | DETAIL Appendix B |
+| milestone | status | verdict |
+|---|---|---|
+| **M1** — single-view baseline + novel-view harness | ✅ done | collapses to ≈0 at ±15° azimuth |
+| **M2** — multi-view data (13-pose ring) | ✅ done | validated; ±75°/±90° views are low value |
+| **L1** — view diversity only | ✅ done | solves lift, destroys square/can |
+| **M3** — view-conditioned encoder + fusion | ✅ done | solves square/can at held-out views; conditioning inert |
+| **M4** — per-view aux action heads | ✅ done | mechanism real, behaviourally null |
+| **architectural confound** | ✅ resolved | multi-view sampling is the load-bearing ingredient |
+| **N-diversity ladder** | ✅ closed at five rungs | a knee, then a graded rise; `[1,5]` is the more view-general working cell |
+| **`[2,7]`** | ✅ done | enough views *on average* is the ingredient; N=1 inference needs no N=1 training samples |
+| **M1 re-screen** | ✅ done | the single-view baseline was **not** collapsed — view-tiedness ≠ collapse |
+| **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded |
+| parked (encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics) | ⬜ stopped, findings kept | reasoning and revival conditions at git tag `docs-full-20260930` |
 
 ## Main line — the three runs and the M5 write-up
 
@@ -71,7 +69,11 @@ rescue. Run (c) is compared against `m3v15` at matched mean-N.
 
 **Then the M5 write-up** — assembled from committed `eval_log.json` alone (no GPU): the M1 vs L1
 vs M3 degradation comparison across all three tasks, with lift filled in by run (a). See
-`PROGRESS.md` *`[2,7]`* and *M3* for the two capability statements it rests on.
+`PROGRESS.md` *M3* and *`[2,7]`* for the two capability statements it rests on.
+
+**Also open and cheap:** can `m3plucker` / `m3eef` — now a **re-train**, their checkpoints were
+deleted 2026-09-24. The way back into the conditioning question on a second task, already
+answered on square. ~2 h each.
 
 ## M5 — single-novel-view inference (+ optional distillation)
 
@@ -95,59 +97,28 @@ that can fail.
 **Gate if it is built:** final sweep tables against M1's degradation curves — the reference the
 whole project exists to beat.
 
-## Backlog — training distribution (deferred)
+## Deferred — training distribution
 
 The next model update is a **training-distribution** change, not an architecture one: the ladder
 showed view count and view quality are what move behaviour, while the conditioning, the aux heads
 and the encoder architecture at N=1 are all inert. Ranked, none scheduled.
 
-1. **Dense / continuous camera-pose pool.** The full version samples from a continuous
-   distribution and holds out *regions* (an elevation band or azimuth wedge), not poses. InfiNoVA
-   (2026) does this and reports 5.4× VISTA augmentation and 1.7× better than five physical
-   cameras. Costs a render and disk (~8 GB at 65 poses for square), not IO. **Trap: N=1 per
-   sample is L1, which already fails** — the pool must keep N>1.
-2. **Contiguous-window probe first** — free, from the existing ring: sample *contiguous* azimuth
-   windows instead of uniform subsets, which approximates a dense pool's local structure without
-   any new render. This is the cheap test of whether (1) is worth its render.
-3. **A dense-pool experiment proper** needs **two arms** — the tight-window pool versus a matched
-   baseline on the same rebuilt pipeline — because new-distribution numbers cannot be compared
-   against committed ones without confounds.
-4. **A run with per-epoch checkpoints.** The only way to order collapse against the behavioural
-   failure, which no existing run can do (they save only `topk` + `latest`). Note
-   `training.checkpoint_every` exists but `latest.ckpt` is overwritten each epoch, so per-epoch
-   *history* needs a light in-loop hook saving latents (~3.7 MB/epoch), not checkpoints (4.6 GB).
+1. **Dense / continuous camera-pose pool** — sample poses from a continuous distribution and
+   hold out *regions* (an elevation band or azimuth wedge), not poses. InfiNoVA (2026) does this
+   and reports 5.4× VISTA augmentation and 1.7× better than five physical cameras. Costs a render
+   and disk (~8 GB at 65 poses for square), not IO. **Trap: N=1 per sample is L1, which already
+   fails** — the pool must keep N>1.
+2. **Contiguous-window probe first** — free, from the existing ring: *contiguous* azimuth windows
+   instead of uniform subsets approximate a dense pool's local structure with no new render. The
+   cheap test of whether (1) is worth its render.
+3. **A dense-pool experiment proper** needs **two arms** (tight-window pool vs a matched baseline
+   on the same rebuilt pipeline) — new-distribution numbers cannot be compared against committed
+   ones without confounds.
+4. **A run with per-epoch checkpoints** — the only way to order collapse against the behavioural
+   failure; needs a light in-loop hook saving latents (~3.7 MB/epoch), not checkpoints (4.6 GB).
 5. **An instrument sensitive to *correctness*, not presence** — the live specification of the
-   open question (DETAIL Appendix B3, and *Proprioception dropout* Result 3 in the same file).
-   Its verdict must not depend on which scenes are probed, because `image→action sensitivity` is
-   not a scalar. Design work, no GPU.
-
-## Parked — findings kept, investigation stopped
-
-One line each; the measurements, anchors and caveats are in `PROGRESS_DETAIL.md` Appendix B and
-Part 2.
-
-- **Encoder collapse** — explains `[1,2]`'s floor and L1's task split; not necessary for
-  failure, since `[1,3]` fails with a healthy encoder. (DETAIL *Collapse is a failure mode*.)
-- **The `[1,3]` second failure mode** — the live open question, now without a candidate
-  mechanism. (PROGRESS.md *The second failure mode*.)
-- **Proprioception / balance** — refuted at a pre-registered gate; the intervention was
-  never launched. (DETAIL Appendix B2.)
-- **The `m3v15` latent gap** — filled; turned the `[1,3]` anomaly into a ladder-wide
-  monotone anti-correlation between the latent statistics and success.
-  (DETAIL *The `m3v15` latent gap*.)
-- **Instrument diagnostics** — the rules a future measurement must obey. (DETAIL Appendix B3.)
-
-## Cheap open runs
-
-| run | status | cost |
-|---|---|---|
-| lift + `m3on` | **promoted to main line (a)** | ~1 h |
-| ±60° pool at `[1,5]` | **promoted to main line (c)** | ~2 h |
-| `view_count_range=[2,7]` | ✅ done — indistinguishable from `[1,7]` | — |
-| re-train M1's baselines | ✅ done — not collapsed | — |
-| can `m3plucker` / `m3eef` | open, and now a **re-train**: their checkpoints were deleted 2026-09-24. The cheap way back into the conditioning question, already answered on square | ~2 h each |
-| second seed on `[1,5]` | **promoted to main line (b)** | ~2 h |
-| more rungs on the ladder | rejected — the ladder closed at five rungs and no further rung is planned | — |
+   open question: its verdict must not depend on which scenes are probed, because
+   `image→action sensitivity` is not a scalar. Design work, no GPU.
 
 ## Out of scope for now
 
