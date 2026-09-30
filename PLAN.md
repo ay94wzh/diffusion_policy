@@ -39,29 +39,6 @@ Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 | **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded |
 | parked (encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics) | ⬜ stopped, findings kept | reasoning and revival conditions at git tag `docs-full-20260930` |
 
-## Deferred — training distribution
-
-The next model update is a **training-distribution** change, not an architecture one: the ladder
-showed view count and view quality are what move behaviour, while the conditioning, the aux heads
-and the encoder architecture at N=1 are all inert. Ranked, none scheduled.
-
-1. **Dense / continuous camera-pose pool** — sample poses from a continuous distribution and
-   hold out *regions* (an elevation band or azimuth wedge), not poses. InfiNoVA (2026) does this
-   and reports 5.4× VISTA augmentation and 1.7× better than five physical cameras. Costs a render
-   and disk (~8 GB at 65 poses for square), not IO. **Trap: N=1 per sample is L1, which already
-   fails** — the pool must keep N>1.
-2. **Contiguous-window probe first** — free, from the existing ring: *contiguous* azimuth windows
-   instead of uniform subsets approximate a dense pool's local structure with no new render. The
-   cheap test of whether (1) is worth its render.
-3. **A dense-pool experiment proper** needs **two arms** (tight-window pool vs a matched baseline
-   on the same rebuilt pipeline) — new-distribution numbers cannot be compared against committed
-   ones without confounds.
-4. **A run with per-epoch checkpoints** — the only way to order collapse against the behavioural
-   failure; needs a light in-loop hook saving latents (~3.7 MB/epoch), not checkpoints (4.6 GB).
-5. **An instrument sensitive to *correctness*, not presence** — the live specification of the
-   open question: its verdict must not depend on which scenes are probed, because
-   `image→action sensitivity` is not a scalar. Design work, no GPU.
-
 ## Out of scope for now
 
 ACT. The mujoco pipeline — including the known normalizer bug at
