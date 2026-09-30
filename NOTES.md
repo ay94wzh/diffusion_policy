@@ -79,62 +79,6 @@ Multi-seed on a multi-GPU box: `ray start --head --num-gpus=3` then
 `ray_train_multirun.py --config-dir=. --config-name=<cfg> --seeds=42,43,44
 --monitor_key=test/mean_score -- multi_run.run_dir='...' multi_run.wandb_name_base='...'`.
 
-### The three main-line runs
-
-`PLAN.md`'s main line, with their launch gates. Each is one CLI override of an existing config
-plus, for the ±60° pool, one new task yaml.
-
-```bash
-# (a) M3 on lift -- the one task L1 already solves. ~46 min.
-python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
-  task=m3_plucker_image_abs_multiview task.task_name=lift \
-  policy.obs_encoder.use_plucker=true policy.obs_encoder.use_eef_hist=true \
-  training.seed=42 training.num_epochs=201 training.device=cuda:0 \
-  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
-  logging.project=diffusion_policy_view \
-  hydra.run.dir=data/outputs/run_lift_m3on_s42_200ep
-
-# (b) second seed on [1,5] -- the working rung is n=1. ~2.0 h.
-python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
-  task=m3_plucker_image_abs_multiview task.task_name=square \
-  task.dataset.view_count_range="[1,5]" training.seed=43 \
-  policy.obs_encoder.use_plucker=false policy.obs_encoder.use_eef_hist=false \
-  training.num_epochs=201 training.device=cuda:1 \
-  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
-  logging.project=diffusion_policy_view training.resume=false \
-  hydra.run.dir=data/outputs/run_square_m3v15_s43_200ep
-
-# (c) ±60 deg view pool at [1,5] -- view QUALITY at matched mean-N 3.0. ~2.0 h.
-python train.py --config-name=train_diffusion_unet_image_workspace_m3 \
-  task=m3_plucker_image_abs_multiview_pm60 task.task_name=square \
-  training.seed=42 training.num_epochs=201 training.device=cuda:1 \
-  dataloader.num_workers=14 val_dataloader.num_workers=2 checkpoint.topk.k=1 \
-  logging.project=diffusion_policy_view training.resume=false \
-  hydra.run.dir=data/outputs/run_square_m3pm60_s42_200ep
-```
-
-**The ±60° config.** New file
-`diffusion_policy/config/task/m3_plucker_image_abs_multiview_pm60.yaml` — a copy of
-`m3_plucker_image_abs_multiview.yaml` with **five** rgb slot keys (`view_00_image` …
-`view_04_image`; drop the last two) and `train_view_pool: &train_view_pool [2, 4, 6, 8, 10]`.
-Ring index 0 = az −90°, step 15°, so `[2,4,6,8,10]` = (−60, −30, 0, +30, +60) — the two ±90° views
-are the ones dropped. `view_count_range: [1, 5]` and `env_runner.m3_slots: 5`. **The dataset
-enforces `n_slots <= len(view_pool)`**, so this cannot be done as an override of the 7-slot
-config. Likeliest mechanical error: dropping indices 10/12 instead of 0/12, i.e. removing +60/+90
-instead of ±90.
-
-**Launch gates, all three:**
-
-- **Epoch time must match the cost model** (~14 s/epoch for lift; ~36 s/epoch at mean-N 3.0,
-  which is what `view_count_range=[1,5]` should read). A far-off value means an override was
-  silently ignored — e.g. ~43 s means the range did not take.
-- **`--m3-slots` must equal the checkpoint's slot count** at eval time: `7` for runs (a) and (b),
-  **`5` for run (c)**.
-- **The sweep's 50 episode-seed keys must be set-identical** to the committed sweeps'
-  (`test_start_seed: 100000` is what pairs them).
-- `screen_collapse.py` on every new checkpoint — matched `--view-count-range`, `--random-init`,
-  and `-o`.
-
 ### View count (N per sample)
 
 `view_count_range` is drawn in **one place**, `multiview_image_dataset.py` `_m3_slots`:
@@ -177,8 +121,9 @@ python summarize_novel_view.py <dir>/eval_log.json     # degradation table
 python eval.py -c <run>/checkpoints/latest.ckpt -o data/eval_orig -d cuda:0   # sanity
 ```
 
-`--m3-slots` is **7 for all M3 cells including `m3off`** — the assert compares against the
-checkpoint's own `shape_meta` — and **5 for the ±60° model**. `eval_log.json` is a flat dict keyed
+`--m3-slots` must equal the checkpoint's own slot count — the assert compares against its
+`shape_meta`: **7 for all M3 cells including `m3off`**, and `5` for a five-slot model.
+`eval_log.json` is a flat dict keyed
 `test/<viewpoint>/{mean_score,success_rate,sim_max_reward_<seed>}`, so any number can be
 re-derived without re-running. `test_start_seed: 100000` is what makes the episodes **paired**
 across viewpoints.

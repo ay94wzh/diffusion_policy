@@ -39,64 +39,6 @@ Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 | **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded |
 | parked (encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics) | ⬜ stopped, findings kept | reasoning and revival conditions at git tag `docs-full-20260930` |
 
-## Main line — the three runs and the M5 write-up
-
-Each run fills a hole the record itself names. All three are prepared here and launched on the
-training machine; runbook commands, launch gates and epoch-time checks are in `NOTES.md`.
-
-| # | run | the hole it fills | config delta | ~cost |
-|---|---|---|---|---|
-| a | **lift + `m3on`** | M3 was never swept on lift — the one task L1 already solves, so this is a "did we break it" question, not a result | `task=m3_plucker_image_abs_multiview task.task_name=lift`, `use_plucker=true use_eef_hist=true` (= `m3on`), K=7, `[1,7]`, seed 42 | 46 min |
-| b | **second seed on `[1,5]`** | the working rung is n=1 and every behavioural null in the project is n=1 | `m3off` config with `view_count_range="[1,5]" training.seed=43` | 2.0 h |
-| c | **±60° pool at `[1,5]`** | "how much does view *quality* alone buy" — never measured | **new task yaml** (below) | 2.0 h |
-
-**Run (c), precisely.** Ring index 0 = az −90°, step 15°, so index 12 = +90°; dropping the two
-±90° views (M2's low-value finding) means `view_pool=[2,4,6,8,10]` = (−60, −30, 0, +30, +60).
-The dataset enforces `n_slots <= len(view_pool)`, so this **cannot** be a CLI override of the
-7-slot config: it needs a new file
-`diffusion_policy/config/task/m3_plucker_image_abs_multiview_pm60.yaml` keeping **five** rgb slot
-keys, `view_count_range: [1,5]` and `env_runner.m3_slots: 5`. At `[1,5]` its mean active N is
-**3.0 — identical to `m3v15`**, which is what makes it an isolation of view quality from view
-count rather than a second diversity experiment. *(Likeliest mechanical error: dropping indices
-10/12 instead of 0/12, i.e. removing +60/+90 instead of ±90.)*
-
-**Reading the three, fixed in advance.** Run (a) fails if any held-out azimuth lands below both
-L1's band (0.76–0.96) and its own M1 reference — it is a regression test with a named falsifier.
-Run (b)'s read is the **spread across the two seeds of one config**; if the trained means differ
-by more than the 0.15 band, the ladder's five-rung curve is re-read as two-population and the
-knee claim is restated at the new resolution — a registered consequence, not an after-the-fact
-rescue. Run (c) is compared against `m3v15` at matched mean-N.
-
-**Then the M5 write-up** — assembled from committed `eval_log.json` alone (no GPU): the M1 vs L1
-vs M3 degradation comparison across all three tasks, with lift filled in by run (a). See
-`PROGRESS.md` *M3* and *`[2,7]`* for the two capability statements it rests on.
-
-**Also open and cheap:** can `m3plucker` / `m3eef` — now a **re-train**, their checkpoints were
-deleted 2026-09-24. The way back into the conditioning question on a second task, already
-answered on square. ~2 h each.
-
-## M5 — single-novel-view inference (+ optional distillation)
-
-**Most of it already exists, and that is the thing to decide about.** Fusion accepts N=1 and the
-N=1 inference path is already what produced every M3 number: `eval_novel_view.py --m3-slots K`
-publishes the perturbed camera pose (read back from the simulator) into a single slot. Square
-infers at N=1 with 0.55 success on held-out azimuths. So the capability M5 was written to deliver
-is **measured, not pending**.
-
-What remains is the **optional distillation stage**: a single-view student encoder regressing the
-frozen teacher's multi-view fused latent `z_g`.
-
-**Premise, and why it should be re-examined first.** Distillation is only worth running if the
-fused latent carries something the single-view path cannot. The N>1 result shows the capability
-lives in the *training signal* — a model trained with one view per sample scores L1's floor — and
-`[2,7]` shows N=1 *inference* works without ever training at N=1. No result so far demonstrates
-that a student would gain anything. Before coding it, the deciding measurement is whether `z_g` at
-N=1 (single novel view) predicts behaviour better than the N=1 encoder's own output — pick a probe
-that can fail.
-
-**Gate if it is built:** final sweep tables against M1's degradation curves — the reference the
-whole project exists to beat.
-
 ## Deferred — training distribution
 
 The next model update is a **training-distribution** change, not an architecture one: the ladder

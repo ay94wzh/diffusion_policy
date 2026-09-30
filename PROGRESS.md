@@ -193,7 +193,7 @@ matches or beats `m3on` on both tasks at every viewpoint, and can's held-out mea
 at `el_m15` for every cell, an unexplained asymmetry. **Costs and limits:** a little
 in-distribution (az_0 0.76–0.80 vs M1's 0.82); every cell is n=1; the four architectural changes
 are confounded (resolved later, in favour of N>1); and **lift was deliberately not run** — it is
-the one task L1 already wins, so it is the place M3 could regress (main-line run (a)).
+the one task L1 already wins, so it is the place M3 could regress.
 
 ## M4 — per-view auxiliary action heads
 
@@ -407,8 +407,7 @@ onward.
   unknown and worth stating because it rules out the cheapest design — **whether collapse
   precedes the behavioural failure** — since no existing run has a per-epoch checkpoint series.
 - **Lift is untested for M3.** It is the one task where L1 already wins (0.76–0.96), so an
-  M3-on run there is a genuine "did we break it" question rather than a result (main-line run
-  (a)).
+  M3-on run there is a genuine "did we break it" question rather than a result.
 - **Second seed.** Every *behavioural* number in this document is n=1 at a resolution worse
   than ±0.05. A second seed on one M3 or M4 cell would materially strengthen the nulls, which
   are "indistinguishable at this resolution", not "proven identical".
