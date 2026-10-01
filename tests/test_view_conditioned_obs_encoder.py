@@ -734,7 +734,9 @@ def test_m3_configs():
     cfg_dir = os.path.join(repo_root, 'diffusion_policy', 'config')
     checked = []
     with hydra.initialize_config_dir(config_dir=cfg_dir, version_base=None):
-        for task in ('m3_plucker_image_abs_multiview', 'm3_plucker_image_abs_n1'):
+        for task in ('m3_plucker_image_abs_multiview',
+                     'm3_plucker_image_abs_multiview_pm60',
+                     'm3_plucker_image_abs_n1'):
             cfg = hydra.compose(
                 config_name='train_diffusion_unet_image_workspace_m3',
                 overrides=[f'task={task}'])
@@ -757,8 +759,30 @@ def test_m3_configs():
             assert cfg.policy.obs_encoder.use_plucker is True
             assert cfg.policy.obs_encoder.use_eef_hist is True
             checked.append(f'{task}(K={slots}, steps={enc.eef_hist_steps})')
+
+        # The pm60 pool must differ from the 7-slot pool by dropping its TWO
+        # EXTREMES (+-90 deg), not two arbitrary views. Dropping indices 10/12
+        # instead of 0/12 -- removing +60/+90 rather than +-90 -- is the
+        # likeliest mechanical error in that config and it is silent: both are
+        # 5-view pools, so every count-based check above still passes.
+        full = hydra.compose(
+            config_name='train_diffusion_unet_image_workspace_m3',
+            overrides=['task=m3_plucker_image_abs_multiview'])
+        pm60 = hydra.compose(
+            config_name='train_diffusion_unet_image_workspace_m3',
+            overrides=['task=m3_plucker_image_abs_multiview_pm60'])
+        full_pool = sorted(full.task.dataset.view_pool)
+        assert sorted(pm60.task.dataset.view_pool) == full_pool[1:-1], (
+            'pm60 must drop the two EXTREME ring views (+-90 deg); got '
+            f'{sorted(pm60.task.dataset.view_pool)} against {full_pool}')
+        # [1, 5] at K=5 gives mean active N 3.0 -- identical to m3v15's, which
+        # is what makes pm60 an isolation of view QUALITY from view COUNT
+        assert tuple(pm60.task.dataset.view_count_range) == (1, 5), (
+            pm60.task.dataset.view_count_range)
     print(f'M3 configs OK ({" and ".join(checked)}: encoder output_shape (521,), '
-          f'slot/step counts agree across dataset, encoder and runner)')
+          f'slot/step counts agree across dataset, encoder and runner; '
+          f'pm60 pool {sorted(pm60.task.dataset.view_pool)} == '
+          f'7-slot pool without its extremes)')
 
 
 def test():

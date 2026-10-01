@@ -1,23 +1,32 @@
 # NOTES — environment, runbooks, operations
 
 Practical material for running this project. The module, its results and the open questions live
-in `PROGRESS.md`; the plan in `PLAN.md`. **This checkout is the coding-and-documents machine**:
-code, documents and the committed records live here; the demonstrations, the multi-view zarrs
-and every checkpoint live on the **remote training machine**, where the runbooks below execute.
-The closed runbooks (the step-1a relational-probe runbook and the never-launched
-proprioception-dropout runbook) are at git tag `docs-full-20260930`.
+in `PROGRESS.md`; the plan in `PLAN.md`. **This box is the training machine** — the runbooks below
+execute here. (Until 2026-10-01 this file called the checkout a separate "coding-and-documents
+machine" and pointed the runbooks at a remote host; that was wrong, and it is how a guard failure
+skipped every evaluation of three finished runs for five days. See *A guard that discards its own
+error* under Traps.) The closed runbooks (the step-1a relational-probe runbook and the
+never-launched proprioception-dropout runbook) are at git tag `docs-full-20260930`.
 
 ## Environment
 
-- **The multi-view zarrs and every checkpoint are on the training machine, not here.** A runbook
-  step that names `data/outputs/run_*/checkpoints/latest.ckpt` or `data/multiview/*_ring13.zarr`
-  is talking about that machine. Locally, `data/` holds only the committed records.
-- **Disk on the training machine is the binding constraint of any campaign.** Check `df -h`
-  there as step 0. A checkpoint is 4.62 GB; `topk.k=1` plus `latest.ckpt` is ~9.2 GB per run.
+- **The multi-view zarrs, the PH hdf5s and every checkpoint are here**, and `PROGRESS.md` paths
+  that name `data/outputs/run_*/checkpoints/latest.ckpt` or `data/multiview/*_ring13.zarr` resolve.
+  Since 2026-10-01 the `data/outputs` weights are **symlinks** into `/data/zihan/ckpt_store/`, so
+  reads through those paths work but `du` on `data/outputs` no longer reports them.
+- **Disk is the binding constraint of any campaign.** Check `df -h` as step 0 — but check the
+  right volume. `/` (the repo) is chronically near-full and `/data` has terabytes, which is why
+  new run dirs go to `/data/zihan/runs/run_<name>/` and only `logs.json.txt` is copied back.
+  A checkpoint is 4.62 GB; `topk.k=1` plus `latest.ckpt` is ~9.2 GB per run.
 - conda env **`robodiff`**: torch **2.8.0+cu128** (sm_120), robosuite 1.2.0, robomimic
   0.2.0, mujoco_py 2.0.2.13, numcodecs 0.10.2, wandb 0.15.12.
   **Do not recreate the env from `conda_environment.yaml`** — its `pytorch=1.12.1` pin is
   stale and unusable on the RTX 5090s. The live env was upgraded in place.
+- **Never call a bare `python` in a script.** The shell's `python` is conda **base**
+  (`/home/zihan/anaconda3/bin/python`) and has **no torch**; `robodiff` is not active by
+  default. Pin the interpreter, as every driver script in `data/` does:
+  `PY=/home/zihan/anaconda3/envs/robodiff/bin/python`. This cost 5 h of finished training
+  once — see *A guard that discards its own error*, below.
 - `sudo apt install -y libosmesa6-dev libgl1-mesa-glx libglfw3 patchelf`, or robosuite
   fails to import. Offscreen rendering works with osmesa, EGL, and the default backend.
 - **Camera control** (no `CameraMover` in robosuite 1.2): `sim.model.cam_pos/cam_quat`
@@ -306,6 +315,25 @@ Chronic constraint on the **training machine**: check `df -h` as step 0 of any c
   three `ph` tasks are available, with both `image.hdf5` and `image_abs.hdf5`.
 
 ## Traps
+
+### A guard that discards its own error
+
+On 2026-09-26 `data/m5_campaign.sh` trained all three main-line runs to completion, then
+declared every checkpoint corrupt and skipped every sweep and screen. Nothing was wrong with
+the checkpoints: the guard called a bare `python` (**base, no torch** — above), and its error
+went into `grep -q`, so the log recorded only `CKPT_LOAD_FAILED`. **Three 4.6 GB loads reported
+inside one second is the tell** — a real load takes ~30 s, so a failure that fast is an import
+error, never a truncated file. Two rules came out of it:
+
+- **Print or log the error a guard is testing for.** A guard whose failure text is discarded
+  cannot be told apart from the condition it is guarding against.
+- **A guard must be able to fail, and be able to pass.** `out=$(python ... | tail -1)` reports
+  `tail`'s status, which is always 0 — the same class of vacuous check as an identity-camera
+  Plücker test (below). `data/m5_sweeps.sh` keeps the status un-piped for this reason.
+
+The generalisable version: **a skipped stage must be loud.** The campaign's real damage was not
+the bad guard, it was that "guard failed" and "work skipped" were one quiet line in a log nobody
+re-read for five days.
 
 ### A check that cannot fail proves nothing
 

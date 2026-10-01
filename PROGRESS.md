@@ -17,7 +17,10 @@ Last updated 2026-09-30.
 **What works.** M3's per-slot fusion reaches **0.55 (square) / 0.74 (can)** at held-out
 viewpoints, where the single-view baseline M1 scores 0.00–0.02 and the conditioning-free L1
 baseline sits at the floor. **What is inert.**Plücker + camera-frame-history conditioning and auxiliary heads change nothing measurable (M3, M4). **What is load-bearing.** Multi-view *sampling*: the same encoder forced to one view per sample scores 0.04/0.05, and the ladder shows the ingredient is *enough views on average* — a knee between
-mean-N 2.0 and 3.0, then a graded rise. **What is not explained.** Two distinct failure modes
+mean-N 2.0 and 3.0, then a graded rise. **What is also load-bearing, and new (2026-10-01).** View
+*quality*: `m3pm60` drops the two ±90° views from the pool at an unchanged mean-N of 3.0 and lifts
+square's trained mean 0.456 → **0.728** and held-out 0.373 → **0.533** — reaching `[1,7]`'s
+performance at two thirds of its mean-N. **What is not explained.** Two distinct failure modes
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
@@ -39,6 +42,9 @@ geometric conditioning and §2.4's aux heads are both inert.**
 | **collapse** | encoder output spread across every surviving checkpoint, matched draw, random-init controls | **a failure mode, not *the* one** — explains `[1,2]` and L1's task split; `[1,3]` fails while healthy |
 | **M1 re-screen** | re-trained the deleted baseline, fidelity-gated, then collapse-screened | **not collapsed** — view-tiedness and collapse are distinct failure modes |
 | **balance test** | `[1,3]`'s proprioception contrast re-measured at n=64 × 3 seeds, pre-registered | **refuted; intervention retired unlaunched** |
+| **(a) lift + `m3on`** | recovered 2026-10-01 — trained 09-26, then skipped by a guard bug | **does not break lift** (held-out 0.870 vs L1 0.873); elevation is where it gives ground |
+| **(b) `[1,5]` seed 43** | recovered 2026-10-01; first reproduction of any ladder rung | **Δ 0.052 / 0.083, inside the band** — the knee stands at two seeds |
+| **(c) ±60° pool** | recovered 2026-10-01; pool `[2,4,6,8,10]` at matched mean-N 3.0 | **pool curation is worth +0.272 trained / +0.160 held-out; reaches `[1,7]` at 2/3 its mean-N** (size/content confounded) |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -74,7 +80,11 @@ two 50-episode sweeps of one checkpoint through two presets that place the camer
 pose differ by **0.14** (`m4on`: `el_0` 0.70 vs `az_0` 0.84), and unseeded diffusion sampling
 adds ~0.08 spread. On a **mean over viewpoints** the working threshold is **0.15** — a stated
 convention, adopted by the ladder so its branch decisions were fixed in advance rather than
-chosen after the fact. `mean_score` hides effects `success_rate` shows (on lift it saturates at
+chosen after the fact. **Revised upward 2026-10-01** by the recovered runs, which measured both
+axes worse than stated: the same-pose spread reaches **0.18** (`m3v15` s43, `az_0` 0.480 vs
+`el_0` 0.300) and the across-seed spread of ONE config at ONE viewpoint reaches **0.200**
+(`az_p30`, `[1,5]` s42 vs s43). Single-viewpoint cells are therefore noisier than this document
+long assumed on both axes, and are never read individually. `mean_score` hides effects `success_rate` shows (on lift it saturates at
 1.000 for a policy that succeeds 0.76), and `val_loss` does not track rollout behaviour (all
 four square M3 cells end at 0.0568–0.0602, essentially L1's 0.060, while rolling out like M1).
 Every behavioural number below is **one model, 50 paired episodes**; the probe and screen
@@ -244,6 +254,106 @@ N=1, and no result shows a student would gain anything. The deciding measurement
 it: whether `z_g` at N=1 predicts behaviour better than the N=1 encoder's own output. Gate if
 built: final sweep tables against M1's degradation curves.
 
+## The three recovered runs (2026-10-01)
+
+**Why they needed recovering.** All three trained to completion on 2026-09-26 and were then
+discarded by a bug in their own driver: `data/m5_campaign.sh` checked each checkpoint with a bare
+`python` (conda **base**, no torch), got an import error, and read it as a corrupt save — so it
+skipped every sweep and screen. Three 4.6 GB loads "failing" inside one second is what proves the
+guard died at `import`; the weights were intact on `/data` and all three loaded cleanly. The guard
+also piped into `grep -q`, discarding the error. `NOTES.md` *A guard that discards its own error*
+records the trap and `data/m5_sweeps.sh` is the corrected runner.
+
+**Noise floors move.** Two of these runs give the project better noise estimates than it had, and
+they are larger than what *Setup and protocol* previously stated:
+
+| statistic | previous | measured here |
+|---|---|---|
+| same camera pose read twice (`az_0` vs `el_0`) | ~0.14 | **0.18** (`m3v15` s43: 0.480 vs 0.300) |
+| across two seeds of ONE config, single viewpoint | not stated | **0.200** (`az_p30`, `[1,5]` s42 vs s43) |
+
+So single-viewpoint numbers are noisier than the document claimed, on both axes. Nothing below
+changes on that account — every delta quoted below is on a **mean over viewpoints**, against the
+0.15 convention — but per-viewpoint cells should not be read individually.
+
+### (a) lift + `m3on` — a regression test, and M3 passes it
+
+The question was "did we break the one task L1 already solves", with a falsifier fixed in advance:
+fail if any **held-out** azimuth lands below both L1's band and its own M1 reference.
+
+| viewpoint | az_0 | ±15 | ±30 | ±45 | ±60 | ±75 |
+|---|---|---|---|---|---|---|
+| **m3on** | 0.960 | 0.900 / 0.980 | 0.840 / 0.960 | 0.900 / 0.900 | 0.720 / 0.900 | 0.700 / 0.840 |
+| L1 | 0.960 | 0.900 / 0.920 | 0.880 / 0.940 | 0.860 / 0.960 | 0.840 / 0.900 | 0.840 / 0.760 |
+
+**Held-out mean 0.870 against L1's 0.873 (−0.003); trained mean 0.876 against 0.904 (−0.028).**
+The falsifier's letter is met at one cell — `az_m75` 0.700, below L1's 0.840 there and below the
+band's 0.76 floor — but it is **not fully evaluable**: M1 has no reference at ±75 (its committed
+lift sweep is `azimuth_sweep05`, 0…±30), so "below *both*" cannot be tested there, and 0.14 is
+this project's own same-pose noise. Read it as a flagged cell, not a falsification. **The
+regression test passes**, and since M3 also solves square and can, where L1 is at the floor, M3
+now dominates L1 on all three tasks.
+
+**Elevation is where M3 gives ground, on the task L1 handled best:** m3on 1.000 / 0.080 / 0.180
+at `el_0` / `el_m15` / `el_p15` against L1's 0.960 / 0.260 / 0.360. This is the same unexplained
+asymmetry `M3` and `M4` record on square and can, now shown on lift as well.
+
+Collapse screen: **3.51e-02, 10.5× its own random-init** — a richly varying encoder, richer than
+the `m3off` (1.72e-02) and `m3v15` (2.23e-02) anchors. The good numbers rest on a live encoder.
+
+### (b) second seed on `[1,5]` — the ladder survives it
+
+The only *behavioural* number in this document was n=1, so this is the first reproduction of any
+ladder rung. Registered read: if the trained means differ by more than the 0.15 band, the five-rung
+curve is re-read as two-population.
+
+| | az_0 | ±15 | ±30 | ±45 | ±60 | ±75 | trained mean | held-out mean |
+|---|---|---|---|---|---|---|---|---|
+| `[1,5]` s43 | 0.480 | 0.340 / 0.340 | 0.420 / 0.340 | 0.220 / 0.340 | 0.380 / 0.400 | 0.200 / 0.300 | **0.404** | **0.290** |
+| `[1,5]` s42 | 0.460 | 0.420 / 0.380 | 0.360 / 0.540 | 0.340 / 0.340 | 0.440 / 0.480 | 0.340 / 0.420 | 0.456 | 0.373 |
+| Δ | +0.020 | −0.080 / −0.040 | +0.060 / −0.200 | −0.120 / 0.000 | −0.060 / −0.080 | −0.140 / −0.120 | **−0.052** | **−0.083** |
+
+**Δ trained 0.052 and Δ held-out 0.083, both inside the band — the registered consequence does not
+fire, and the knee between mean-N 2.0 and 3.0 stands at two seeds.** Retention is also stable
+(72% vs 82%), so `[1,5]` being the *more* view-general working cell is not a seed artifact.
+Elevation reproduces too (0.300 / 0.060 / 0.120 vs 0.380 / 0.000 / 0.260). Collapse screen:
+**3.10e-02, 12.3×** its own baseline.
+
+### (c) the ±60° pool — view quality, and it is worth a lot
+
+Same range `[1,5]`, same mean-N 3.0, same encoder, same seed as `m3v15` s42; the **only** change is
+the pool — `[2,4,6,8,10]` = az (−60,−30,0,+30,+60), dropping the two ±90° views M2 had already
+measured as low value (table edge, object small or out of frame).
+
+| viewpoint | az_0 | ±15 | ±30 | ±45 | ±60 | ±75 |
+|---|---|---|---|---|---|---|
+| **m3pm60** | 0.680 | 0.520 / 0.480 | 0.740 / 0.720 | 0.600 / 0.620 | 0.700 / 0.800 | 0.540 / 0.440 |
+| `m3v15` s42 | 0.460 | 0.420 / 0.380 | 0.360 / 0.540 | 0.340 / 0.340 | 0.440 / 0.480 | 0.340 / 0.420 |
+| Δ | +0.220 | +0.100 / +0.100 | +0.380 / +0.180 | +0.260 / +0.280 | +0.260 / +0.320 | +0.200 / +0.020 |
+
+**All eleven viewpoints improve.** Trained mean **0.728 vs 0.456 (Δ +0.272)** — far outside the
+band and ~5× the measured seed spread. Held-out mean **0.533 vs 0.373 (Δ +0.160)** — just past the
+band and ~2× the seed spread, so read it as suggestive rather than decisive. Retention 73% vs 82%.
+
+**The result: at mean-N 3.0, `m3pm60` reaches what `[1,7]` needs mean-N 4.0 for** — trained
+0.728 vs `m3off`'s 0.764, held-out 0.533 vs 0.550. Elevation agrees (0.680 / 0.020 / 0.220 vs
+0.380 / 0.000 / 0.260), and its `el_0` equals its own `az_0` to the third decimal — the cleanest
+same-pose consistency check any cell here has produced. Collapse screen: **4.70e-02, 7.8×** its
+own baseline, the richest encoder in the project.
+
+**The confound, stated because it is not removable with this config.** `m3pm60` changes pool
+*size* and pool *content* together: its five-view pool is a nested subset of the seven-view pool,
+so it cannot separate **(i)** the ±90° views being actively harmful from **(ii)** a smaller pool
+giving better coverage per draw — 3 of 5 (60%) against 3 of 7 (43%) at the same mean-N. `K` itself
+is not the confound (`NOTES.md` *View count*: cost tracks mean active N and parameters are
+K-independent). The defensible claim is therefore **"curating the pool is worth +0.27 trained /
++0.16 held-out at fixed mean-N"**, not "±90° is the cause".
+
+**The cheap way to separate them, which needs no render:** a five-view pool that keeps the extremes
+and drops interior views — `[0,2,6,8,12]` = az (−90,−30,0,+30,+90). Same pool size as `m3pm60`,
+extremes retained. One new task yaml and one ~2 h run, the same shape as this one. **Not launched;
+recorded as the next experiment this result calls for.**
+
 ## Findings
 
 What each follow-up experiment concluded — the result and the reading.
@@ -403,13 +513,26 @@ onward.
   lift). Unknown: the mechanism, the layer, and whether collapse is a cause or a symptom. Also
   unknown and worth stating because it rules out the cheapest design — **whether collapse
   precedes the behavioural failure** — since no existing run has a per-epoch checkpoint series.
-- **Lift is untested for M3.** It is the one task where L1 already wins (0.76–0.96), so an
-  M3-on run there is a genuine "did we break it" question rather than a result.
-- **Second seed.** Every *behavioural* number in this document is n=1 at a resolution worse
-  than ±0.05. A second seed on one M3 or M4 cell would materially strengthen the nulls, which
-  are "indistinguishable at this resolution", not "proven identical".
+  **Being collected now:** the *clear* run (`m4_aux_image_abs_multiview_az75` +
+  `train_..._m4latent`, launched 2026-10-01) encodes a fixed 128-state probe set every epoch with
+  the EMA weights, at a full 11-view draw and at the N=1 `az_0` inference condition, writing
+  scalars to `snapshots.jsonl` and raw `z_v`/`z_g` to `latent_snapshots/epoch_XXXX.npz`. It is
+  the first per-epoch latent series in the project, so it can order collapse against behaviour —
+  but note it is an all-on 11-view run with **no held-out split**, so it is an instrument, not a
+  ladder rung, and its behaviour numbers are not comparable to the committed cells.
+- **The pool size/content confound (new, 2026-10-01).** `m3pm60` is the strongest single lever
+  this project has measured (+0.272 trained at fixed mean-N), and it cannot say *why*: dropping
+  ±90° and shrinking the pool 7 → 5 moved together, so "the extremes are harmful" and "a smaller
+  pool covers better per draw" are not separated. The control needs no render — a five-view pool
+  keeping the extremes, `[0,2,6,8,12]` — and is recorded in *(c)* as the next experiment.
+- **Second seed — half answered.** `[1,5]` now has two seeds and reproduces (Δ 0.052 / 0.083).
+  Every **other** behavioural number here is still n=1, including all four M4 cells and every
+  M3 arm of the 2×2, so the conditioning and aux-head nulls remain "indistinguishable at this
+  resolution", not "proven identical".
 - **The elevation asymmetry.** Square collapses at `el_m15` for every M3 cell while can
-  holds 0.22; `[1,5]` holds `el_p15` (0.26) and not `el_m15` (0.00). Unexplained.
+  holds 0.22; `[1,5]` holds `el_p15` (0.26) and not `el_m15` (0.00). Unexplained, and now shown
+  on **lift** too — the one task L1 handled well, where `m3on` scores 0.080/0.180 at ±15° against
+  L1's 0.260/0.360. So the asymmetry is not confined to the tasks L1 failed.
 - **M5's premise.** M3 already does N=1 novel-view inference well, so distillation is only
   worth it if the fused latent demonstrably carries something the single-view path cannot,
   which no result so far shows.
