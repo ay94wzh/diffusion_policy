@@ -36,7 +36,7 @@ Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 | **(a) lift + `m3on`** | ✅ done (recovered 2026-10-01) | **does not break lift** — held-out 0.870 vs L1's 0.873; elevation is where it gives ground |
 | **(b) `[1,5]` seed 43** | ✅ done (recovered 2026-10-01) | **Δ 0.052 trained / 0.083 held-out, inside the band** — the knee stands at two seeds |
 | **(c) ±60° pool** | ✅ done (recovered 2026-10-01) | **pool curation is worth +0.272 / +0.160 at fixed mean-N** — reaches `[1,7]` at 2/3 its mean-N; size vs content confounded |
-| **clear run** (per-epoch latents) | 🟡 launched 2026-10-01 | the first per-epoch latent series; targets whether collapse precedes behavioural failure |
+| **clear run** (per-epoch latents) | ✅ done 2026-10-01 | first per-epoch latent series (201 epochs, clean); latent statistics saturate by ~epoch 50–75 while behaviour improves to ~150 — the encoder is decided early |
 | **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded |
 | parked (encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics) | ⬜ stopped, findings kept | reasoning and revival conditions at git tag `docs-full-20260930` |
 

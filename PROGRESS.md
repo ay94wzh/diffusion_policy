@@ -354,6 +354,50 @@ and drops interior views — `[0,2,6,8,12]` = az (−90,−30,0,+30,+90). Same p
 extremes retained. One new task yaml and one ~2 h run, the same shape as this one. **Not launched;
 recorded as the next experiment this result calls for.**
 
+## The per-epoch latent series (the "clear" run, 2026-10-01)
+
+**What it is.** The first run in this project with a per-epoch latent series: 11-view all-on
+training (`m4_aux_image_abs_multiview_az75`, K=11 over ring 1..11, N ∈ [1,11], mean-N **6.0**),
+whose workspace encodes a **fixed 128-state probe set every epoch** with the EMA weights, at a
+full 11-view draw and at the N=1 `az_0` inference condition. Completed clean: 201 epochs in
+3 h 32 m, `TRAIN_EXIT=0`, **201 snapshots** (1.71 MB each, 328 MB total, all finite), scalars in
+both `logs.json.txt` and `latent_snapshots/snapshots.jsonl`, raw `z_v`/`z_g` in
+`latent_snapshots/epoch_XXXX.npz`. **No held-out split** — all 11 ring views train — so it is an
+*instrument*, not a ladder rung, and its behaviour is not comparable to the committed cells.
+
+**The trajectory.**
+
+| epoch | `zv_norm_mean` | `zv_rel_spread` | `zg_rel_spread` | `zv_pair_ratio` | `zg_pr` | rollout |
+|---|---|---|---|---|---|---|
+| 0 | 31.92 | 0.0403 | 0.0154 | 0.857 | 1.93 | 0.00 |
+| 25 | 16.08 | 0.1501 | 0.1196 | 0.494 | 5.97 | — |
+| 50 | 10.16 | 0.1958 | 0.1453 | 0.508 | 5.66 | 0.44 |
+| 100 | 7.29 | 0.2258 | 0.1412 | 0.509 | 5.84 | 0.70 |
+| 150 | 6.85 | 0.2280 | 0.1385 | 0.495 | 5.87 | 0.80 |
+| 200 | 6.91 | 0.2240 | 0.1372 | 0.485 | 5.87 | 0.76 |
+
+**Conclusion: the representation saturates roughly 100 epochs before the behaviour does.** Every
+latent statistic has reached its steady state by **epoch ~50–75** — `z_v`'s norm has fallen 3.1×,
+its view-vs-state pair ratio has settled at 0.49–0.51 (near `m3off`'s 0.58 anchor), the fused
+participation ratio has jumped 1.93 → 5.87 — and then barely moves for the remaining 125 epochs
+(`zv_rel_spread` drifts 0.228 → 0.224). Behaviour, over the same span, improves by **0.44 → 0.80**.
+So after the transient the *encoder is fixed* and what continues to improve is the policy that
+consumes it. No late degradation appears anywhere: this run never collapses.
+
+**Why that matters for the open question.** The cheapest design for "does collapse precede the
+behavioural failure?" was ruled out because no run had a per-epoch series. One now exists, and it
+says the encoder's statistics are decided *early* — which makes the ordering question tractable
+and sharpens the existing bound (collapse "established by epoch ~100") to **~50–75 for the encoder
+statistics**. The corollary is a caution: **a settled latent is not a converged policy**, so a
+collapsing encoder's pathology should be visible for ~100 epochs before its behaviour degrades,
+not simultaneously. This run is the healthy reference trajectory a collapsing run can now be
+compared against epoch by epoch; it does not itself contain a collapse.
+
+**Open, and cheap:** the checkpoint is unswept. A full `azimuth_interp` sweep would give its
+in-distribution behaviour curve across the ring, which would let the latent trajectory be matched
+to behaviour at every viewpoint rather than only at `az_0`. No held-out split exists in this
+config, so such a sweep is a reference curve, not a generalization number.
+
 ## Findings
 
 What each follow-up experiment concluded — the result and the reading.
@@ -513,13 +557,11 @@ onward.
   lift). Unknown: the mechanism, the layer, and whether collapse is a cause or a symptom. Also
   unknown and worth stating because it rules out the cheapest design — **whether collapse
   precedes the behavioural failure** — since no existing run has a per-epoch checkpoint series.
-  **Being collected now:** the *clear* run (`m4_aux_image_abs_multiview_az75` +
-  `train_..._m4latent`, launched 2026-10-01) encodes a fixed 128-state probe set every epoch with
-  the EMA weights, at a full 11-view draw and at the N=1 `az_0` inference condition, writing
-  scalars to `snapshots.jsonl` and raw `z_v`/`z_g` to `latent_snapshots/epoch_XXXX.npz`. It is
-  the first per-epoch latent series in the project, so it can order collapse against behaviour —
-  but note it is an all-on 11-view run with **no held-out split**, so it is an instrument, not a
-  ladder rung, and its behaviour numbers are not comparable to the committed cells.
+  **Collected 2026-10-01:** the *clear* run produced the first per-epoch latent series in the
+  project (see *The per-epoch latent series*, below). Its result is that in a **healthy** run
+  every latent statistic saturates by **epoch ~50–75** while behaviour keeps improving to
+  **~epoch 150** — so the encoder is decided early and the ordering question is now testable, with
+  the encoder-statistics bound sharpened from ~100 to ~50–75. It contains no collapse itself.
 - **The pool size/content confound (new, 2026-10-01).** `m3pm60` is the strongest single lever
   this project has measured (+0.272 trained at fixed mean-N), and it cannot say *why*: dropping
   ±90° and shrinking the pool 7 → 5 moved together, so "the extremes are harmful" and "a smaller
