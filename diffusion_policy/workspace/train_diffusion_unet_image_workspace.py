@@ -222,6 +222,14 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     policy = self.ema_model
                 policy.eval()
 
+                # Latent-probe seam (the M3/M4 "clear" run): a per-epoch snapshot
+                # hook installed by TrainDiffusionUnetImageWorkspaceLatentProbe.
+                # Guarded via getattr, so every base-class run is bit-identical
+                # (the attribute is never set there).
+                latent_hook = getattr(self, '_latent_probe_hook', None)
+                if latent_hook is not None:
+                    step_log.update(latent_hook(policy))
+
                 # run rollout
                 if (self.epoch % cfg.training.rollout_every) == 0:
                     runner_log = env_runner.run(policy)
