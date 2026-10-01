@@ -18,8 +18,7 @@ Last updated 2026-09-30.
   the results come back as `eval_log.json` + `logs.json.txt` and are written into `PROGRESS.md`.
   Check disk on the training machine before a campaign — a checkpoint is 4.6 GB and `topk.k=1`
   roughly doubles a run's footprint.
-- Every run uses **201 epochs, not 200**: checkpoint and rollout fire on `epoch % 50 == 0` and
-  there is no save at the end of training, so 201 makes epoch 200 fire.
+- Every run uses **201 epochs**: checkpoint and rollout fire on `epoch % 50 == 0` 
 
 ## Status
 

@@ -16,10 +16,7 @@ Last updated 2026-09-30.
 
 **What works.** M3's per-slot fusion reaches **0.55 (square) / 0.74 (can)** at held-out
 viewpoints, where the single-view baseline M1 scores 0.00–0.02 and the conditioning-free L1
-baseline sits at the floor. **What is inert.** PROPOSAL §2.1's Plücker + camera-frame-history
-conditioning and §2.4's auxiliary heads change nothing measurable (M3, M4). **What is
-load-bearing.** Multi-view *sampling*: the same encoder forced to one view per sample scores
-0.04/0.05, and the ladder shows the ingredient is *enough views on average* — a knee between
+baseline sits at the floor. **What is inert.**Plücker + camera-frame-history conditioning and auxiliary heads change nothing measurable (M3, M4). **What is load-bearing.** Multi-view *sampling*: the same encoder forced to one view per sample scores 0.04/0.05, and the ladder shows the ingredient is *enough views on average* — a knee between
 mean-N 2.0 and 3.0, then a graded rise. **What is not explained.** Two distinct failure modes
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every

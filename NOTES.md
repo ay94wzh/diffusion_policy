@@ -37,9 +37,7 @@ proprioception-dropout runbook) are at git tag `docs-full-20260930`.
 
 ## Runbook
 
-All commands run from the repo root, on the training machine. **201 epochs, not 200**: checkpoint
-and rollout fire on `epoch % 50 == 0` and there is no save at the end of training, so 201 makes
-epoch 200 fire (200 would stop at 150).
+All commands run from the repo root, on the training machine. **201 epochs**.
 
 ### Training
 
