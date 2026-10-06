@@ -20,9 +20,12 @@
 # The 328 MB of npz stay under /data; only the derived digest travels.
 #
 # Run:  setsid bash -c 'bash data/clear_analysis.sh' < /dev/null &
-#   FORCE=1 re-runs a stage whose output already exists; GPU=cuda:1 picks the
+#   FORCE_ANALYSIS=1 / FORCE_SWEEP=1 re-run one stage whose output exists
+#   (FORCE=1 still means both) -- this is what a code fix to the analyzer
+#   needs, so the 46-min cached sweep is not repeated; GPU=cuda:1 picks the
 #   other device for the sweep.
 set -u
+FORCE_ALL=${FORCE:-0}
 cd /home/zihan/repos/diffusion_policy || exit 1
 PY=/home/zihan/anaconda3/envs/robodiff/bin/python
 RUN=/data/zihan/runs/run_square_m4clear_s42_200ep
@@ -73,8 +76,8 @@ fi
 say "SNAPSHOT_GATE $out"
 
 # ---- stage 2: the analysis
-if [ -f "$OUT/analyze_latent_series.json" ] && [ "${FORCE:-0}" != "1" ]; then
-    say "ANALYSIS_SKIPPED (already present; FORCE=1 to redo)"
+if [ -f "$OUT/analyze_latent_series.json" ] && [ "${FORCE_ANALYSIS:-$FORCE_ALL}" != "1" ]; then
+    say "ANALYSIS_SKIPPED (already present; FORCE_ANALYSIS=1 or FORCE=1 to redo)"
 else
     say "ANALYSIS_START -> $OUT"
     "$PY" -u analyze_latent_series.py -s "$SNAP" -l "$RUN/logs.json.txt" \
@@ -89,8 +92,8 @@ fi
 
 # ---- stage 3: the sweep (idempotent; eval_novel_view blocks on a prompt when
 # -o exists, which is why the guard is a file check and stdin is /dev/null)
-if [ -f "$SWEEP/eval_log.json" ] && [ "${FORCE:-0}" != "1" ]; then
-    say "SWEEP_SKIPPED (already present; FORCE=1 to redo)"
+if [ -f "$SWEEP/eval_log.json" ] && [ "${FORCE_SWEEP:-$FORCE_ALL}" != "1" ]; then
+    say "SWEEP_SKIPPED (already present; FORCE_SWEEP=1 or FORCE=1 to redo)"
 else
     if [ ! -e "$CKPT" ]; then
         say "SWEEP_MISSING_CKPT $CKPT"

@@ -241,17 +241,7 @@ def test_cka():
     # a broken permutation (or none) reads 1, which this catches
     assert pf['max'] < 0.6, pf
     assert als.linear_cka(x, x) > pf['max'] + 0.4
-    hs = als.half_split(x, x)
-    assert hs['gap'] >= 0.0
-    # ... and the gap MEASURES something: perturb one half's structure and it
-    # opens (a bug comparing the same rows twice would keep it at exactly 0)
-    x_het = x.copy()
-    x_het[1::2] += rng.normal(size=x_het[1::2].shape) * 2.0
-    assert als.half_split(x_het, x)['gap'] > 0.05
-    assert hs['gap'] == 0.0
-    print(f"permutation floor OK (measured max {pf['max']:.3f}, not assumed 0), "
-          f"half-split gap {hs['gap']:.3f} (opens to "
-          f"{als.half_split(x_het, x)['gap']:.3f} on heterogeneous halves)")
+    print(f"permutation floor OK (measured max {pf['max']:.3f}, not assumed 0)")
 
     # the matched null is what rel/cos/proc are read against -- and it is not 0
     nd = als.matched_null(x, seed=1)
@@ -260,6 +250,35 @@ def test_cka():
     assert nd['proc'] > 0.4, nd
     print(f"matched null OK (rel {nd['rel']:.2f}, cos {nd['cos']:.2f}, "
           f"proc {nd['proc']:.2f} -- read every value against these)")
+
+
+def test_split_half_reliability():
+    """The finite-sample floor for reading a CKA *difference*: two disjoint
+    state halves estimating the SAME quantity; their gap is sampling noise.
+
+    Two rejected forms are pinned here: CKA(x, x) split by rows reads exactly
+    1 (a check that cannot fail), and CKA between two independently sampled
+    halves reads ~1/n whatever the structure (chance, not shared geometry).
+    """
+    rng = np.random.RandomState(6)
+    prev = rng.normal(size=(64, 8))
+    cur = prev + rng.normal(size=(64, 8)) * 0.3
+    r = als.split_half_reliability(prev, cur)
+    full = als.linear_cka(prev, cur)
+    assert r['gap'] >= 0.0
+    # coherent data: the two halves agree with each other and with the full sample
+    assert r['gap'] < 0.25, r
+    assert abs(r['even'] - full) < 0.25 and abs(r['odd'] - full) < 0.25
+    # identical arrays: both halves read exactly 1 (degenerate but correct)
+    r0 = als.split_half_reliability(prev, prev)
+    assert abs(r0['even'] - 1.0) < 1e-9 and abs(r0['odd'] - 1.0) < 1e-9
+    # power: replace one half's rows with independent data -> the two estimates
+    # disagree strongly, which is what makes the gap a measurement
+    cur2 = cur.copy()
+    cur2[1::2] = rng.normal(size=cur2[1::2].shape)
+    assert als.split_half_reliability(prev, cur2)['gap'] > 0.3
+    print(f"split-half reliability OK (gap {r['gap']:.3f} on coherent data, "
+          f"{als.split_half_reliability(prev, cur2)['gap']:.3f} after breaking one half)")
 
 
 def test_procrustes():
@@ -279,6 +298,17 @@ def test_procrustes():
 # ---------------------------------------------------------------------------
 # 6. settle / frozen rules
 # ---------------------------------------------------------------------------
+def test_norm_ratio_convention():
+    """norm_ratio(a, b) = mean ||b||/||a||: >1 means the norm GREW from a to b.
+    The first version of the drift block called it with the arguments the other
+    way round (so >1 meant shrinking) -- this pins the convention."""
+    rng = np.random.RandomState(4)
+    a = rng.normal(size=(12, 5)) + 3.0
+    assert abs(als.norm_ratio(a, 2.0 * a) - 2.0) < 1e-12
+    assert abs(als.norm_ratio(2.0 * a, a) - 0.5) < 1e-12
+    print('norm_ratio convention OK (norm_ratio(a, b) = ||b||/||a||, >1 = growth)')
+
+
 def test_settle_rules():
     eps = list(range(10))
     vals = [1.0, 0.7, 0.4, 0.2, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
@@ -557,7 +587,9 @@ def test_scalars_only_and_outputs():
 def test():
     test_rel_dist()
     test_cka()
+    test_split_half_reliability()
     test_procrustes()
+    test_norm_ratio_convention()
     test_settle_rules()
     test_per_view_and_roll()
     test_end_to_end()

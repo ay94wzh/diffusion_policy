@@ -193,11 +193,20 @@ def permutation_floor(x, y, repeats=8, seed=0):
             'repeats': int(repeats)}
 
 
-def half_split(x, y):
-    """CKA on even and odd rows separately -- the finite-sample reading floor.
-    A bug that compares a matrix with itself (same rows twice) gives gap 0."""
-    a = linear_cka(x[::2], y[::2])
-    b = linear_cka(x[1::2], y[1::2])
+def split_half_reliability(prev, cur):
+    """Two disjoint-state-half estimates of the SAME CKA reading, and their gap.
+
+    This is the finite-sample floor for reading a CKA *difference*: both halves
+    estimate one and the same population quantity, so their disagreement is
+    sampling noise.
+
+    Two forms that do NOT work, both tried and rejected here: CKA(x, x) on
+    even/odd rows separately is exactly 1 by construction (a check that cannot
+    fail), and CKA between two independently sampled halves reads ~1/n_half
+    whatever the structure is (it measures chance, not shared geometry).
+    """
+    a = linear_cka(prev[::2], cur[::2])
+    b = linear_cka(prev[1::2], cur[1::2])
     return {'even': float(a), 'odd': float(b), 'gap': float(abs(a - b))}
 
 
@@ -269,6 +278,18 @@ def frozen_epoch(values, epochs, floor=FP16_REL_FLOOR):
         if all(abs(v) < floor for _, v in pairs[i:]):
             return pairs[i][0]
     return None
+
+
+def frozen_tail_count(values, floor=FP16_REL_FLOOR):
+    """How many trailing values are below the floor (a single last-epoch
+    point below it is not a freeze -- reported next to frozen_epoch)."""
+    n = 0
+    for v in reversed(values):
+        if v is not None and _finite(v) and abs(v) < floor:
+            n += 1
+        else:
+            break
+    return n
 
 
 # ---------------------------------------------------------------------------
@@ -498,8 +519,7 @@ def drift_vs(a, b):
     """The four drift measures of a against b (both (n, D))."""
     c, n_zero = cos_dist_np(a, b)
     return {'rel': rel_dist_np(a, b), 'cos': c, 'cos_n_zero_rows': n_zero,
-            'cka': linear_cka(a, b), 'proc': procrustes_resid(a, b),
-            'norm_ratio': norm_ratio(a, b)}
+            'cka': linear_cka(a, b), 'proc': procrustes_resid(a, b)}
 
 
 def _targets(zv, zg, zn, S, K, D):
@@ -611,7 +631,10 @@ def analyze_npz(snap_dir, meta, epochs, refs, cfg):
                 t['cos_prev'].append(dv['cos'])
                 t['cka_prev'].append(dv['cka'])
                 t['proc_prev'].append(dv['proc'])
-                t['norm_ratio_prev'].append(dv['norm_ratio'])
+                # norm_ratio(prev, cur) = ||cur|| / ||prev||: >1 means the norm
+                # GREW from the previous epoch (the function's own convention,
+                # which the first version of this call had inverted)
+                t['norm_ratio_prev'].append(norm_ratio(prev[name], cur[name]))
             for r in refs:
                 if r == e:
                     t['rel_vs_ref'][str(r)].append(0.0)
@@ -645,8 +668,8 @@ def analyze_npz(snap_dir, meta, epochs, refs, cfg):
     return series, drift, fused, gates, warnings
 
 
-def final_epoch_arrays(snap_dir, meta, epochs):
-    entry = load_epoch(snap_dir, epochs[-1])
+def epoch_arrays(snap_dir, meta, e):
+    entry = load_epoch(snap_dir, e)
     S, K, D = int(meta['n_states']), int(meta['K']), int(meta['fused_dim'])
     return _targets(entry['zv'], entry['zg'], entry['zg_n1'], S, K, D)
 
@@ -669,22 +692,22 @@ def matched_null(x, seed=0):
             'proc': procrustes_resid(x, r)}
 
 
-def chance_levels(arrays, cfg):
-    """Permutation and matched-null floors on the final analyzed epoch, plus
-    the half-split reading gap. CKA is declared void only when its
-    permutation floor is so high that the measure cannot discriminate at all
-    (>= --cka-perm-gate, default 0.9 -- the floors are otherwise reported for
-    the reader, not used to gate)."""
-    out = {'permutation_cka': {}, 'half_split': {}, 'matched_null': {},
+def chance_levels(arrays, prev_arrays, cfg):
+    """Permutation / split-half / matched-null floors. ``arrays`` is the final
+    analyzed epoch, ``prev_arrays`` the one before it (for the split-half
+    reliability of the final consecutive CKA reading). CKA is declared void
+    only when its permutation floor is so high that the measure cannot
+    discriminate at all (>= --cka-perm-gate, default 0.9 -- the floors are
+    otherwise reported for the reader, not used to gate)."""
+    out = {'permutation_cka': {}, 'split_half': {}, 'matched_null': {},
            'valid': True, 'gate': cfg['cka_perm_gate']}
     for name, arr in arrays.items():
         out['permutation_cka'][name] = permutation_floor(
             arr, arr, repeats=cfg['perms'], seed=cfg['seed'])
-        out['half_split'][name] = half_split(arr, arr)
+        out['split_half'][name] = split_half_reliability(prev_arrays[name], arr)
         out['matched_null'][name] = matched_null(arr, seed=cfg['seed'] + 1)
     out['max_permutation'] = max(v['max']
                                  for v in out['permutation_cka'].values())
-    out['max_half_split_gap'] = max(v['gap'] for v in out['half_split'].values())
     if out['max_permutation'] >= cfg['cka_perm_gate']:
         out['valid'] = False
     return out
@@ -745,6 +768,8 @@ def settle_table(series, drift, fused, behaviour, cfg):
                 'proc_prev': settle_epoch(d['proc_prev'], epochs, tol, tf, mt),
                 'rel_prev_frozen': frozen_epoch(d['rel_prev'], epochs,
                                                 cfg['storage_floor']),
+                'rel_prev_frozen_tail_count': frozen_tail_count(
+                    d['rel_prev'], cfg['storage_floor']),
                 'rel_vs_ref_settle': {
                     r: settle_epoch(v, epochs, tol, tf, mt)
                     for r, v in d['rel_vs_ref'].items()},
@@ -835,12 +860,15 @@ def summarize(out, cfg):
             L.append('| scalar recheck | no log given | not_run |')
         cf = g.get('chance_levels')
         if cf:
-            per = ', '.join(f"{k} {v['max']:.2f}"
+            per = ', '.join(f"{k} {v['max']:.3g}"
                             for k, v in cf['permutation_cka'].items())
-            L.append(f"| cka permutation floor | {per} "
+            L.append(f"| cka permutation floor (max) | {per} "
                      f"(void at {cf['gate']}) | "
                      f"{'PASS' if cf['valid'] else 'FAIL (cka void)'} |")
-            L.append(f"| cka half-split gap | {cf['max_half_split_gap']:.3f} | - |")
+            sh = ', '.join(f"{k} {v['gap']:.2g}"
+                           for k, v in cf['split_half'].items())
+            L.append(f"| cka split-half gap (final pair) | {sh} | "
+                     f"finite-sample floor |")
             for k, v in cf['matched_null'].items():
                 L.append(f"| chance level {k} (unrelated) | rel {v['rel']:.2f}, "
                          f"cos {v['cos']:.2f}, cka {v['cka']:.2f}, "
@@ -869,13 +897,16 @@ def summarize(out, cfg):
     if out['mode'] == 'npz':
         L.append('## representation drift (epoch vs previous selected epoch)')
         L.append('')
-        L.append('| target | rel settle | rel frozen | cka settle | cka tail | proc settle |')
+        L.append('| target | rel settle | rel frozen (trailing pts) | cka settle | cka tail | proc settle |')
         L.append('|---|---|---|---|---|---|')
         for name in TARGETS:
             d = st['drift'][name]
+            froz = d['rel_prev_frozen']
+            froz_s = ('-' if froz is None else
+                      f"{froz} ({d.get('rel_prev_frozen_tail_count', '?')}pt)")
             L.append(f"| {name} | {_settle_str(d['rel_prev'])} | "
-                     f"{d['rel_prev_frozen']} | {_settle_str(d['cka_prev'])} | "
-                     f"{_fmt(d['cka_prev'].get('tail_mean'))} | "
+                     f"{froz_s} | {_settle_str(d['cka_prev'])} | "
+                     f"{_fmt(d['cka_prev'].get('tail_mean'), 8)} | "
                      f"{_settle_str(d['proc_prev'])} |")
         L.append('')
         L.append('drift vs the fixed refs (rel):')
@@ -981,7 +1012,8 @@ def _parse_args(argv):
     ap.add_argument('--scalars-only', action='store_true',
                     help='no npz: settle/behaviour from the log alone')
     ap.add_argument('--tol', type=float, default=0.05,
-                    help='settle convention: fraction of the tail mean')
+                    help="settle convention: fraction of the curve's total "
+                         "excursion C from its final value")
     ap.add_argument('--tail-frac', type=float, default=0.1)
     ap.add_argument('--min-tail', type=int, default=3)
     ap.add_argument('--storage-floor', type=float, default=FP16_REL_FLOOR)
@@ -1090,8 +1122,10 @@ def run(argv=None):
                     f'{args.recheck_tol:.0e} -- the npz and the log may not be '
                     f'the same series')
             gates['fp16_rel_floor'] = FP16_REL_FLOOR
-            gates['chance_levels'] = chance_levels(
-                final_epoch_arrays(snap_dir, meta, series['epochs']), cfg)
+            if len(series['epochs']) >= 2:
+                gates['chance_levels'] = chance_levels(
+                    epoch_arrays(snap_dir, meta, series['epochs'][-1]),
+                    epoch_arrays(snap_dir, meta, series['epochs'][-2]), cfg)
             if not gates['chance_levels']['valid']:
                 warnings.append(
                     f'CKA permutation floor '
