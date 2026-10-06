@@ -3,6 +3,16 @@ logs
 wandb
 outputs
 data/*
+# Driver scripts are the runbook in runnable form, and `data/*` above swallowed
+# them: every data/*.sh in this repo's history is untracked, including the whole
+# earlier campaign set. These three are whitelisted because they carry the
+# 2026-10-01 corrective work (NOTES.md *Traps*): a pinned interpreter, a guard
+# whose exit status is not piped away, and a launch gate read from the resolved
+# config rather than inferred from a load-dependent epoch time. The older
+# data/*.sh remain untracked -- adopting them is a separate call.
+!data/m5_sweeps.sh
+!data/clear_run.sh
+!data/move_ckpts_to_data.sh
 # every novel-view sweep publishes (eval_log.json + rollout videos), so a new
 # sweep needs no .gitignore edit; the multi-GB zarrs/checkpoints stay out
 !data/eval_*/
