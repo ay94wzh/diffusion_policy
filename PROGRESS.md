@@ -398,6 +398,26 @@ in-distribution behaviour curve across the ring, which would let the latent traj
 to behaviour at every viewpoint rather than only at `az_0`. No held-out split exists in this
 config, so such a sweep is a reference curve, not a generalization number.
 
+**Pre-registered before the raw-tensor analysis (2026-10-06).** The scalar-only dry run
+(`analyze_latent_series.py --scalars-only` on the committed log) fixes the settle convention at
+**tol 5% of each curve's total excursion** and sharpens "saturates by epoch ~50–75": under that one
+stated convention the scalars settle between **epoch 48** (`zg_norm_mean`, `zg_n1_norm_mean` 48)
+and **epoch 149** (`zv_pr`), with the view-structure statistic `zv_pair_ratio` not until **126**.
+The raw-tensor run (`data/clear_analysis.sh`, training box) is read against **measured** chance
+levels and floors — the plain linear CKA's permutation floor is ≈ d/(n+d), i.e. ≈0.27 for `zv_flat`
+(1408×512) and ≈0.80 for `zg` (128×512) at this run's shapes, and the fp16 storage floor is 4.9e-4
+— never against zero. Expectations, registered before the run:
+
+1. the recheck gate passes: npz-derived scalars within 5e-3 of the fp32 logged ones (expected ~1e-3);
+2. the tensor drift settles somewhere in **50–150**; the view-structure scalars move until
+   ~126–149, so a tensor freezing before epoch 50 would be the surprise — early settling is *not*
+   assumed, late settling is *not* a falsification;
+3. consecutive-epoch CKA stays ≥0.99, well above its floor;
+4. per-view spreads settle within ~15 epochs of each other.
+
+**Falsifier on record:** if any drift measure is still above the fp16 floor at epoch 150, then
+"the encoder is decided early" is too strong a reading of this run and will be re-worded.
+
 ## Findings
 
 What each follow-up experiment concluded — the result and the reading.

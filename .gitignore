@@ -33,6 +33,15 @@ data/*
 # conditioning screens (screen_conditioning.py): ditto.
 !data/screen_conditioning/
 !data/screen_conditioning/**
+# latent-series analysis (analyze_latent_series.py): one JSON + one markdown per
+# run (<500 KB total). The 328 MB of latent_snapshots/epoch_*.npz stay on the
+# training box under /data and are never committed; the digest is the durable
+# record of the raw-latent numbers (every one re-derivable from it). The driver
+# runs on the training box only -- data/*.sh are untracked by default, see the
+# comment at the top.
+!data/analysis_*/
+!data/analysis_*/**
+!data/clear_analysis.sh
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*
