@@ -10,8 +10,8 @@ settle convention: within tol=0.05 x C of the final value (C = the curve's total
 | layout/meta/shape/finite | 201 analyzed, 0 skipped, holes=[] | PASS |
 | state_idx identity | first mismatch: None | PASS |
 | scalar recheck | max rel 8.05e-05 (tol 5e-03, 2010 pairs) | PASS |
-| cka permutation floor | zv_flat 0.01, zg 0.05, zg_n1 0.05 (void at 0.9) | PASS |
-| cka half-split gap | 0.000 | - |
+| cka permutation floor (max) | zv_flat 0.00893, zg 0.048, zg_n1 0.0535 (void at 0.9) | PASS |
+| cka split-half gap (final pair) | zv_flat 8.1e-08, zg 9.1e-09, zg_n1 8.9e-09 | finite-sample floor |
 | chance level zv_flat (unrelated) | rel 1.41, cos 1.00, cka 0.04, proc 1.28 | read against |
 | chance level zg (unrelated) | rel 1.42, cos 1.01, cka 0.19, proc 1.24 | read against |
 | chance level zg_n1 (unrelated) | rel 1.42, cos 1.01, cka 0.20, proc 1.21 | read against |
@@ -34,11 +34,11 @@ settle convention: within tol=0.05 x C of the final value (C = the curve's total
 
 ## representation drift (epoch vs previous selected epoch)
 
-| target | rel settle | rel frozen | cka settle | cka tail | proc settle |
+| target | rel settle | rel frozen (trailing pts) | cka settle | cka tail | proc settle |
 |---|---|---|---|---|---|
-| zv_flat | 53 | None | 3 | 1 | 12 |
-| zg | 65 | 200 | 3 | 1 | 8 |
-| zg_n1 | 70 | None | 4 | 1 | 21 |
+| zv_flat | 53 | - | 3 | 0.999999 | 12 |
+| zg | 65 | 200 (1pt) | 3 | 1 | 8 |
+| zg_n1 | 70 | - | 4 | 1 | 21 |
 
 drift vs the fixed refs (rel):
 
