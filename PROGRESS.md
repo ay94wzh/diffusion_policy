@@ -10,7 +10,7 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-10-06.
+Last updated 2026-10-07.
 
 ## Summary
 
@@ -23,7 +23,12 @@ square's trained mean 0.456 → **0.728** and held-out 0.373 → **0.533** — r
 performance at two thirds of its mean-N. **What the healthy series adds (2026-10-06).** The clear
 run's raw latents: the geometry (up to rotation) is decided by ~10–25 epochs, the scales by
 ~50–75, the view-vs-state balance not before **126–149** — and at inference the N=1 fused latent
-is within ~0.5% (direction) of the 11-view one. **What is not explained.** Two distinct failure modes
+is within ~0.5% (direction) of the 11-view one. **What the clear run's held-out sweep adds
+(2026-10-07).** Its azimuth generalisation is **interpolation, not view-tiedness**: 7.5° off the
+nearest trained pose it reads **0.716** against 0.747 in-distribution, while past the ring
+(±82.5/±90) it falls to 0.310 and on the elevation orbit to **0 of 50 both ways** — so elevation is
+not a view-count problem, and at K=11/mean-N 6.0 it is *worse* there than the K=7 cells.
+**What is not explained.** Two distinct failure modes
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
@@ -424,6 +429,91 @@ rests on the driver — `eval_log.json` itself carries no metadata):
 * **Viewpoints:** 11-view average success is 0.747, with latent statistics and behavior aligning on marginal views (e.g., `az_m75`).
 * **Timeline:** Geometry sets by ~10–25 epochs $\rightarrow$ scales by ~50–75 $\rightarrow$ view-state balance matches behavior at ~126–149 epochs. Slow per-row rotation persists through the end.
 
+### The held-out sweep (2026-10-07): the one measurement the clear run lacked
+
+**Method.** `data/clear_heldout_eval.sh` swept the epoch-200 `latest.ckpt` through the
+`azimuth_offgrid` preset — the **7.5°-offset ring**, azimuth ±7.5 … ±82.5 and ±90, *none* of which
+the run ever trained on (it trained on every 15° pose from −75 to +75) — at 50 paired episodes per
+viewpoint, `--m3-slots 11`, plus `elevation_az0` for cross-cell comparability. The smoke gate
+(4 episodes × 14 viewpoints) passed first; the sweep ran 15:53–17:10 and elevation to 17:28
+(`SWEEP_EXIT=0`, `ELEV_EXIT=0`).
+
+**Registered before the run** (in the driver): the midpoints should land near the mean of their
+neighbouring trained poses — an off-grid mean of roughly **0.6–0.8** over ±7.5…±67.5 means the
+encoder *interpolates*; ±82.5/±90 may degrade; below ~0.4 overall would be real view-tiedness at
+unvisited poses.
+
+| | mean | n |
+|---|---|---|
+| in-distribution ring (trained poses, committed) | **0.747** | 11 |
+| off-grid ±7.5…±67.5 (interpolation) | **0.716** | 10 |
+| off-grid ±82.5/±90 (beyond the trained ±75) | **0.310** | 4 |
+| off-grid, all 14 | 0.600 | 14 |
+
+**Result — it interpolates.** Against the average of the two *neighbouring trained* poses per
+viewpoint, 8 of 10 deltas land within ±0.07 (`az_m22.5` −0.12 and `az_p7.5` −0.21 are the
+exceptions); the observed mean is **0.716 against a neighbour-average prediction of 0.760**, and
+**0.031 below the in-distribution ring** (0.747). Both comparisons sit far inside the 0.15
+mean-over-viewpoints threshold — and single cells are never read individually here
+(*Noise and resolution*), so the registered quantity is the mean.
+
+**Extrapolation degrades, and the cause is confounded.** ±82.5 reads 0.40/0.56 and ±90 reads
+0.10/0.18 — a monotone falloff in |azimuth| past the trained ±75 (0.54/0.70). But M2 measured those
+same poses as **low-value views** (table edge, object small or out of frame), so at ±82.5/±90 the
+policy's extrapolation and the scene's visibility are confounded and this run cannot separate them.
+
+**Elevation fails outright, and more views do not fix it.** `el_0` **0.700** — the same camera pose
+as `az_0`, which reads 0.760 in-distribution, a 0.06 gap inside the documented 0.14–0.20 same-pose
+spread, so the harness is consistent — then **0 of 50 at `el_m15` and 0 of 50 at `el_p15`**. That is
+the pessimistic end of the M3 family (`m3off` 0.30/0.04, `m3pm60` 0.02/0.22, `m4on` 0.00/0.00), and
+the clear run is the cell with the **most** views (mean-N 6.0, K=11). Reading: **elevation is not a
+view-count problem** — the training distribution is an azimuth ring with no elevation variation
+anywhere in it, and azimuth diversity does not teach a direction it never sees. The asymmetry
+already on record (square at the floor at `el_m15` for every cell) is joined here by `el_p15` at the
+floor, so for this cell elevation is not "partial extrapolation" in *either* direction.
+
+### The latent-distribution figures (2026-10-07)
+
+`visualize_latent_distribution.py compute` reads six of the run's `epoch_XXXX.npz` and fits **one**
+2-D PCA basis on epoch 200's `z_v` ((S·K, D) = (1408, 512)), projecting every epoch's `z_v`, `z_g`
+and `z_g_n1` into that frame (`evr` **0.353 / 0.152**); `plot` renders four figures into
+`data/analysis_clear/figures/`. Compute is deterministic (fixed SVD sign convention) and takes ~1 s;
+the committed coordinates are 219 KB, so any later latent can be projected into the same frame.
+
+* **fig1 — `z_v` PCA small multiples, epoch 0/25/50/100/150/200.** At epoch 200 the 11 per-view
+  centroids form a tight chain ordered by azimuth, and its spread is **~9% of the state cloud's**
+  (both in the 2-D panel, ratio 0.118 at epoch 25 → 0.093 at 200) — the encoder keeps view identity
+  as a minor, geometrically consistent axis rather than a dominant one. *Caveat, carried on the
+  figure itself:* the basis is fit at epoch 200 and earlier epochs are projected into it (epoch 0's
+  latents are 4.6× larger in norm), so **magnitudes are comparable only within a panel** — a
+  cross-panel reading of the epoch-0 panel is a projection artifact, and the projection-free
+  statistic for that question is fig4's.
+* **fig4 — pairwise `z_v` distance across the ring.** The projection-free statistic: correlating the
+  digest's own pairwise distances against |Δazimuth| gives **corr ≥ 0.986 at every epoch**,
+  *including epoch 0* (0.9965). **The ring's ordering is not something training creates** — it is
+  inherited — while training changes the *scale* of view separation relative to state
+  (`zv_pair_ratio` 0.857 → 0.485) and the norms (31.9 → 6.9). At epoch 200 the distance grows
+  near-linearly with separation (0.232 at 15°, 0.811 at 90°, 1.110 at 150°); the mean over all 55
+  pairs rises 0.269 → 0.551 by epoch 50 and is flat to ±3% from epoch 100 on.
+* **fig2 — `z_g` (11 views) vs `z_g_n1` (inference N=1, `az_0`).** The visual of the table above, and
+  it sharpens one thing: the N-invariance is **not monotone**. True 512-D: cos-dist 0.17% (e0) →
+  **1.57% peak (e22)** → 0.53% (e200); `rel` 6.4% → 17.7% peak (e20) → 10.3%. The fusion is *least*
+  N-invariant at ~epoch 20, and the final state is slightly **less** N-invariant than
+  initialization — consistent with "training changed what the fusion computes, just not its
+  dependence on N", and worth knowing before anyone reads a single-epoch N=1 comparison off this
+  instrument.
+* **fig3 — the per-view series** (‖`z_v`‖, relative spread, pair/cross ratio over all 201 epochs),
+  the visual of the tables above; no new number.
+
+**Instrument defect found on the first render (fixed the same day).** fig2's on-panel numbers were
+being computed from the *projected* points, whose origin inflates the denominator: it printed
+`rel |dz|/|z|` 4.6% → 2.1% where the true 512-D series is 6.4% → 10.3% — understating by ~5× **and
+flipping the trend's sign**. `relation_annotation()` now takes the digest's `fused/n1_vs_full`
+values whenever `-d` is given, labels them `512-D`, falls back to the 2-D numbers only with an
+explicit `2-D panel` label, and stops loudly on a digest whose fused series misses the epoch or
+disagrees in length with `series.epochs`. No published number ever came from the broken path — the
+tool was committed and first run the same day.
+
 ## Findings
 
 What each follow-up experiment concluded — the result and the reading.
@@ -559,6 +649,7 @@ encoder compute per sample.
 | M4 | `policy/diffusion_unet_image_policy_aux.py`, `model/vision/per_view_aux_head.py`, `config/task/m4_aux_image_abs_multiview.yaml`, `config/train_diffusion_unet_image_workspace_m4.yaml`, `tests/test_aux_action_heads.py` |
 | screens / probes | `screen_collapse.py`, `screen_conditioning.py`, `probe_relpose.py`, `tests/test_relpose_probe.py` (measurement tools, no training) |
 | clear-run analysis | `analyze_latent_series.py`, `tests/test_analyze_latent_series.py`, `data/clear_analysis.sh` (the per-epoch latent-series digest; npz stay on `miroc-server`) |
+| latent-distribution figures | `visualize_latent_distribution.py` (compute is numpy-only and runs where the npz are; plot is matplotlib), `tests/test_visualize_latent_distribution.py`, `data/clear_latent_viz.sh`, committed `data/analysis_clear/latent_viz_coords.json` + `data/analysis_clear/figures/` |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE history;

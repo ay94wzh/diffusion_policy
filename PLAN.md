@@ -37,23 +37,23 @@ Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 | **(b) `[1,5]` seed 43** | ✅ done (recovered 2026-10-01) | **Δ 0.052 trained / 0.083 held-out, inside the band** — the knee stands at two seeds |
 | **(c) ±60° pool** | ✅ done (recovered 2026-10-01) | **pool curation is worth +0.272 / +0.160 at fixed mean-N** — reaches `[1,7]` at 2/3 its mean-N; size vs content confounded |
 | **clear run** (per-epoch latents) | ✅ done 2026-10-01 | first per-epoch latent series (201 epochs, clean); latent statistics saturate by ~epoch 50–75 while behaviour improves to ~150 — the encoder is decided early |
+| **clear-run held-out eval** (instrument) | ✅ done 2026-10-07 | **interpolates**: off-grid ±7.5…±67.5 mean **0.716** vs 0.747 in-distribution, both inside the 0.15 threshold; ±82.5/±90 → 0.310 but view visibility is confounded there; **elevation 0 of 50 at both ±15°** — not a view-count problem (K=11, mean-N 6.0, the most views in the project) |
+| **latent-distribution figures** (instrument) | ✅ done 2026-10-07 | the ring's ordering is **inherited**, not learned — corr(pairwise `z_v` distance, \|Δaz\|) ≥ 0.986 at *every* epoch, epoch 0 included; and the N-invariance is **non-monotone** (cos-dist 0.17% → 1.57% at e22 → 0.53% at e200) |
 | **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded |
 | parked (encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics) | ⬜ stopped, findings kept | reasoning and revival conditions at git tag `docs-full-20260930` |
 
 ## Future work (candidates; added 2026-10-07)
 
-Instruments first — both settle what the current model does before any method change:
-- **Clear-run held-out eval** (`azimuth_offgrid` preset + `data/clear_heldout_eval.sh`): the
-  7.5°-offset ring ±90, the one measurement the clear run lacks; its in-distribution ring
-  (0.747) is committed.
-- **Latent-distribution figures** (`visualize_latent_distribution.py` + `data/clear_latent_viz.sh`):
-  z_v/z_g PCA from the per-epoch probe; committed coords JSON + PNGs.
-
-Design facts the candidates build on (verified in the code, 2026-10-07):
+**The two instruments this section opened with are done** (2026-10-07): the clear run's held-out
+ring and its latent-distribution figures — numbers in `PROGRESS.md`, verdicts in the table above.
+What remains are method changes. Design facts they build on (verified in the code, 2026-10-07):
 - `z_v` has no loss of its own beyond (a) fusion → `z_g` → diffusion and (b) M4's camera-frame
   aux head (measured null). **`z_g` receives gradient only from the diffusion loss.**
 - The Plücker map enters as 6 extra conv1 channels `[d_world | m_world]` (measured inert), and
   **fusion never sees the camera pose directly** — it attends over image-only tokens.
+- **No training view varies elevation at all** (the ring is azimuth-only), and the cell with the
+  most views is at the floor there (0 of 50 both ways) — so elevation is not bought with azimuth
+  diversity, and any elevation claim needs elevation in the data or in the conditioning.
 
 Candidates (one part at a time, per the constraints above):
 1. **Fusion with pose tokens** — an explicit pose/Plücker embedding per view token: the one

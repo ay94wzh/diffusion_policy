@@ -17,7 +17,10 @@ figures get made:
                 fig1  z_v PCA small multiples, colored by ring azimuth, with
                       per-view centroids (view structure; when it settles);
                 fig2  z_g vs z_g_n1 overlay, first and last selected epoch
-                      (the ~0.5% N-invariance story);
+                      (the N-invariance story). Its annotation reports the
+                      digest's true 512-D distances whenever -d is given --
+                      NOT the distances in the 2-D panel, which are a
+                      projection artifact (see relation_annotation);
                 fig3  per-view curves over the whole 201-epoch series
                       (needs the analyze_latent_series digest via -d);
                 fig4  pairwise view-distance heatmaps (same digest).
@@ -159,6 +162,53 @@ def compute(snapshots, out_path, epochs=DEFAULT_EPOCHS, basis_epoch=200):
 # ---------------------------------------------------------------------------
 # plot
 # ---------------------------------------------------------------------------
+def _fmt_relations(cos, rel):
+    return (f'mean cos-dist {100 * cos:.2f}%  ·  '
+            f'rel |dz|/|z| {100 * rel:.1f}%')
+
+
+def relation_annotation(digest, epoch, zg_xy, zn_xy):
+    """The fig2 annotation for one epoch: the z_g (full) vs z_g_n1 relation.
+
+    Prefers the digest's true 512-D numbers (`fused['n1_vs_full']`, the same
+    rel_dist_np / cos_dist_np the analysis reports). The relation between the
+    *projected* points is NOT comparable to it and must never be shown
+    unlabelled: the projection origin inflates the denominator, which on the
+    clear run understated rel ~5x and flipped its trend's sign (2.1% and
+    falling where the truth is 10.3% and rising -- found 2026-10-07, the first
+    time this figure was rendered). With no digest, or a digest without a
+    `fused` section, it falls back to the 2-D numbers and says so; a digest
+    that HAS the section but does not cover the epoch is a loud failure, not a
+    silent fallback.
+    """
+    if digest is not None:
+        fused = digest.get('fused', {}).get('n1_vs_full')
+        epochs = digest.get('series', {}).get('epochs')
+        if fused:
+            if not epochs or epoch not in epochs:
+                raise SystemExit(
+                    f'digest has fused/n1_vs_full but no epoch {epoch} in '
+                    f'series.epochs -- refusing to annotate fig2 with the '
+                    f'2-D numbers instead')
+            eps_ = list(epochs)
+            if len(fused['cos']) != len(eps_) or len(fused['rel']) != len(eps_):
+                raise SystemExit(
+                    f'digest fused series disagrees with series.epochs '
+                    f'({len(fused["cos"])} vs {len(eps_)} entries) -- '
+                    f'refusing to annotate fig2')
+            i = eps_.index(epoch)
+            return (_fmt_relations(fused['cos'][i], fused['rel'][i])
+                    + '\n(512-D, from the digest)')
+    zg = np.asarray(zg_xy)
+    zn = np.asarray(zn_xy)
+    gn = np.linalg.norm(zg, axis=1)
+    nn = np.linalg.norm(zn, axis=1)
+    rel = np.linalg.norm(zn - zg, axis=1) / np.maximum(0.5 * (gn + nn), 1e-12)
+    cos = 1.0 - np.einsum('ij,ij->i', zg, zn) / np.maximum(gn * nn, 1e-12)
+    return (_fmt_relations(cos.mean(), rel.mean())
+            + '\n(2-D panel only -- pass -d for the 512-D numbers)')
+
+
 def plot(coords_path, out_dir, digest_path=None, dpi=170):
     """Render the figures from the committed JSONs; returns the written paths."""
     import matplotlib
@@ -186,6 +236,7 @@ def plot(coords_path, out_dir, digest_path=None, dpi=170):
         ax.tick_params(colors=MUTED, labelsize=8)
 
     doc = json.load(open(coords_path))
+    dg = json.load(open(digest_path)) if digest_path is not None else None
     out_dir = pathlib.Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     paths = []
@@ -219,9 +270,15 @@ def plot(coords_path, out_dir, digest_path=None, dpi=170):
     cbar.set_label('ring azimuth (deg)', color=INK2)
     cbar.ax.tick_params(colors=MUTED, labelsize=8)
     cbar.outline.set_edgecolor(BASELINE)
-    fig.suptitle(f'z_v PCA (basis fit on epoch {doc["basis_epoch"]}) — dots: '
-                 f'{S} probe states x {K} views; ring: per-view centroid',
-                 color=INK)
+    # the basis caveat is on the title, not only in the docstring: earlier
+    # epochs are projected into a frame fit on a later one (epoch 0's latents
+    # are 4.6x larger in norm), so magnitudes are NOT comparable across panels
+    # -- within-panel structure is. (The projection-free ring-ordering
+    # statistic is the digest's pair_matrix, not this figure.)
+    fig.suptitle(f'z_v PCA — dots: {S} probe states x {K} ring views; rings '
+                 f'mark the per-view centroids\n(basis fit on epoch '
+                 f'{doc["basis_epoch"]}; earlier epochs are projected into it, '
+                 f'so compare within a panel, not across)', color=INK)
     p = out_dir / 'fig1_zv_view_structure.png'
     fig.savefig(p, facecolor=SURFACE)
     plt.close(fig)
@@ -240,28 +297,34 @@ def plot(coords_path, out_dir, digest_path=None, dpi=170):
         ax.scatter(zn[:, 0], zn[:, 1], s=30, facecolors='none',
                    edgecolors=ORANGE, linewidths=1.1, zorder=4,
                    label='z_g (N=1, az_0)')
-        rel = np.linalg.norm(zn - zg, axis=1) / np.maximum(
-            0.5 * (np.linalg.norm(zg, axis=1) + np.linalg.norm(zn, axis=1)),
-            1e-12)
-        cos = 1.0 - np.einsum('ij,ij->i', zg, zn) / np.maximum(
-            np.linalg.norm(zg, axis=1) * np.linalg.norm(zn, axis=1), 1e-12)
-        ax.text(0.03, 0.97, f'mean cos-dist {100 * cos.mean():.2f}%  ·  '
-                            f'rel |dz|/|z| {100 * rel.mean():.1f}%',
-                transform=ax.transAxes, va='top', color=INK2)
+        # a background box: at epoch 200 the second line ran through the
+        # upper-left dots (first render, 2026-10-07)
+        ax.text(0.03, 0.97,
+                relation_annotation(dg, ep['epoch'], ep['zg_xy'],
+                                    ep['zg_n1_xy']),
+                transform=ax.transAxes, va='top', color=INK2, zorder=10,
+                bbox=dict(facecolor=SURFACE, edgecolor='none', alpha=0.85,
+                          pad=2.5))
         style_axes(ax)
         ax.set_title(f"epoch {ep['epoch']}", color=INK)
     axes.flat[0].legend(loc='lower right', frameon=False, fontsize=8,
                         labelcolor=INK2)
-    fig.suptitle('fused latent z_g: 11 views vs N=1 inference — the two '
-                 'coincide to ~0.5%', color=INK)
+    # no number in the fallback title: an unverifiable claim is what this
+    # change removed
+    title = 'fused latent z_g: 11 views vs N=1 az_0 inference'
+    fused = (dg or {}).get('fused', {}).get('n1_vs_full')
+    if fused:
+        title = ('fused latent z_g: 11 views vs N=1 az_0 inference — mean '
+                 f'direction differs by ≤ {100 * max(fused["cos"]):.1f}% at '
+                 'every epoch')
+    fig.suptitle(title, color=INK)
     p = out_dir / 'fig2_zg_n1_invariance.png'
     fig.savefig(p, facecolor=SURFACE)
     plt.close(fig)
     paths.append(p)
 
     # ---- fig3 + fig4: the per-view series over all epochs -----------------
-    if digest_path is not None:
-        dg = json.load(open(digest_path))
+    if dg is not None:
         series = dg['series']
         pool = [int(v) for v in dg['meta']['pool_ring']]
         az_all = np.asarray([-90 + 15 * i for i in pool], float)
@@ -287,11 +350,16 @@ def plot(coords_path, out_dir, digest_path=None, dpi=170):
         # with them in the smoke render (and the diverging colors identify the
         # ring order everywhere else). Label text comes from the slot's own
         # azimuth, not a hardcoded ring.
-        for j in (0, K - 1):
-            arr0 = np.asarray(pv[panels[0][0]])
+        arr0 = np.asarray(pv[panels[0][0]])
+        # the two ends can sit ~4 pt apart in this panel (clear run: 8.09 vs
+        # 7.45 on a 5.5-33 axis), so they overlapped into garbled text there;
+        # a fixed +-6 pt split guarantees 12 pt, negligible when they differ
+        # a lot
+        hi = 6.0 if arr0[-1, 0] >= arr0[-1, K - 1] else -6.0
+        for j, dy in ((0, hi), (K - 1, -hi)):
             axes.flat[0].annotate(f'{az_all[j]:+g}°',
                                   xy=(epochs_all[-1], arr0[-1, j]),
-                                  xytext=(4, 0), textcoords='offset points',
+                                  xytext=(4, dy), textcoords='offset points',
                                   color=INK2, fontsize=8, va='center')
         axes.flat[-1].set_xlabel('epoch', color=INK2)
         fig.suptitle('per-view z_v structure over training (11 ring views)',

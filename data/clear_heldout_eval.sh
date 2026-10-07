@@ -13,9 +13,13 @@
 # encoder interpolates); +-82.5/+-90 may degrade (M2's low-value edge); an
 # offgrid mean below ~0.4 would be real view-tiedness at unvisited poses.
 #
-# Runtime on miroc-server: stage 2 ~60 min (14 viewpoints x 50 paired episodes),
-# stage 3 ~12 min. Outputs land in this repo's data/ (auto-tracked by the
-# !data/eval_*/** gitignore rule), so the record travels by git after the run.
+# Runtime on miroc-server, measured 2026-10-07 (GPU shared with another user's
+# jobs, ~88% util on the card, ours 0.5 GB): smoke 14.5 min (15:39-15:53),
+# stage 2 77 min (15:53-17:10, 4.4-4.6 it/s over 50 chunks of 14 envs),
+# stage 3 17 min. The earlier ~60 min estimate assumed an unshared card.
+# Outputs land in this repo's data/ (auto-tracked by the !data/eval_*/**
+# gitignore rule), so the record travels by git after the run; the summary
+# .txt files are derived and stay untracked (re-run summarize_novel_view.py).
 #
 # Run to completion with:  setsid bash -c 'bash data/clear_heldout_eval.sh' < /dev/null &
 set -u

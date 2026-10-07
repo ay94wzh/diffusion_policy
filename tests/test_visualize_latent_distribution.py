@@ -31,6 +31,7 @@ repo_root = os.path.dirname(this_dir)
 os.chdir(repo_root)
 sys.path.insert(0, repo_root)
 
+import analyze_latent_series as als  # noqa: E402
 import visualize_latent_distribution as vld  # noqa: E402
 
 S_DEF, K_DEF, D_DEF = 24, 4, 8
@@ -89,8 +90,13 @@ def make_snapshots(root, epochs=(0, 1, 2), shift_view0=False,
     return snap
 
 
-def make_digest(path):
-    """A tiny analyze_latent_series-style digest for the fig3/fig4 smoke."""
+def make_digest(path, fused=True):
+    """A tiny analyze_latent_series-style digest for the fig3/fig4 smoke.
+
+    With `fused`, it also carries a `fused/n1_vs_full` series whose values are
+    NOT the 2-D numbers the coords JSON would give -- so a fig2 annotation that
+    reads the digest is distinguishable from one that recomputes in 2-D.
+    """
     rng = np.random.RandomState(1)
     n_ep = 3
     per_view = {k: rng.uniform(0.1, 2.0, size=(n_ep, K_DEF)).tolist()
@@ -102,6 +108,9 @@ def make_digest(path):
                       'pair_matrix': {'epochs': [0, 2], 'order': order,
                                       'values': vals}},
            'meta': {'pool_ring': POOL}}
+    if fused:
+        doc['fused'] = {'n1_vs_full': {'cos': [0.00173, 0.01552, 0.00534],
+                                       'rel': [0.06398, 0.17476, 0.10312]}}
     with open(path, 'w') as f:
         json.dump(doc, f)
     return path
@@ -211,11 +220,66 @@ def test_plot_smoke(tmp):
           f'min size {min(p.stat().st_size for p in paths) // 1024} KB')
 
 
+def test_annotation_uses_the_digest_not_the_projection(tmp):
+    """fig2's numbers must be the digest's 512-D ones when a digest is given.
+
+    The 2-D pair is a projection artifact (origin inflation understated rel
+    ~5x and flipped its trend sign on the clear run), so the annotation must
+    print the digest values for the epoch, label them 512-D, and -- when the
+    digest has a fused section that does not cover the epoch -- stop loudly
+    rather than quietly print the 2-D numbers instead.
+    """
+    os.makedirs(os.path.join(tmp, 'ann'), exist_ok=True)
+    digest = json.load(open(make_digest(os.path.join(tmp, 'ann', 'd.json'))))
+    rng = np.random.RandomState(3)
+    zg = rng.normal(size=(S_DEF, 2)) + np.array([1.0, -0.5])  # away from the
+    zn = zg + rng.normal(scale=0.05, size=(S_DEF, 2))         # panel's origin
+
+    t200 = vld.relation_annotation(digest, 2, zg, zn)
+    assert '0.53%' in t200 and '10.3%' in t200, t200
+    assert '(512-D' in t200 and '2-D panel' not in t200, t200
+
+    t_2d = vld.relation_annotation(None, 2, zg, zn)
+    # '(512-D,' is the digest path's second-line marker; the fallback's own
+    # hint mentions 512-D, so test the marker, not the substring
+    assert '2-D panel' in t_2d and '(512-D,' not in t_2d, t_2d
+    # the fallback really is the projected relation, not a relabelled one --
+    # recomputed through the analyzer's own numpy definitions
+    cos_e, _ = als.cos_dist_np(zg, zn)
+    assert f'{100 * cos_e:.2f}%' in t_2d, (t_2d, cos_e)
+    assert f'{100 * als.rel_dist_np(zg, zn):.1f}%' in t_2d, t_2d
+
+    nofused = json.load(open(make_digest(os.path.join(tmp, 'ann', 'nf.json'),
+                                         fused=False)))
+    assert '2-D panel' in vld.relation_annotation(nofused, 2, zg, zn)
+
+    try:
+        vld.relation_annotation(digest, 7, zg, zn)   # epoch not in the digest
+    except SystemExit as e:
+        assert 'fused' in str(e) and '7' in str(e), str(e)
+        print(f'  epoch-not-in-digest gate fired: {e}')
+    else:
+        raise AssertionError('no loud failure for an epoch the digest misses')
+
+    short = {'fused': {'n1_vs_full': {'cos': [0.0], 'rel': [0.0]}},
+             'series': {'epochs': [0, 1, 2]}}
+    try:
+        vld.relation_annotation(short, 0, zg, zn)
+    except SystemExit as e:
+        assert 'refusing to annotate' in str(e), str(e)
+        print(f'  short-series gate fired: {e}')
+    else:
+        raise AssertionError('no loud failure for a truncated fused series')
+    print('  fig2 annotation: digest 512-D values used, 2-D labelled, '
+          'inconsistent digests stop')
+
+
 def main():
     tests = [test_compute_recovers_planted_structure,
              test_mutation_shift_moves_only_that_view,
              test_state_idx_mismatch_stops_compute,
              test_determinism,
+             test_annotation_uses_the_digest_not_the_projection,
              test_plot_smoke]
     failures = []
     with tempfile.TemporaryDirectory(prefix='vld_test_') as tmp:
