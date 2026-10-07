@@ -21,9 +21,9 @@ import click
 
 # test/<viewpoint>/<metric>
 LOG_KEY_PATTERN = re.compile(r'^test/(?P<vp>[^/]+)/(?P<metric>mean_score|success_rate)$')
-# azimuth_sweep5 names: az_0, az_p15, az_m15, az_p30, az_m30
-# azimuth_sweep5 names: az_0, az_p15, az_m15, az_p30, az_m30
-AZ_PATTERN = re.compile(r'^az_(?P<sign>[pm])?(?P<deg>\d+)$')
+# azimuth_sweep5 names: az_0, az_p15, az_m15, az_p30, az_m30; fractional
+# degrees sort too (azimuth_offgrid's az_p7.5 ... az_p82.5).
+AZ_PATTERN = re.compile(r'^az_(?P<sign>[pm])?(?P<deg>\d+(?:\.\d+)?)$')
 # elevation_az0 names: el_0, el_p15, el_m15
 EL_PATTERN = re.compile(r'^el_(?P<sign>[pm])?(?P<deg>\d+)$')
 

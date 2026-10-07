@@ -121,6 +121,31 @@ PRESETS = {
             {'name': 'az_p75', 'azimuth_deg': 75},    # held out
         ]
     },
+    # The 7.5-degree-offset ring: every pose is a midpoint between two trained
+    # poses of a 15-degree ring, plus the two +-90 endpoints. For a checkpoint
+    # trained on every 15-degree pose (e.g. the clear run, pool ring 1..11 =
+    # az -75..+75) this is the pure held-out sweep -- no viewpoint here was
+    # ever trained; for the committed even-ring configs it extends the odd-index
+    # held-out set. First run: the clear run, 2026-10-07.
+    'azimuth_offgrid': {
+        'camera': 'agentview',
+        'viewpoints': [
+            {'name': 'az_m90', 'azimuth_deg': -90},
+            {'name': 'az_m82.5', 'azimuth_deg': -82.5},
+            {'name': 'az_m67.5', 'azimuth_deg': -67.5},
+            {'name': 'az_m52.5', 'azimuth_deg': -52.5},
+            {'name': 'az_m37.5', 'azimuth_deg': -37.5},
+            {'name': 'az_m22.5', 'azimuth_deg': -22.5},
+            {'name': 'az_m7.5', 'azimuth_deg': -7.5},
+            {'name': 'az_p7.5', 'azimuth_deg': 7.5},
+            {'name': 'az_p22.5', 'azimuth_deg': 22.5},
+            {'name': 'az_p37.5', 'azimuth_deg': 37.5},
+            {'name': 'az_p52.5', 'azimuth_deg': 52.5},
+            {'name': 'az_p67.5', 'azimuth_deg': 67.5},
+            {'name': 'az_p82.5', 'azimuth_deg': 82.5},
+            {'name': 'az_p90', 'azimuth_deg': 90},
+        ]
+    },
 }
 
 # ---------------------------------------------------------------------------

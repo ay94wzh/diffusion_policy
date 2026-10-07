@@ -1,23 +1,30 @@
 # NOTES — environment, runbooks, operations
 
 Practical material for running this project. The module, its results and the open questions live
-in `PROGRESS.md`; the plan in `PLAN.md`. **This box is the training machine** — the runbooks below
-execute here. (Until 2026-10-01 this file called the checkout a separate "coding-and-documents
-machine" and pointed the runbooks at a remote host; that was wrong, and it is how a guard failure
-skipped every evaluation of three finished runs for five days. See *A guard that discards its own
-error* under Traps.) The closed runbooks (the step-1a relational-probe runbook and the
-never-launched proprioception-dropout runbook) are at git tag `docs-full-20260930`.
+in `PROGRESS.md`; the plan in `PLAN.md`. **The runbooks below execute on `miroc-server`** (user
+`zihan`, checkout `/home/zihan/repos/diffusion_policy`) — the box with the 2× RTX 5090s, the
+multi-view zarrs, the hdf5s and every checkpoint. The **laptop** (hostname `ay`, user
+`zihan-wang`, checkout `/home/zihan-wang/diffusion_policy`) is where code and documents are
+written; no GPU, no `/data`. **Name machines, never "this box"**: two revisions of this file got
+that wrong (the original "coding-and-documents machine" story, and the
+2026-10-01 "this box is the training machine" correction, which was written in the training box's
+checkout and reads false on the laptop); that is the same confusion under which a guard failure
+skipped every evaluation of three finished runs for five days — see *A guard that discards its
+own error* under Traps. The closed runbooks (the step-1a relational-probe runbook
+and the never-launched proprioception-dropout runbook) are at git tag `docs-full-20260930`.
 
 ## Environment
 
-- **The multi-view zarrs, the PH hdf5s and every checkpoint are here**, and `PROGRESS.md` paths
-  that name `data/outputs/run_*/checkpoints/latest.ckpt` or `data/multiview/*_ring13.zarr` resolve.
-  Since 2026-10-01 the `data/outputs` weights are **symlinks** into `/data/zihan/ckpt_store/`, so
-  reads through those paths work but `du` on `data/outputs` no longer reports them.
-- **Disk is the binding constraint of any campaign.** Check `df -h` as step 0 — but check the
-  right volume. `/` (the repo) is chronically near-full and `/data` has terabytes, which is why
-  new run dirs go to `/data/zihan/runs/run_<name>/` and only `logs.json.txt` is copied back.
-  A checkpoint is 4.62 GB; `topk.k=1` plus `latest.ckpt` is ~9.2 GB per run.
+- **The multi-view zarrs, the PH hdf5s and every checkpoint are on `miroc-server`**, and
+  `PROGRESS.md` paths that name `data/outputs/run_*/checkpoints/latest.ckpt` or
+  `data/multiview/*_ring13.zarr` resolve **there** (not in the laptop checkout). Since 2026-10-01
+  the `data/outputs` weights are **symlinks** into `/data/zihan/ckpt_store/`, so reads through
+  those paths work but `du` on `data/outputs` no longer reports them.
+- **Disk is the binding constraint of any campaign on `miroc-server`.** Check `df -h` there as
+  step 0 — but check the right volume. `/` (the repo) is chronically near-full and `/data` has
+  terabytes, which is why new run dirs go to `/data/zihan/runs/run_<name>/` and only
+  `logs.json.txt` is copied back. A checkpoint is 4.62 GB; `topk.k=1` plus `latest.ckpt` is
+  ~9.2 GB per run.
 - conda env **`robodiff`**: torch **2.8.0+cu128** (sm_120), robosuite 1.2.0, robomimic
   0.2.0, mujoco_py 2.0.2.13, numcodecs 0.10.2, wandb 0.15.12.
   **Do not recreate the env from `conda_environment.yaml`** — its `pytorch=1.12.1` pin is
@@ -42,11 +49,11 @@ never-launched proprioception-dropout runbook) are at git tag `docs-full-2026093
   cameras every step.
 - **`numcodecs 0.10.2` has no `jpeg2k`**, so anything opening the multi-view zarrs must
   import `diffusion_policy.dataset.multiview_image_dataset` first (`register_codecs()`).
-- `wandb` is unattended-safe here via `~/.netrc` — proven with detached runs.
+- `wandb` is unattended-safe on `miroc-server` via `~/.netrc` — proven with detached runs.
 
 ## Runbook
 
-All commands run from the repo root, on the training machine. **201 epochs**.
+All commands run from the repo root, on `miroc-server`. **201 epochs**.
 
 ### Training
 
@@ -248,7 +255,7 @@ python generate_multiview_dataset.py \
 - **There is no resume**; `--overwrite` wipes the store. Wipe each output before starting, and
   abort the batch if gate 1 does not PASS. A killed run is **silent** (zarr returns fill-value 0
   for unwritten chunks) — check for all-zero *frames*.
-- **The generated zarrs are on the training machine**; a runbook step that reads them must begin
+- **The generated zarrs are on `miroc-server`**; a runbook step that reads them must begin
   by checking they exist.
 
 ### Resume and long campaigns
@@ -271,10 +278,10 @@ in-memory only, so stale topk files are never evicted on resume — delete them 
   (81 s/epoch vs 43 at 14), `logging.project` is `diffusion_policy_debug`, and
   `training.resume` is `True`.
 
-## Machine and timing
+## Machine and timing (`miroc-server`)
 
 2× RTX 5090 (32 GB each), 24 cores, 125 GB RAM, shared with other users — load spikes from
-~5 to ~25 and gives 2× slowdowns. `n_envs: 28` is fine here.
+~5 to ~25 and gives 2× slowdowns. `n_envs: 28` is fine.
 
 | run | cost |
 |---|---|
@@ -295,7 +302,7 @@ in-memory only, so stale topk files are never evicted on resume — delete them 
 
 ## Disk
 
-Chronic constraint on the **training machine**: check `df -h` as step 0 of any campaign.
+Chronic constraint on **`miroc-server`**: check `df -h` as step 0 of any campaign.
 
 - A checkpoint is **4.62 GB** (policy + EMA + Adam state); `topk.k=1` plus `latest.ckpt` ≈
   **9.2 GB per run**. Size a run with `du`, never by counting checkpoint files — `topk.k=1` writes
@@ -311,7 +318,7 @@ Chronic constraint on the **training machine**: check `df -h` as step 0 of any c
 - **Do not delete a cell's weights until its LATENT has been probed, not merely its behaviour
   measured.** `m3fixedn1` was deleted the day its behavioural question closed, and within hours a
   mechanistic question arose for which it was the natural pole. Probing is free.
-- **`data/robomimic_image.zip` (84.75 GB) does not exist on the training machine** — only the
+- **`data/robomimic_image.zip` (84.75 GB) does not exist on `miroc-server`** — only the
   three `ph` tasks are available, with both `image.hdf5` and `image_abs.hdf5`.
 
 ## Traps
@@ -394,11 +401,11 @@ actions deliberately.
 | conditioning screens | `data/screen_conditioning/*.json` | ✅ |
 | relational probe (step 1a + schema-2 grid + `z_g`) | `data/probe_relpose_*/`, `data/probe_zg_square_*/` | ✅ |
 | aux-probe evidence | `data/probe_m4_square_logs.json.txt` | ✅ |
-| weights (4.62 GB each) | `data/outputs/run_*/checkpoints/latest.ckpt` | ❌ — **on the training machine**; rsync only |
-| multi-view zarrs | `data/multiview/<task>_ph_ring13.zarr` | ❌ — **on the training machine** |
-| robomimic PH datasets | `data/robomimic/datasets/<task>/ph/{image,image_abs}.hdf5` | ❌ n/a |
+| weights (4.62 GB each) | `data/outputs/run_*/checkpoints/latest.ckpt` | ❌ — **on `miroc-server`**; rsync only |
+| multi-view zarrs | `data/multiview/<task>_ph_ring13.zarr` | ❌ — **on `miroc-server`** |
+| robomimic PH datasets | `data/robomimic/datasets/<task>/ph/{image,image_abs}.hdf5` | ❌ — **on `miroc-server`** |
 
-Move weights between machines with
+Move weights between the laptop and `miroc-server` with
 `rsync -av data/outputs <user>@<other>:/path/to/diffusion_policy/data/outputs`.
 
 Training curves and rollout videos are on wandb, project **`diffusion_policy_view`**

@@ -1,7 +1,7 @@
 #!/bin/bash
 # Analyze the clear run's per-epoch latent series, and sweep its checkpoint.
 #
-# Runs ON THE TRAINING BOX (the npz and the checkpoint live under /data; this
+# Runs ON `MIROC-SERVER` (the npz and the checkpoint live under /data; this
 # script must never be run from the laptop -- the interpreter below does not
 # exist there). Two stages, both idempotent:
 #

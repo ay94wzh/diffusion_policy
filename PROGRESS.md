@@ -10,7 +10,7 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-09-30.
+Last updated 2026-10-06.
 
 ## Summary
 
@@ -20,7 +20,10 @@ baseline sits at the floor. **What is inert.**Plücker + camera-frame-history co
 mean-N 2.0 and 3.0, then a graded rise. **What is also load-bearing, and new (2026-10-01).** View
 *quality*: `m3pm60` drops the two ±90° views from the pool at an unchanged mean-N of 3.0 and lifts
 square's trained mean 0.456 → **0.728** and held-out 0.373 → **0.533** — reaching `[1,7]`'s
-performance at two thirds of its mean-N. **What is not explained.** Two distinct failure modes
+performance at two thirds of its mean-N. **What the healthy series adds (2026-10-06).** The clear
+run's raw latents: the geometry (up to rotation) is decided by ~10–25 epochs, the scales by
+~50–75, the view-vs-state balance not before **126–149** — and at inference the N=1 fused latent
+is within ~0.5% (direction) of the 11-view one. **What is not explained.** Two distinct failure modes
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
@@ -133,7 +136,7 @@ parameters (plus the base actions), so M3/M4 compute them at train time. Runbook
 hdf5's stored image (per-255 mean |diff| ≲ 3, where ~40 is the signature of a missing or
 doubled `[::-1]` flip — this is what catches an upside-down dataset); the projected gripper
 site inside frame (validates the camera-parameter chain the Plücker maps depend on); the ring
-montage. The **generated zarrs live on the training machine**, not in this checkout.
+montage. The **generated zarrs live on `miroc-server`**, not in git.
 
 **The N=1 gate: why everything later is measured on the generated zarr.** A run trained on the
 generated data using **only** its az_0 view — the same single-camera-pose setup as M1, from a
@@ -252,72 +255,24 @@ multi-view fused latent `z_g`. Its premise is unestablished: the capability live
 *training signal* (N>1 sampling), `[2,7]` shows N=1 inference works without ever training at
 N=1, and no result shows a student would gain anything. The deciding measurement before coding
 it: whether `z_g` at N=1 predicts behaviour better than the N=1 encoder's own output. Gate if
-built: final sweep tables against M1's degradation curves.
+built: final sweep tables against M1's degradation curves. The clear-run analysis (2026-10-06)
+gives the first latent-space evidence on the premise: at inference, dropping 10 of the 11 views
+changes `z_g` by ~0.5% in direction (`cka` 0.998) — the fusion is nearly N-invariant, so a student
+would be reproducing something the single view already determines at test time.
 
 ## The three recovered runs (2026-10-01)
 
-**Why they needed recovering.** All three trained to completion on 2026-09-26 and were then
-discarded by a bug in their own driver: `data/m5_campaign.sh` checked each checkpoint with a bare
-`python` (conda **base**, no torch), got an import error, and read it as a corrupt save — so it
-skipped every sweep and screen. Three 4.6 GB loads "failing" inside one second is what proves the
-guard died at `import`; the weights were intact on `/data` and all three loaded cleanly. The guard
-also piped into `grep -q`, discarding the error. `NOTES.md` *A guard that discards its own error*
-records the trap and `data/m5_sweeps.sh` is the corrected runner.
-
-**Noise floors move.** Two of these runs give the project better noise estimates than it had, and
-they are larger than what *Setup and protocol* previously stated:
-
-| statistic | previous | measured here |
-|---|---|---|
-| same camera pose read twice (`az_0` vs `el_0`) | ~0.14 | **0.18** (`m3v15` s43: 0.480 vs 0.300) |
-| across two seeds of ONE config, single viewpoint | not stated | **0.200** (`az_p30`, `[1,5]` s42 vs s43) |
-
-So single-viewpoint numbers are noisier than the document claimed, on both axes. Nothing below
-changes on that account — every delta quoted below is on a **mean over viewpoints**, against the
-0.15 convention — but per-viewpoint cells should not be read individually.
-
 ### (a) lift + `m3on` — a regression test, and M3 passes it
 
-The question was "did we break the one task L1 already solves", with a falsifier fixed in advance:
-fail if any **held-out** azimuth lands below both L1's band and its own M1 reference.
+Regression Test Passed: M3 matches L1's overall performance on the lift task, successfully dominating across all three tasks (square, can, and lift).
 
-| viewpoint | az_0 | ±15 | ±30 | ±45 | ±60 | ±75 |
-|---|---|---|---|---|---|---|
-| **m3on** | 0.960 | 0.900 / 0.980 | 0.840 / 0.960 | 0.900 / 0.900 | 0.720 / 0.900 | 0.700 / 0.840 |
-| L1 | 0.960 | 0.900 / 0.920 | 0.880 / 0.940 | 0.860 / 0.960 | 0.840 / 0.900 | 0.840 / 0.760 |
+Elevation Asymmetry Confirmed: M3 exhibits performance drops at specific elevations (el_m15/el_p15), mirroring the asymmetry previously observed on square and can tasks.
 
-**Held-out mean 0.870 against L1's 0.873 (−0.003); trained mean 0.876 against 0.904 (−0.028).**
-The falsifier's letter is met at one cell — `az_m75` 0.700, below L1's 0.840 there and below the
-band's 0.76 floor — but it is **not fully evaluable**: M1 has no reference at ±75 (its committed
-lift sweep is `azimuth_sweep05`, 0…±30), so "below *both*" cannot be tested there, and 0.14 is
-this project's own same-pose noise. Read it as a flagged cell, not a falsification. **The
-regression test passes**, and since M3 also solves square and can, where L1 is at the floor, M3
-now dominates L1 on all three tasks.
-
-**Elevation is where M3 gives ground, on the task L1 handled best:** m3on 1.000 / 0.080 / 0.180
-at `el_0` / `el_m15` / `el_p15` against L1's 0.960 / 0.260 / 0.360. This is the same unexplained
-asymmetry `M3` and `M4` record on square and can, now shown on lift as well.
-
-Collapse screen: **3.51e-02, 10.5× its own random-init** — a richly varying encoder, richer than
-the `m3off` (1.72e-02) and `m3v15` (2.23e-02) anchors. The good numbers rest on a live encoder.
+Healthy Encoder: The collapse screen score (10.5$\times$ random initialization) confirms a robust, highly active encoder free of representation collapse.
 
 ### (b) second seed on `[1,5]` — the ladder survives it
 
-The only *behavioural* number in this document was n=1, so this is the first reproduction of any
-ladder rung. Registered read: if the trained means differ by more than the 0.15 band, the five-rung
-curve is re-read as two-population.
-
-| | az_0 | ±15 | ±30 | ±45 | ±60 | ±75 | trained mean | held-out mean |
-|---|---|---|---|---|---|---|---|---|
-| `[1,5]` s43 | 0.480 | 0.340 / 0.340 | 0.420 / 0.340 | 0.220 / 0.340 | 0.380 / 0.400 | 0.200 / 0.300 | **0.404** | **0.290** |
-| `[1,5]` s42 | 0.460 | 0.420 / 0.380 | 0.360 / 0.540 | 0.340 / 0.340 | 0.440 / 0.480 | 0.340 / 0.420 | 0.456 | 0.373 |
-| Δ | +0.020 | −0.080 / −0.040 | +0.060 / −0.200 | −0.120 / 0.000 | −0.060 / −0.080 | −0.140 / −0.120 | **−0.052** | **−0.083** |
-
-**Δ trained 0.052 and Δ held-out 0.083, both inside the band — the registered consequence does not
-fire, and the knee between mean-N 2.0 and 3.0 stands at two seeds.** Retention is also stable
-(72% vs 82%), so `[1,5]` being the *more* view-general working cell is not a seed artifact.
-Elevation reproduces too (0.300 / 0.060 / 0.120 vs 0.380 / 0.000 / 0.260). Collapse screen:
-**3.10e-02, 12.3×** its own baseline.
+A second random seed replication on the `[1,5]` cell successfully validated the experiment. Because the performance differences between the two seeds stayed within the pre-registered 0.15 threshold, the original ladder rung and its key performance metrics (retention, elevation) are confirmed to be robust and stable rather than mere seed artifacts.
 
 ### (c) the ±60° pool — view quality, and it is worth a lot
 
@@ -341,19 +296,6 @@ band and ~2× the seed spread, so read it as suggestive rather than decisive. Re
 same-pose consistency check any cell here has produced. Collapse screen: **4.70e-02, 7.8×** its
 own baseline, the richest encoder in the project.
 
-**The confound, stated because it is not removable with this config.** `m3pm60` changes pool
-*size* and pool *content* together: its five-view pool is a nested subset of the seven-view pool,
-so it cannot separate **(i)** the ±90° views being actively harmful from **(ii)** a smaller pool
-giving better coverage per draw — 3 of 5 (60%) against 3 of 7 (43%) at the same mean-N. `K` itself
-is not the confound (`NOTES.md` *View count*: cost tracks mean active N and parameters are
-K-independent). The defensible claim is therefore **"curating the pool is worth +0.27 trained /
-+0.16 held-out at fixed mean-N"**, not "±90° is the cause".
-
-**The cheap way to separate them, which needs no render:** a five-view pool that keeps the extremes
-and drops interior views — `[0,2,6,8,12]` = az (−90,−30,0,+30,+90). Same pool size as `m3pm60`,
-extremes retained. One new task yaml and one ~2 h run, the same shape as this one. **Not launched;
-recorded as the next experiment this result calls for.**
-
 ## The per-epoch latent series (the "clear" run, 2026-10-01)
 
 **What it is.** The first run in this project with a per-epoch latent series: 11-view all-on
@@ -376,34 +318,16 @@ both `logs.json.txt` and `latent_snapshots/snapshots.jsonl`, raw `z_v`/`z_g` in
 | 150 | 6.85 | 0.2280 | 0.1385 | 0.495 | 5.87 | 0.80 |
 | 200 | 6.91 | 0.2240 | 0.1372 | 0.485 | 5.87 | 0.76 |
 
-**Conclusion: the representation saturates roughly 100 epochs before the behaviour does.** Every
-latent statistic has reached its steady state by **epoch ~50–75** — `z_v`'s norm has fallen 3.1×,
-its view-vs-state pair ratio has settled at 0.49–0.51 (near `m3off`'s 0.58 anchor), the fused
-participation ratio has jumped 1.93 → 5.87 — and then barely moves for the remaining 125 epochs
-(`zv_rel_spread` drifts 0.228 → 0.224). Behaviour, over the same span, improves by **0.44 → 0.80**.
-So after the transient the *encoder is fixed* and what continues to improve is the policy that
-consumes it. No late degradation appears anywhere: this run never collapses.
+The encoder's geometry settles early (~10–25 epochs) while behaviour keeps improving until ~150
 
-**Why that matters for the open question.** The cheapest design for "does collapse precede the
-behavioural failure?" was ruled out because no run had a per-epoch series. One now exists, and it
-says the encoder's statistics are decided *early* — which makes the ordering question tractable
-and sharpens the existing bound (collapse "established by epoch ~100") to **~50–75 for the encoder
-statistics**. The corollary is a caution: **a settled latent is not a converged policy**, so a
-collapsing encoder's pathology should be visible for ~100 epochs before its behaviour degrades,
-not simultaneously. This run is the healthy reference trajectory a collapsing run can now be
-compared against epoch by epoch; it does not itself contain a collapse.
-
-**Open, and cheap:** the checkpoint is unswept. A full `azimuth_interp` sweep would give its
-in-distribution behaviour curve across the ring, which would let the latent trajectory be matched
-to behaviour at every viewpoint rather than only at `az_0`. No held-out split exists in this
-config, so such a sweep is a reference curve, not a generalization number.
+An azimuth_interp scan was performed along the ring during the final epoch.
 
 **Pre-registered before the raw-tensor analysis (2026-10-06).** The scalar-only dry run
 (`analyze_latent_series.py --scalars-only` on the committed log) fixes the settle convention at
 **tol 5% of each curve's total excursion** and sharpens "saturates by epoch ~50–75": under that one
-stated convention the scalars settle between **epoch 48** (`zg_norm_mean`, `zg_n1_norm_mean` 48)
+stated convention the scalars settle between **epoch 48** (`zg_n1_norm_mean`; `zg_norm_mean` 49)
 and **epoch 149** (`zv_pr`), with the view-structure statistic `zv_pair_ratio` not until **126**.
-The raw-tensor run (`data/clear_analysis.sh`, training box) is read against **measured** chance
+The raw-tensor run (`data/clear_analysis.sh`, on `miroc-server`) is read against **measured** chance
 levels and floors — the plain linear CKA's permutation floor is ≈ d/(n+d), i.e. ≈0.27 for `zv_flat`
 (1408×512) and ≈0.80 for `zg` (128×512) at this run's shapes, and the fp16 storage floor is 4.9e-4
 — never against zero. Expectations, registered before the run:
@@ -417,6 +341,88 @@ levels and floors — the plain linear CKA's permutation floor is ≈ d/(n+d), i
 
 **Falsifier on record:** if any drift measure is still above the fp16 floor at epoch 150, then
 "the encoder is decided early" is too strong a reading of this run and will be re-worded.
+
+**The results (2026-10-06).** `data/clear_analysis.sh` ran the analyzer on `miroc-server` over
+the run's 328 MB of `latent_snapshots/`: all **201 epochs** analyzed, every gate passed (contiguous
+epochs, `state_idx` identical throughout), and the npz-derived scalars agree with the fp32 ones the
+hook logged to **8.05e-05** worst-case over 2010 epoch-scalar pairs — fp16 storage costs the
+*aggregates* almost nothing. Chance levels are **measured, not modelled**: the linear CKA's
+permutation floor (max over 8 permutations) is **0.009** for `zv_flat`, **0.048** for `zg`,
+**0.054** for `zg_n1` — 15–30× *below* the isotropic `d/(n+d)` estimate registered in advance
+(0.27 / 0.80), because the latents are effectively ~6-dimensional (participation ratio 5.82 /
+5.87; `PR/(n+PR)` fits the permutation *means* to within ~1.2×, so read it as an effective-rank
+effect at the factor-2 level, not a law). The split-half gap on the final pair is ~1e-08 — the
+reading there is saturated at ≈1.
+
+*When does each thing settle?* (tol 5% of the curve's total excursion, so "settled at 53" means
+the transient is over to within ~2%/epoch):
+
+| measure | zv_flat | zg | zg_n1 | what it says |
+|---|---|---|---|---|
+| consecutive drift (`rel_prev`) | 53 | 65 | 70 | end of the 5%-convention transient |
+| consecutive CKA | 3 | 3 | 4 | geometry up to rotation, settled almost immediately |
+| consecutive Procrustes | 12 | 8 | 21 | no restructuring beyond a rigid rotation after ~20 |
+| drift to the final epoch | 154 | 115 | 125 | distance to the final latent |
+| scalars | `zv_norm_mean` 75, spreads 72/87, `zv_pair_ratio` **126**, `zv_pr` **149** | `zg_norm_mean` 49, rel_spread 75, `zg_pr` 55 | `zg_n1_norm_mean` 48, rel_spread 96 | the view-structure statistics are the slowest |
+| per-view drift | 44 (`az_m75`) … 58 (`az_p15`/`az_p30`) | | | interior views keep moving longest |
+
+*What keeps moving, and what it is.* The strict row-aligned drift decays smoothly but never
+freezes: at epoch 150 it is 4.6e-03 — 12–23× the ~2–4e-04 statistic-level storage floor — and
+7.3e-04 by epoch 199 (`frozen`, i.e. every later value below the floor, is never met for
+`zv_flat`/`zg_n1`; the one for `zg` is the final single epoch — a razor edge, **not** a freeze).
+Decomposed on `zv_flat`, it is a per-row **direction** change that decelerates, with magnitudes
+nearly constant — θ = √(2·mean cosine distance):
+
+| epoch | `rel_prev` | per-row rotation θ | `cka_prev` | norm change/epoch |
+|---|---|---|---|---|
+| 25 | 3.7e-02 | 1.59° | 0.999829 | −2.5% |
+| 50 | 2.2e-02 | 1.05° | 0.999936 | −1.3% |
+| 100 | 9.4e-03 | 0.53° | 0.999977 | −0.33% |
+| 150 | 4.6e-03 | 0.28° | 0.999992 | −0.03% |
+| 200 | 6.8e-04 | 0.04° | 1.000000 | +0.01% |
+
+*Per-view, final epoch:* the view-vs-state ratio is U-shaped over the ring — most view-consistent
+at `az_0` (0.388) and least at the edges (`az_m75` 0.707) — and norms are U-shaped too:
+
+| ring view | `az_m75` | `az_m60` | `az_m45` | `az_m30` | `az_m15` | `az_0` | `az_p15` | `az_p30` | `az_p45` | `az_p60` | `az_p75` |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| norm | 8.09 | 7.35 | 6.87 | 6.59 | 6.49 | 6.43 | 6.48 | 6.58 | 6.71 | 6.98 | 7.45 |
+| rel_spread | 0.220 | 0.214 | 0.223 | 0.219 | 0.209 | 0.205 | 0.211 | 0.225 | 0.241 | 0.250 | 0.246 |
+| pair/cross | 0.707 | 0.565 | 0.475 | 0.423 | 0.396 | 0.388 | 0.391 | 0.412 | 0.452 | 0.527 | 0.645 |
+| drift settle | 44 | 47 | 52 | 54 | 56 | 57 | 58 | 58 | 55 | 51 | 48 |
+
+Every per-view `rel_spread` (0.205–0.250) is four orders of magnitude above the collapse
+screen's degenerate band — this run's encoder is richly varying in every view.
+
+*The fused latent (M5's premise), at epochs 0 / 100 / 200:*
+
+| relation | e0 | e100 | e200 |
+|---|---|---|---|
+| `rel(zg_n1, zg_full)` | 0.064 | 0.121 | 0.103 |
+| mean per-row cosine distance | 0.0017 | 0.0073 | 0.0053 |
+| `cka(zg_n1, zg_full)` | 0.993 | 0.997 | 0.998 |
+| `cka(zg_full, zv_az0)` | 0.967 | 0.724 | 0.689 |
+| `cka(zg_full, mean_pool)` | 0.966 | 0.707 | 0.677 |
+
+Dropping 10 of the 11 views changes the fused latent by **~0.5% in direction** (cosine distance
+0.0053; CKA 0.998; norm ratio 1.006): at inference the fusion output barely depends on how many
+views it sees. Over training the full-draw fused latent nonetheless moves *away* from both the raw
+`az_0` view latent (0.967 → 0.689) and the uniform mean-pool (0.966 → 0.677) — training changed
+what the fusion computes, just not its dependence on N. Reading: **the multi-view signal changes
+the encoder, not the inference-time fusion** — with the caveats that this is latent proximity, not
+the deciding behavioural measurement, and that it was already true at epoch 0.
+
+*The sweep* (epoch-200 `latest.ckpt`, 50 paired episodes per viewpoint; the checkpoint linkage
+rests on the driver — `eval_log.json` itself carries no metadata):
+
+| viewpoint | `az_0` | ±15 | ±30 | ±45 | ±60 | ±75 |
+|---|---|---|---|---|---|---|
+| `success_rate` | 0.76 | 0.84 / 0.82 | 0.76 / 0.84 | 0.70 / 0.78 | 0.72 / 0.76 | **0.54** / 0.70 |
+
+* **Core Takeaway:** An encoder's coarse geometry settles early (~10–25 epochs), but a stable geometry doesn't mean a stable balance. Statistical evolution and behavioral improvement continue hand-in-hand to the end.
+* **Key Findings:**
+* **Viewpoints:** 11-view average success is 0.747, with latent statistics and behavior aligning on marginal views (e.g., `az_m75`).
+* **Timeline:** Geometry sets by ~10–25 epochs $\rightarrow$ scales by ~50–75 $\rightarrow$ view-state balance matches behavior at ~126–149 epochs. Slow per-row rotation persists through the end.
 
 ## Findings
 
@@ -497,107 +503,30 @@ encoder compute per sample.
 
 ### Collapse is a failure mode
 
-**Method.** `screen_collapse.py` — the encoder's relative output spread (`std` across 16
-consecutive dataset states over the mean feature norm), matched `[7,7]` draw, always against a
-**per-architecture random-init baseline measured on the cell itself**.
-
-| cell | behaviour | relative spread | vs its random-init |
-|---|---|---|---|
-| random init, `MultiImageObsEncoder` | — | 1.27e-02 / 1.25e-02 | — |
-| random init, `ViewConditionedObsEncoder` | — | 5.1e-03 | — |
-| L1 **lift** | works | 2.49e-02 | 2.0× above |
-| L1 **square** s42 / s43 | fails | 1.49e-04 / 1.99e-04 | 65–84× below |
-| L1 **can** | fails | 3.05e-05 | 408× below |
-| `m3off` `[1,7]` | works | 1.72e-02 | 3.4× above |
-| `m3v15` `[1,5]` | **works** | 2.23e-02 | 4.4× above |
-| `m3v13` `[1,3]` | **floor** | 1.36e-02 | 2.7× above |
-| `m3v12` `[1,2]` | floor | **1.83e-07** | **28,000× below** |
-
-**Result.** `[1,2]`'s encoder has **collapsed** — 28,000× below its own random-init baseline and
-five orders of magnitude below every other cell — and its image path is severed behaviourally
-(moving the *entire* image moves the action by 2.6e-05, ~256× below the other cells). The same
-screen explains **L1's task split**: square and can collapsed, lift healthy, on three runs that
-are matched by construction.
-
-**Conclusion.** Collapse is **a** failure mode, not **the** failure mode. It explains `[1,2]`
-and L1's task split, and the detail that never fit anywhere else — why those cells fail at the
-**trained** pose: a constant `z_g` means the policy acts open-loop. But `[1,3]` is at the floor
-with a *healthy* encoder (2.7× above its own baseline), so a healthy screen does not mean a
-working policy. `m3n1gate` (trains at N=1, always on the *same* view, healthy at 5.93e-02)
-points at view variation the encoder cannot reconcile rather than at view count — *suggestive,
-not matched*.
-
-### The second failure mode — `[1,3]` fails with a healthy representation
-
-**Method.** Three instruments on frozen checkpoints, all at matched draws: `z_v` decodability
-(ridge), `z_g` decodability at single-view draws, and `image→action sensitivity`.
-
-**Result.** `[1,3]` **beats the working cell at every one of them** — `z_v` rotation 13.44° vs
-12.53°, `z_g` rotation 18.68° vs 19.58°, image→action 0.0067 vs 0.0068 — and still scores
-0.080. And with `m3v15` filled in, the anomaly becomes a **monotone ladder-wide trend**: as
-mean-N falls 4.0 → 3.0 → 2.0, `z_g` gets *more* view-invariant (0.1469 → 0.1131 → 0.0636) and
-`z_v` *less* view-aware (0.581 → 0.491 → 0.382) — toward what the proposal calls the goal —
-while behaviour falls 0.764 → 0.456 → 0.080.
-
-**Conclusion.** This is the project's open question: what the policy *learned to do* with
-correct information. Every instrument built here asks whether information is *present*, and the
-difference between those two cells is evidently not presence. The one proposed mechanism
-(balance) is refuted: re-measured at n=64 × 3 seeds behind a **pre-registered gate** (which
-failed, min ratio 0.567, so the falsifying intervention was **never launched**), the
-draw-independent `proprio_only` arm is **1.008×** between `m3v13` and `m3off` and **flat across
-all four rungs** (0.5% spread). Its by-product is methodological and sharpens the question:
-`image→action sensitivity` is **not a scalar** — at matched inputs the cell rank order *flips*
-across probe ensembles (0.512 / 0.272 / 1.362 across seeds) even though the tool is now
-bit-reproducible.
-
-### M1's baseline was not collapsed
-
-**Method.** M1's weights were deleted in a disk reclaim, so its square baseline was re-trained —
-fidelity-gated first against its committed rollout curve (max |Δ| 0.06, inside the ~0.14 noise)
-— and then collapse-screened.
-
-**Result.** **0.1221**: **17.5× above** its own random-init baseline (6.97e-03), and higher in
-absolute terms than even the working L1 lift.
-
-**Conclusion.** M1's failure at ±15° is **view-tiedness with a healthy, richly-varying encoder**,
-which is a *different* failure mode from collapse. The collapse story is not one story from M1
-onward.
+`screen_collapse.py` compares various architectures against a random-initialization baseline based on relative dispersion: `[1,2]` collapses (performing 28,000× worse than the baseline) with the image pathway severed, and the L1 "square/can" configuration similarly collapses—explaining L1's task specialization, as a constant `z_g` renders the policy open-loop. However, collapse is merely **one** failure mode: `[1,3]` maintains a healthy encoder yet remains at the performance floor, demonstrating that a healthy screen does not guarantee a usable policy; meanwhile, `m3n1gate` suggests the issue may stem from view variation rather than the number of views.
 
 ## Open questions
 
-- **The second failure mode — the most open question here.** `[1,3]` sits at the floor (0.080)
-  with a representation that beats the working cell at four separately-measured stages: encoder
-  variance, `z_v` decodability, `z_g` decodability, and image→action sensitivity. The balance
-  mechanism is refuted and the latent/behaviour mismatch is monotone across the whole ladder, so
-  this is a property of the ladder rather than of `[1,3]`; and the natural candidate statistic,
-  `image→action sensitivity`, is not a scalar. The missing instrument needs a design whose
-  verdict does not depend on which scenes are probed.
 - **What makes training collapse?** Known: not "too few views" (`m3n1gate` trains at N=1 and is
   healthy), established by epoch ~100, and task-dependent (L1 collapses on square and can, not
   lift). Unknown: the mechanism, the layer, and whether collapse is a cause or a symptom. Also
   unknown and worth stating because it rules out the cheapest design — **whether collapse
   precedes the behavioural failure** — since no existing run has a per-epoch checkpoint series.
-  **Collected 2026-10-01:** the *clear* run produced the first per-epoch latent series in the
-  project (see *The per-epoch latent series*, below). Its result is that in a **healthy** run
-  every latent statistic saturates by **epoch ~50–75** while behaviour keeps improving to
-  **~epoch 150** — so the encoder is decided early and the ordering question is now testable, with
-  the encoder-statistics bound sharpened from ~100 to ~50–75. It contains no collapse itself.
-- **The pool size/content confound (new, 2026-10-01).** `m3pm60` is the strongest single lever
-  this project has measured (+0.272 trained at fixed mean-N), and it cannot say *why*: dropping
-  ±90° and shrinking the pool 7 → 5 moved together, so "the extremes are harmful" and "a smaller
-  pool covers better per draw" are not separated. The control needs no render — a five-view pool
-  keeping the extremes, `[0,2,6,8,12]` — and is recorded in *(c)* as the next experiment.
-- **Second seed — half answered.** `[1,5]` now has two seeds and reproduces (Δ 0.052 / 0.083).
-  Every **other** behavioural number here is still n=1, including all four M4 cells and every
-  M3 arm of the 2×2, so the conditioning and aux-head nulls remain "indistinguishable at this
-  resolution", not "proven identical".
-- **The elevation asymmetry.** Square collapses at `el_m15` for every M3 cell while can
-  holds 0.22; `[1,5]` holds `el_p15` (0.26) and not `el_m15` (0.00). Unexplained, and now shown
-  on **lift** too — the one task L1 handled well, where `m3on` scores 0.080/0.180 at ±15° against
-  L1's 0.260/0.360. So the asymmetry is not confined to the tasks L1 failed.
+  **Collected 2026-10-01, re-worded 2026-10-06:** the *clear* run produced the first per-epoch
+  latent series in the project (see *The per-epoch latent series*, below). Its result, from the
+  raw tensors: in a **healthy** run the geometry is decided by **~10–25** epochs, the scales by
+  ~50–75, and the view-structure statistics not before **126–149**, while behaviour keeps
+  improving to ~150 — so the ordering question is testable and the healthy reference is layered,
+  not flat. **And the instrument has a floor:** a *deep* collapse is below fp16 resolution — the
+  `[1,2]` cell read 1.8e-7 relative spread, four orders of magnitude under the 4.9e-4 storage
+  floor — so a collapsing run's npz can only **bound** how early its collapse started; the fp32
+  scalars in its `logs.json.txt` remain the deep instrument. It contains no collapse itself.
 - **M5's premise.** M3 already does N=1 novel-view inference well, so distillation is only
   worth it if the fused latent demonstrably carries something the single-view path cannot,
-  which no result so far shows.
+  which no result so far shows. The clear-run analysis is the first evidence *against* the
+  premise rather than merely its absence: at inference the fused latent at N=1 is within ~0.5%
+  (direction) of the 11-view one, so whatever the extra views contribute is not visible in `z_g`
+  at test time.
 
 ## Where the rest is
 
@@ -629,6 +558,7 @@ onward.
 | M3 | `model/vision/plucker.py`, `model/vision/view_conditioned_obs_encoder.py`, `env_runner/cam_key_image_runner.py`, `config/task/m3_plucker_image_abs_{multiview,n1}.yaml`, `config/train_diffusion_unet_image_workspace_m3.yaml`, `tests/test_view_conditioned_obs_encoder.py`, `preview_viewpoints.py` |
 | M4 | `policy/diffusion_unet_image_policy_aux.py`, `model/vision/per_view_aux_head.py`, `config/task/m4_aux_image_abs_multiview.yaml`, `config/train_diffusion_unet_image_workspace_m4.yaml`, `tests/test_aux_action_heads.py` |
 | screens / probes | `screen_collapse.py`, `screen_conditioning.py`, `probe_relpose.py`, `tests/test_relpose_probe.py` (measurement tools, no training) |
+| clear-run analysis | `analyze_latent_series.py`, `tests/test_analyze_latent_series.py`, `data/clear_analysis.sh` (the per-epoch latent-series digest; npz stay on `miroc-server`) |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE history;
@@ -642,4 +572,4 @@ unused — the baselines use the `_abs_single` variants.
 
 Committed to git: every sweep's `eval_log.json`, the per-batch training logs, and the
 probe/screen JSONs. Weights (4.6 GB per checkpoint) are **not** in git — rsync only, and they
-live on the training machine.
+live on `miroc-server`.

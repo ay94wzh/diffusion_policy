@@ -42,6 +42,10 @@ data/*
 !data/analysis_*/
 !data/analysis_*/**
 !data/clear_analysis.sh
+# 2026-10-07 follow-ups on the clear run: the held-out sweep (azimuth_offgrid
+# preset) and the latent-distribution compute. Same rationale as clear_analysis.
+!data/clear_heldout_eval.sh
+!data/clear_latent_viz.sh
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*

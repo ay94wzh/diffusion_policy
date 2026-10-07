@@ -44,7 +44,7 @@ say "TRAIN_PID=$TRAIN_PID"
 
 # The launch gate, done by INSPECTING the resolved config rather than by timing
 # the first epochs. An epoch-time check only infers "was the override ignored?"
-# from a wall-clock number, and this box's load swings ~5 to ~30 (NOTES.md
+# from a wall-clock number, and `miroc-server`'s load swings ~5 to ~30 (NOTES.md
 # *Machine and timing*), so a contended reading is ambiguous by construction.
 # Reading config.yaml + the dataset's own draw is direct and contention-proof.
 sleep 90

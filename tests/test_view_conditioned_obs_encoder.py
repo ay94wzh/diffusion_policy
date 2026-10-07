@@ -726,7 +726,7 @@ def test_m3_configs():
     The dataset, the encoder and the runner each carry `eef_hist_steps` / slot
     counts independently, and they must agree -- a mismatch is not a crash but
     a silent train/eval inconsistency. This catches that class of drift, and
-    the config typos that would otherwise only surface on the training box.
+    the config typos that would otherwise only surface on `miroc-server`.
     """
     import hydra
     from omegaconf import OmegaConf

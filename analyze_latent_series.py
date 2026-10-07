@@ -43,7 +43,7 @@ run measured 1.8e-7 relative spread) is far below this floor -- its npz can
 only bound it; the fp32 scalars in logs.json.txt remain the deep instrument
 (NOTES.md *Traps*).
 
-Dependencies: numpy + stdlib only, so it runs on the training box (where the
+Dependencies: numpy + stdlib only, so it runs on `miroc-server` (where the
 npz live) and on the laptop (scalars-only mode, from the committed log). The
 ``_rel_dist`` formula is the same one in ``probe_relpose.py`` and the hook;
 importing either would drag in torch/hydra/zarr, so it is re-implemented here

@@ -1,5 +1,5 @@
 """CPU-only tests for analyze_latent_series.py (numpy only: no torch, no zarr,
-no simulator). Runs on the laptop AND on the training box.
+no simulator). Runs on the laptop AND on `miroc-server`.
 
 Builds a synthetic per-epoch snapshot series with KNOWN plants and checks that
 the analyzer recovers them -- and, per this project's house rule, that every
@@ -14,7 +14,7 @@ gate can FAIL when it should. The mutation checks are the point:
   * a 10%-perturbed logged scalar must FAIL the recheck, and an absent log
     must report not_run -- never a vacuous PASS.
 
-The real npz of the clear run live on the training box; this fixture mirrors
+The real npz of the clear run live on `miroc-server`; this fixture mirrors
 their layout (fp16 arrays, meta.json, snapshots.jsonl) exactly at a 16x4x8
 scale, and the driver runs THIS file as its CPU gate before the real analysis.
 
@@ -207,7 +207,7 @@ def test_rel_dist():
         from probe_relpose import _rel_dist as real
     except Exception as e:                                    # pragma: no cover
         print(f'  SKIPPED (probe_relpose import unavailable: {e}) '
-              f'-- cross-pin NOT run; it runs on the training box')
+              f'-- cross-pin NOT run; it runs on `miroc-server`')
         return
     ta = torch.tensor(a, dtype=torch.float64)
     tb = torch.tensor(b, dtype=torch.float64)

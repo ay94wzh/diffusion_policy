@@ -9,7 +9,7 @@
 # THE BUG THIS SCRIPT EXISTS TO NOT REPEAT. m5_campaign.sh trained all three,
 # then its ckpt_loads guard reported CKPT_LOAD_FAILED for all three and skipped
 # every sweep. The checkpoints were never corrupt: the guard called a bare
-# `python`, which on this box is conda BASE and has no torch, and it swallowed
+# `python`, which on `miroc-server` is conda BASE and has no torch, and it swallowed
 # the error into `grep -q`. Three 4.6 GB loads "failing" inside one second is
 # what gives it away -- a real load takes ~30 s. Hence, below:
 #   * PY is pinned to the robodiff interpreter (the convention every other
