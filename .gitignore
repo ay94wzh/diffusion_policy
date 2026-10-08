@@ -46,6 +46,14 @@ data/*
 # preset) and the latent-distribution compute. Same rationale as clear_analysis.
 !data/clear_heldout_eval.sh
 !data/clear_latent_viz.sh
+# 2026-10-08: the z_v-supervision run -- the clear run's recipe with the aux
+# target's frame swapped camera -> base. The run driver's header carries the
+# PRE-REGISTRATION (the read-out bands for the m4clear-vs-m4base A/B), which is
+# only meaningful if it travels with the code; same rationale as the
+# clear-run drivers above.
+!data/m4base_run.sh
+!data/m4base_eval.sh
+!data/m4base_analysis.sh
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*

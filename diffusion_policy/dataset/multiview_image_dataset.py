@@ -243,6 +243,7 @@ class MultiViewImageDataset(BaseImageDataset):
             eef_hist_steps=4,
             emit_aux_action=False,
             aux_n_steps=8,
+            aux_action_frame='camera',
             view_mask_key='view_mask',
             eef_hist_key='view_eef_hist',
             seed=42,
@@ -287,10 +288,21 @@ class MultiViewImageDataset(BaseImageDataset):
         self.eef_hist_steps = int(eef_hist_steps)
         self.view_count_range = None
         self.cam_table = None
-        # M4: emit the per-slot camera-frame action chunk alongside 'action'.
+        # M4: emit the per-slot auxiliary action chunk alongside 'action'.
         # Defaults off, so every pre-M4 config and dataset test is unchanged.
+        # `aux_action_frame` picks that chunk's frame:
+        #   'camera' -- M4's target: the chunk in each slot's own camera frame,
+        #               i.e. a DIFFERENT target per slot (view-specific);
+        #   'base'   -- the raw stored absolute action, identical for every live
+        #               slot of a sample (view-invariant; the z_v-supervision
+        #               variant -- the explicit cross-view consistency target).
         self.emit_aux_action = False
         self.aux_n_steps = int(aux_n_steps)
+        self.aux_action_frame = str(aux_action_frame)
+        if self.aux_action_frame not in ('camera', 'base'):
+            raise ValueError(
+                f'aux_action_frame must be "camera" or "base", got '
+                f'{aux_action_frame!r}')
         if view_pool is not None:
             view_pool = [int(v) for v in view_pool]
             if len(view_pool) == 0:
@@ -461,15 +473,24 @@ class MultiViewImageDataset(BaseImageDataset):
         return f'view_{view_idx:02d}_image'
 
     def aux_action_pooled(self) -> np.ndarray:
-        """``(V*T, 10)`` camera-frame actions, pooled over the training pool.
+        """``(V*T, 10)`` aux actions, pooled over the training pool.
 
         The statistics behind ``normalizer[AUX_ACTION_KEY]``. Built with the
-        SAME `action_to_cam` that `_m3_slots` emits, so the fit cannot drift
-        from the data it normalizes. Reads only the low-dim action array, so it
-        costs milliseconds even though it covers every view and timestep.
+        SAME transform `_m3_slots` emits, so the fit cannot drift from the data
+        it normalizes. Reads only the low-dim action array, so it costs
+        milliseconds even though it covers every view and timestep.
+
+        ``aux_action_frame='camera'`` pools the per-view camera-frame chunks;
+        ``'base'`` pools the stored action itself -- identical for every view,
+        so the V views would repeat the same rows, returned once, in the
+        stored float32: the SAME rows the ``action`` normalizer is fit from,
+        so the two normalizers come out identical and the aux term sits in
+        the diffusion target's normalized units by construction.
         """
         if not self.emit_aux_action:
             raise RuntimeError('aux_action_pooled needs emit_aux_action=True')
+        if self.aux_action_frame == 'base':
+            return np.asarray(self.replay_buffer['action'], dtype=np.float32)
         actions = np.asarray(self.replay_buffer['action'], dtype=np.float64)
         return np.concatenate([
             action_to_cam(actions, self.cam_table[v][:3], self.cam_table[v][3:7])
@@ -657,11 +678,18 @@ class MultiViewImageDataset(BaseImageDataset):
                 hist[:, slot] = eef_hist_to_cam(
                     pos, quat, grip, cam[:3], cam[3:7]).reshape(n_obs, -1)
                 if aux is not None:
-                    # raw stored action -> this slot's camera frame; the same
-                    # view `v` that supplied the image above
-                    aux[:, slot] = action_to_cam(
-                        action_chunk[win], cam[:3], cam[3:7]
-                        ).reshape(n_obs, C * ACTION_DIM)
+                    # raw stored action -> this slot's target frame; the same
+                    # view `v` that supplied the image above. 'camera' is
+                    # view-specific (a different target per slot); 'base' is
+                    # the stored action as-is -- view-invariant, so every live
+                    # slot of a sample carries the identical chunk.
+                    if self.aux_action_frame == 'base':
+                        aux[:, slot] = action_chunk[win].reshape(
+                            n_obs, C * ACTION_DIM)
+                    else:
+                        aux[:, slot] = action_to_cam(
+                            action_chunk[win], cam[:3], cam[3:7]
+                            ).reshape(n_obs, C * ACTION_DIM)
             else:
                 obs_dict[key] = np.zeros(
                     (n_obs,) + self.slot_shape, dtype=np.float32)

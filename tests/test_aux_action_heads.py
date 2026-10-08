@@ -13,7 +13,9 @@ Four things are checked, in rough order of how much they buy:
    implementation is most likely to ship.
 2. The dataset emits and pairs the target correctly, recoverable from the
    renders alone (a swapped cam table would train happily and read as "aux
-   didn't help").
+   didn't help"). Both target frames are covered: 'camera' (view-specific,
+   M4) and 'base' (view-invariant -- the exact stored action, identical on
+   every live slot, and live vs the camera frame at the same draw).
 3. The policy's aux term: masking, gradient path, zero-init, and the two
    properties the ablation rests on -- that `forward` is unchanged, and that
    weight 0 reproduces the parent's loss and gradients BIT-FOR-BIT.
@@ -361,6 +363,108 @@ def test_aux_target_plumbing():
         shutil.rmtree(tmp, ignore_errors=True)
 
 
+def test_aux_base_frame_target():
+    """`aux_action_frame='base'`: the view-INVARIANT variant of M4's target.
+
+    Three properties, each able to fail:
+      * the emitted target is the raw stored action slice, bit-for-bit -- no
+        transform, no dtype round trip (the base-frame chunk IS the frame the
+        diffusion loss consumes, so anything else would be a silent bug);
+      * every LIVE slot of a sample carries the IDENTICAL chunk -- the property
+        that makes the supervision a cross-view consistency pressure -- while
+        inactive slots stay exactly zero;
+      * the frame flag is LIVE: at the same RNG state (the same view draw),
+        base and camera targets differ on a real sample. A dead flag would make
+        m4base byte-identical to m4clear and the "one variable" claim false.
+    """
+    tmp = tempfile.mkdtemp(prefix='m4_baseframe_')
+    try:
+        ds, shape_meta, tmd = _build_m4_dataset(tmp, aux_action_frame='base')
+        C = AUX_N_STEPS
+        n_slots = tmd.N_VIEWS
+        max_live = 0
+        for idx in (0, 3, 7, 11):
+            batch = ds[idx]
+            assert AUX_ACTION_KEY in batch, sorted(batch.keys())
+            aux = batch[AUX_ACTION_KEY].numpy()
+            assert aux.shape == (2, n_slots, C * ACTION_DIM), aux.shape
+            assert aux.dtype == np.float32, aux.dtype
+            mask = batch['obs'][ds.view_mask_key].numpy()
+            assert np.all(aux[mask < 0.5] == 0.0)
+
+            action_chunk = ds.sampler.sample_sequence(idx)['action']
+            win = np.arange(2)[:, None] + np.arange(C)[None, :]
+            want = action_chunk[win].astype(np.float32)          # (To, C, Da)
+            views = _identify_slot_views(ds, idx, batch, tmd)
+            assert len(views) == int(mask[0].sum()), (views, mask[0])
+            max_live = max(max_live, len(views))
+            for slot in views:
+                got = aux[:, slot].reshape(2, C, ACTION_DIM)
+                assert np.array_equal(got, want), (idx, slot)
+            live = sorted(views)
+            for s in live[1:]:
+                assert np.array_equal(aux[:, s], aux[:, live[0]]), (idx, s)
+        assert max_live > 1, 'no sample drew more than one view'
+        print('  base-frame target OK (== the stored action slice exactly; all '
+              'live slots identical; zeroed when inactive)')
+
+        # the frame flag is LIVE: same RNG state -> same draw -> different
+        # target. The fixture cameras are non-identity by construction -- at an
+        # identity camera the two frames agree and this check would be vacuous
+        # (NOTES.md, "A check that cannot fail proves nothing").
+        ds_cam, _, _ = _build_m4_dataset(tmp, aux_action_frame='camera')
+        seen = 0.0
+        for idx in (0, 5):
+            np.random.seed(99)
+            b_base = ds[idx]
+            np.random.seed(99)
+            b_cam = ds_cam[idx]
+            assert torch.equal(b_base['obs'][ds.view_mask_key],
+                               b_cam['obs'][ds.view_mask_key])
+            seen = max(seen, float(
+                (b_base[AUX_ACTION_KEY] - b_cam[AUX_ACTION_KEY]).abs().max()))
+        assert seen > 1e-3, seen
+        print(f'  frame flag live: base vs camera targets differ on the same '
+              f'draw (max|diff| {seen:.3f})')
+
+        # the frame choice consumes no RNG: the view draw is identical with the
+        # aux target off entirely
+        ds_off, _, _ = _build_m4_dataset(tmp, emit_aux_action=False)
+        for idx in (0, 5, 9):
+            np.random.seed(1234)
+            b_base = ds[idx]
+            np.random.seed(1234)
+            b_off = ds_off[idx]
+            assert torch.equal(b_base['obs'][ds.view_mask_key],
+                               b_off['obs'][ds.view_mask_key])
+        print('  aux_action_frame consumes no RNG (draw identical at the same seed)')
+
+        # the base target's normalizer IS the action key's: base-frame chunks
+        # are slices of the same stored array, so reusing the abs-action
+        # statistic is exact, not an approximation -- which also keeps the aux
+        # term in the diffusion target's normalized units by construction
+        norm = ds.get_normalizer()
+        a = torch.rand(4, 3, C, ACTION_DIM) * 2 - 1
+        back = norm[AUX_ACTION_KEY].unnormalize(norm[AUX_ACTION_KEY].normalize(a))
+        assert torch.allclose(back, a, atol=1e-5)
+        assert all(torch.equal(norm[AUX_ACTION_KEY].params_dict[k],
+                               norm['action'].params_dict[k])
+                   for k in ('scale', 'offset')), \
+            'base-frame aux normalizer must equal the action normalizer'
+        print('  normalizer[aux_action] == normalizer[action] for the base frame')
+
+        # the ctor rejects an unknown frame, at construction
+        try:
+            _build_m4_dataset(tmp, aux_action_frame='cam')
+        except ValueError as e:
+            assert 'aux_action_frame' in str(e), e
+        else:
+            raise AssertionError('ctor accepted an unknown aux_action_frame')
+        print('  ctor rejects an unknown aux_action_frame')
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 # ---------------------------------------------------------------------------
 # 3. the policy
 # ---------------------------------------------------------------------------
@@ -571,6 +675,9 @@ def test_m4_configs():
         cfg = hydra.compose(config_name='train_diffusion_unet_image_workspace_m4')
         cfg_m3 = hydra.compose(
             config_name='train_diffusion_unet_image_workspace_m3')
+        # the clear-run family's base-frame arm: the one-variable variant
+        cfg_base = hydra.compose(
+            config_name='train_diffusion_unet_image_workspace_m4base_latent')
 
     assert 'diffusion_unet_image_policy_aux' in cfg.policy._target_, cfg.policy._target_
     assert cfg.task.dataset.emit_aux_action is True
@@ -609,19 +716,41 @@ def test_m4_configs():
     # and the width the UNet sees is still M1/L1/M3's
     assert pol.obs_feature_dim == 521, pol.obs_feature_dim
 
+    # ---- the clear-run family's base-frame arm: ONE dataset key changed
+    # (the aux target's frame), model and probe untouched -- this is the
+    # "one variable" claim of the m4clear-vs-m4base A/B, made executable
+    assert cfg_base.task.name == 'm4_base_image_abs_multiview_az75'
+    assert cfg_base.task.dataset.aux_action_frame == 'base'
+    assert cfg_base.task.dataset.emit_aux_action is True
+    assert cfg_base.task.env_runner.m3_slots == 11
+    assert cfg_base.policy.aux_loss_weight == 1.0
+    assert cfg_base.latent_probe.n_states == 128
+    assert cfg_base.latent_probe.az0_view == 6
+    assert cfg_base.latent_probe.out_dir == 'latent_snapshots'
+    assert OmegaConf.to_container(cfg_base.policy.obs_encoder) == \
+        OmegaConf.to_container(cfg_m3.policy.obs_encoder), \
+        'm4base changed the encoder; only the dataset aux frame may differ'
+    pol_base = hydra.utils.instantiate(
+        cfg_base.policy, down_dims=[32, 64], diffusion_step_embed_dim=16)
+    assert isinstance(pol_base, DiffusionUnetImagePolicyAux), type(pol_base)
+    assert pol_base.kwargs == {}, pol_base.kwargs
+    assert pol_base.aux_loss_weight == 1.0, pol_base.aux_loss_weight
+    assert pol_base.obs_feature_dim == 521, pol_base.obs_feature_dim
+
     head = PerViewAuxActionHead(enc.fused_dim,
                                 cfg.policy.aux_n_steps * 10,
                                 cfg.policy.aux_hidden_dim)
     n_aux = sum(p.numel() for p in head.parameters())
-    print(f'M4 configs OK (encoder identical to M3, output_shape (521,), '
-          f'aux head {n_aux:,} params = {100 * n_aux / 290_000_000:.3f}% of the '
-          f'policy)')
+    print(f'M4 configs OK (encoder identical to M3 in both arms, '
+          f'output_shape (521,), aux head {n_aux:,} params = '
+          f'{100 * n_aux / 290_000_000:.3f}% of the policy)')
 
 
 def test():
     test_rot6d_matches_pytorch3d()
     test_action_to_cam_convention()
     test_aux_target_plumbing()
+    test_aux_base_frame_target()
     test_masked_view_mean()
     test_forward_full_and_loss()
     test_m4_configs()
