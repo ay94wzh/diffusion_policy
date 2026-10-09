@@ -2,7 +2,7 @@
 
 Direction and the original predictions: `PROPOSAL.md`. The module, its measured behaviour and
 the open questions: `PROGRESS.md`. Operational detail, runbooks and traps: `NOTES.md`.
-Last updated 2026-10-07.
+Last updated 2026-10-09.
 
 ## Constraints
 
@@ -39,6 +39,7 @@ Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 | **clear run** (per-epoch latents) | ✅ done 2026-10-01 | first per-epoch latent series (201 epochs, clean); latent statistics saturate by ~epoch 50–75 while behaviour improves to ~150 — the encoder is decided early |
 | **clear-run held-out eval** (instrument) | ✅ done 2026-10-07 | **interpolates**: off-grid ±7.5…±67.5 mean **0.716** vs 0.747 in-distribution, both inside the 0.15 threshold; ±82.5/±90 → 0.310 but view visibility is confounded there; **elevation 0 of 50 at both ±15°** — not a view-count problem (K=11, mean-N 6.0, the most views in the project) |
 | **latent-distribution figures** (instrument) | ✅ done 2026-10-07 | the ring's ordering is **inherited**, not learned — corr(pairwise `z_v` distance, \|Δaz\|) ≥ 0.986 at *every* epoch, epoch 0 included; and the N-invariance is **non-monotone** (cos-dist 0.17% → 1.57% at e22 → 0.53% at e200) |
+| **base-frame aux target** (`m4base`, §2.4's frame axis) | ✅ done 2026-10-08 | **behavioural null (pre-registered); the latent series re-organized** — `zv_pair_ratio` 0.485→0.239, settles e57 vs e126 |
 | **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded |
 | parked (encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics) | ⬜ stopped, findings kept | reasoning and revival conditions at git tag `docs-full-20260930` |
 
@@ -46,7 +47,10 @@ Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 
 **The two instruments this section opened with are done** (2026-10-07): the clear run's held-out
 ring and its latent-distribution figures — numbers in `PROGRESS.md`, verdicts in the table above.
-What remains are method changes. Design facts they build on (verified in the code, 2026-10-07):
+**Candidate 3 has now run too**: `m4base` (2026-10-08) executed its frame form — the aux target
+in the base frame — and closed it: behavioural null (pre-registered), latent re-organized.
+What remains are method changes. Design facts they build on (verified in the code, 2026-10-07;
+m4base 2026-10-08):
 - `z_v` has no loss of its own beyond (a) fusion → `z_g` → diffusion and (b) M4's camera-frame
   aux head (measured null). **`z_g` receives gradient only from the diffusion loss.**
 - The Plücker map enters as 6 extra conv1 channels `[d_world | m_world]` (measured inert), and
@@ -54,6 +58,10 @@ What remains are method changes. Design facts they build on (verified in the cod
 - **No training view varies elevation at all** (the ring is azimuth-only), and the cell with the
   most views is at the floor there (0 of 50 both ways) — so elevation is not bought with azimuth
   diversity, and any elevation claim needs elevation in the data or in the conditioning.
+- **Supervision can re-shape `z_v` without moving behaviour.** `m4base` halved the view-vs-state
+  ratio (`zv_pair_ratio` 0.485 → 0.239), settled it at e57 vs e126, and made the latents less
+  pose-decodable — with the rollout unchanged; M4's encoder drift and M3's Plücker contrast are
+  the same pattern in weaker form. The behavioural bottleneck is not the view/state balance.
 
 Candidates (one part at a time, per the constraints above):
 1. **Fusion with pose tokens** — an explicit pose/Plücker embedding per view token: the one
@@ -62,9 +70,7 @@ Candidates (one part at a time, per the constraints above):
    over training; N=1 vs N=11 0.998), so view-consistency has little headroom; supervision with
    headroom would separate state from view (e.g. geometry prediction from `z_g`), or predict
    camera-frame actions from `z_g` rather than `z_v`.
-3. **`z_v` supervision beyond the aux head** — the aux information is already in `z_v` (M4's
-   null); the open question is what `z_v` should encode, not how much more to add.
-4. **M5 distillation** (standing) — premise still weak: the N=1 fused latent is ~identical to
+3. **M5 distillation** (standing) — premise still weak: the N=1 fused latent is ~identical to
    the full-view one, so a student would reproduce something the single view already determines.
 
 ## Out of scope for now

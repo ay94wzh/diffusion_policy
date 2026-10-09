@@ -217,8 +217,11 @@ random-init **1.51**, `m3off` **0.58**; `m3v12` collapsed (`zv_across_states` 2.
 
 **Gates, all of them, before any number is believed:** `stats.mean_active` tracks the EFFECTIVE
 range (~4.0 under a `[1,7]` override; 1.5 means the override was silently ignored);
-`zg_permutation_floor` ~1e-8; `zv_n_agnostic_max_abs_diff` < **1e-4** (it is 2e-05 — cuDNN picks
-different kernels for batch-1 vs batch-7, so `== 0` is the wrong gate); and the
+`zg_permutation_floor` ~1e-8; `zv_n_agnostic_max_abs_diff` is an absolute max over dims and is
+kernel/cell dependent — measured 2e-05 (`m3off`), 1.7e-04 (`m3v15`), 2.0e-04 (`m4base`),
+**2.7e-04** (`m4clear`, K=11) — so the old "< 1e-4" was `m3off`-calibrated: read it against the
+cell's own pair/cross distances (~0.3–0.6), not as a fixed threshold (`== 0` is still the wrong
+gate — cuDNN picks different kernels per batch size); and the
 `draw_fingerprint` must MATCH between the cells being compared. `shuffled_target` must be worse
 than `ridge`/`mlp`, and `mean_predictor` is the collapse floor. **A ridge null on `rel_pose` is
 NOT evidence of absence** — relative pose is bilinear, so a linear probe cannot fit it even when
@@ -238,6 +241,34 @@ python -u probe_relpose.py -d cuda:0 --view-count-range 1,2 --stability-ranges "
 ```
 
 Send back each run's `probe_relpose.json`; the numbers go into `PROGRESS.md` once read.
+
+### Per-epoch latent snapshots (the clear run / `m4base`)
+
+The latent-probe workspace (`train_diffusion_unet_image_workspace_latentprobe.py`) encodes a
+fixed 128-state probe set every epoch with the EMA weights and writes `<run>/latent_snapshots/`
+(fp16 npz, ~1.7–3.7 MB/epoch; the ~330 MB stay under `/data`). Runs: `data/clear_run.sh`,
+`data/m4base_run.sh`, `data/zgpose_run.sh`. The analysis drivers (`data/clear_analysis.sh`,
+`data/m4base_analysis.sh`, `data/zgpose_analysis.sh` — all on `miroc-server`) commit only the
+digests —
+`data/analysis_<cell>/{analyze_latent_series.json,summary.md,latent_viz_coords.json}`.
+
+```bash
+# the one LAPTOP step: figures (matplotlib) from the committed coords + digest
+python3 visualize_latent_distribution.py plot -i data/analysis_<cell>/latent_viz_coords.json \
+  -d data/analysis_<cell>/analyze_latent_series.json -o data/analysis_<cell>/figures
+```
+
+- **Always pass `-d`** — without the digest, fig2's on-panel numbers come from the 2-D
+  projection and were once wrong by ~5× with a flipped sign of the trend (fixed 2026-10-07).
+- **The hook fires AFTER the epoch's training** (the `latent_hook` seam in the per-epoch eval
+  block, `train_diffusion_unet_image_workspace.py:225-231`): `epoch_0000.npz` is one *trained*
+  epoch, not initialization — e0 rows are not a shared baseline across runs, and a cross-cell e0
+  contrast is already an effect of the intervention (confirmed against the `m4base` pair,
+  2026-10-09).
+- Read the digest's gates before quoting (scalar recheck ≤5e-03 against the fp32 log; CKA
+  permutation floor), and remember the npz fp16 floor is 4.9e-4 relative: a deep collapse is
+  below storage resolution. Conventions and the settle definition live in `PROGRESS.md`
+  *The per-epoch latent series*.
 
 ### Data generation (M2)
 
@@ -400,6 +431,7 @@ actions deliberately.
 | collapse screens (trained + `_RANDOM_INIT`) | `data/screen_collapse/*.json` | ✅ |
 | conditioning screens | `data/screen_conditioning/*.json` | ✅ |
 | relational probe (step 1a + schema-2 grid + `z_g`) | `data/probe_relpose_*/`, `data/probe_zg_square_*/` | ✅ |
+| latent-series digests + viz coords + figures | `data/analysis_clear/`, `data/analysis_m4base/` | ✅ |
 | aux-probe evidence | `data/probe_m4_square_logs.json.txt` | ✅ |
 | weights (4.62 GB each) | `data/outputs/run_*/checkpoints/latest.ckpt` | ❌ — **on `miroc-server`**; rsync only |
 | multi-view zarrs | `data/multiview/<task>_ph_ring13.zarr` | ❌ — **on `miroc-server`** |

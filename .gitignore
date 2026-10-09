@@ -54,6 +54,14 @@ data/*
 !data/m4base_run.sh
 !data/m4base_eval.sh
 !data/m4base_analysis.sh
+# 2026-10-09: the z_g pose-set supervision run (PLAN candidate 2) -- m4base's
+# recipe with the fused latent supervised on the live views' pooled camera-pose
+# set. The run driver's header carries the PRE-REGISTRATION (the two-outcome
+# latent diagnostic and the weight formula); same rationale as the m4base
+# drivers above.
+!data/zgpose_run.sh
+!data/zgpose_eval.sh
+!data/zgpose_analysis.sh
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*
@@ -80,6 +88,12 @@ data/outputs/run_*_m3*_s43_200ep/*
 !data/outputs/run_*_m4*_s42_200ep/
 data/outputs/run_*_m4*_s42_200ep/*
 !data/outputs/run_*_m4*_s42_200ep/logs.json.txt
+# z_g pose-set run: logs only, never the 4.6 GB checkpoints (same rule as the
+# m4 runs above). A future seed-mate needs its own line -- the `_s42`-only trap
+# the M3 and L1 blocks record.
+!data/outputs/run_*_zgpose_s42_200ep/
+data/outputs/run_*_zgpose_s42_200ep/*
+!data/outputs/run_*_zgpose_s42_200ep/logs.json.txt
 # M1 re-train (2026-09-25): recovers the single-view baseline weights that were deleted
 # 2026-09-19, so its ENCODER can be collapse-screened -- the question is whether the
 # original baseline was itself collapsed. Same rule: logs only, never the checkpoints.

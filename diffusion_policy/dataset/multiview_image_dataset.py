@@ -97,6 +97,16 @@ ACTION_DIM = 10          # [pos(3), rot6d(6), gripper(1)] absolute, base frame
 # time, so it must never be an obs key the policy normalizes / the env serves.
 # It rides at the TOP LEVEL of the sample dict, next to 'action'.
 AUX_ACTION_KEY = 'aux_action'
+# z_g pose-set supervision (PLAN candidate 2). Also top-level, like
+# AUX_ACTION_KEY: the target is the pooled camera-pose set of the LIVE (drawn)
+# views, indexed by POSITION IN view_pool -- not by slot, and not by ring index
+# (`view_mask` cannot be reused: it is slot-indexed). Row layout per view:
+# [pos(3) | rot6d(6)]. Neither key may enter shape_meta (the env would try to
+# serve them); the mask is not a normalizer key either -- it never passes
+# through the normalizer.
+AUX_VIEW_POSE_KEY = 'aux_view_pose'            # (To, V, 9) float32
+AUX_VIEW_POSE_MASK_KEY = 'aux_view_pose_mask'  # (To, V) float32, 1.0 == live
+VIEW_POSE_DIM = 9
 
 
 def _identity_normalizer(dim: int):
@@ -160,6 +170,22 @@ def rot6d_to_mat(d6):
     b2 = b2 / np.linalg.norm(b2, axis=-1, keepdims=True)
     b3 = np.cross(b1, b2)
     return np.stack([b1, b2, b3], axis=-2)
+
+
+def mat_to_rot6d(R):
+    """``(..., 3, 3)`` -> ``(..., 6)``: rows 0 and 1 of R, concatenated.
+
+    The exact inverse of `rot6d_to_mat` (pytorch3d's `matrix_to_rotation_6d`),
+    and the convention `eef_hist_to_cam` / `action_to_cam` already write. Lives
+    here, next to `rot6d_to_mat`, so the dataset's pose table and the tests
+    share ONE implementation; pinned to
+    ``RotationTransformer('matrix', 'rotation_6d')`` and to
+    `probe_relpose.rot6d_from_mat` in tests/test_zg_pose_supervision.py. Rows,
+    never columns -- at an identity matrix the two are indistinguishable, which
+    is why the test exerts it at a general rotation.
+    """
+    R = np.asarray(R, dtype=np.float64)
+    return np.concatenate([R[..., 0, :], R[..., 1, :]], axis=-1)
 
 
 def action_to_cam(action, cam_pos, cam_quat_wxyz):
@@ -242,6 +268,7 @@ class MultiViewImageDataset(BaseImageDataset):
             view_count_range=None,
             eef_hist_steps=4,
             emit_aux_action=False,
+            emit_aux_view_pose=False,
             aux_n_steps=8,
             aux_action_frame='camera',
             view_mask_key='view_mask',
@@ -303,6 +330,16 @@ class MultiViewImageDataset(BaseImageDataset):
             raise ValueError(
                 f'aux_action_frame must be "camera" or "base", got '
                 f'{aux_action_frame!r}')
+        # PLAN candidate 2: also emit the live views' pooled camera-pose set
+        # (top-level, next to AUX_ACTION_KEY). Defaults off, so every
+        # pre-existing config and dataset test is unchanged.
+        self.emit_aux_view_pose = bool(emit_aux_view_pose)
+        self.pool_pose = None     # (V, VIEW_POSE_DIM) float32, built below
+        self._pool_pos = None     # {ring index -> position in view_pool}
+        if self.emit_aux_view_pose and view_pool is None:
+            raise ValueError(
+                'emit_aux_view_pose needs view_pool: the target is the '
+                'camera-pose set of the pool views, one row per pool position')
         if view_pool is not None:
             view_pool = [int(v) for v in view_pool]
             if len(view_pool) == 0:
@@ -360,6 +397,17 @@ class MultiViewImageDataset(BaseImageDataset):
                 np.tile(np.array([h, w], dtype=np.float64), (n_views, 1)),
             ], axis=-1).astype(np.float32)
             assert self.cam_table.shape == (n_views, 10), self.cam_table.shape
+            if self.emit_aux_view_pose:
+                # row i == view_pool[i]: pos + rot6d of that view's camera.
+                # rot6d (not the quaternion): an MSE on quaternions has the
+                # double-cover sign ambiguity; the pinned rot6d pair does not.
+                self.pool_pose = np.stack([
+                    np.concatenate([
+                        self.cam_table[v][:3].astype(np.float64),
+                        mat_to_rot6d(quat_wxyz_to_mat(self.cam_table[v][3:7])),
+                    ]) for v in view_pool]).astype(np.float32)
+                assert self.pool_pose.shape == (len(view_pool), VIEW_POSE_DIM)
+                self._pool_pos = {int(v): i for i, v in enumerate(view_pool)}
             self.view_pool = view_pool
             self.view_count_range = (lo, hi)
             self.n_slots = n_slots
@@ -558,6 +606,14 @@ class MultiViewImageDataset(BaseImageDataset):
             normalizer[self.view_mask_key] = _identity_normalizer(self.n_slots)
             normalizer[self.eef_hist_key] = _identity_normalizer(
                 self.n_slots * EEF_HIST_STEP_DIM * self.eef_hist_steps)
+            if self.emit_aux_view_pose:
+                # Identity, unlike AUX_ACTION_KEY's FITTED normalizer: the
+                # pose target's axes are already O(1) (meters and rot6d
+                # entries), and the registered loss weight is calibrated
+                # against THIS scale. The MASK is not registered: it is not an
+                # obs key and the policy never normalizes it.
+                normalizer[AUX_VIEW_POSE_KEY] = _identity_normalizer(
+                    VIEW_POSE_DIM)
             if self.emit_aux_action:
                 # FITTED, unlike the identity keys above: this is the aux
                 # head's regression target, and camera-frame pos axes have
@@ -631,12 +687,19 @@ class MultiViewImageDataset(BaseImageDataset):
         zeros, so if the mask were ever ignored the result would be loudly wrong
         rather than subtly wrong.
 
-        Returns ``(obs_dict, aux_action)``. `aux_action` is ``(To, K, C*10)``
-        (M4), or None when `emit_aux_action` is off -- it is returned SEPARATELY
-        rather than placed in `obs_dict`, because it derives from demonstrated
-        future actions and must never reach the policy's obs normalizer. The
-        per-slot camera-frame chunk for obs step `to` is built from the SAME
-        view draw as that slot's image, so the pairing cannot drift.
+        Returns ``(obs_dict, aux_action, aux_view_pose)``. `aux_action` is
+        ``(To, K, C*10)`` (M4), or None when `emit_aux_action` is off -- it is
+        returned SEPARATELY rather than placed in `obs_dict`, because it
+        derives from demonstrated future actions and must never reach the
+        policy's obs normalizer. The per-slot camera-frame chunk for obs step
+        `to` is built from the SAME view draw as that slot's image, so the
+        pairing cannot drift.
+
+        `aux_view_pose` is a dict of the PLAN-candidate-2 keys
+        (`AUX_VIEW_POSE_KEY` ``(To, V, 9)`` + `AUX_VIEW_POSE_MASK_KEY`
+        ``(To, V)``), or None when `emit_aux_view_pose` is off. Row i == pool
+        view `view_pool[i]`; the mask marks the live (drawn) views -- derived
+        from the SAME `chosen` draw, so it consumes no RNG of its own.
         """
         n_slots = self.n_slots
         view_pool = self.view_pool
@@ -661,6 +724,19 @@ class MultiViewImageDataset(BaseImageDataset):
         C = self.aux_n_steps
         aux = (np.zeros((n_obs, n_slots, C * ACTION_DIM), dtype=np.float32)
                if self.emit_aux_action else None)
+        pose_tgt = None
+        if self.emit_aux_view_pose:
+            V = len(view_pool)
+            live = np.zeros(V, dtype=np.float32)
+            live[[self._pool_pos[int(r)] for r in chosen]] = 1.0
+            # dead rows are EXACTLY zero (live is 0.0 there): the masked loss
+            # and the calibration's zero-head value both rest on that. Tiled
+            # over obs steps like the cam vectors -- the target is per-sample.
+            pose_tgt = {
+                AUX_VIEW_POSE_KEY: np.tile(self.pool_pose[None], (n_obs, 1, 1))
+                * live[None, :, None],
+                AUX_VIEW_POSE_MASK_KEY: np.tile(live[None], (n_obs, 1)),
+            }
         # (n_obs, C) window starts: obs step `to` is supervised on action[to:to+C]
         win = np.arange(n_obs)[:, None] + np.arange(C)[None, :]
         for slot in range(n_slots):
@@ -698,7 +774,7 @@ class MultiViewImageDataset(BaseImageDataset):
             obs_dict[cam_key] = np.tile(cam, (n_obs, 1))
         obs_dict[self.view_mask_key] = mask
         obs_dict[self.eef_hist_key] = hist
-        return obs_dict, aux
+        return obs_dict, aux, pose_tgt
 
     def __getitem__(self, idx: int) -> Dict[str, torch.Tensor]:
         data = self.sampler.sample_sequence(idx)
@@ -711,11 +787,13 @@ class MultiViewImageDataset(BaseImageDataset):
 
         obs_dict = dict()
         aux_action = None
+        aux_view_pose = None
         if self.view_pool is not None:
             # M3: all slots, their camera vectors, the mask and the EE history.
             # M4: plus the per-slot camera-frame action chunk, which comes back
             # separately -- it must not enter `obs_dict` (see AUX_ACTION_KEY).
-            m3_obs, aux_action = self._m3_slots(idx, data['action'])
+            m3_obs, aux_action, aux_view_pose = self._m3_slots(
+                idx, data['action'])
             obs_dict.update(m3_obs)
         else:
             for key in self.rgb_keys:
@@ -747,4 +825,7 @@ class MultiViewImageDataset(BaseImageDataset):
         }
         if aux_action is not None:
             torch_data[AUX_ACTION_KEY] = torch.from_numpy(aux_action)
+        if aux_view_pose is not None:
+            for k, v in aux_view_pose.items():
+                torch_data[k] = torch.from_numpy(v)
         return torch_data

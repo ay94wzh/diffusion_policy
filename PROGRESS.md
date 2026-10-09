@@ -10,13 +10,13 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-10-07.
+Last updated 2026-10-09.
 
 ## Summary
 
 **What works.** M3's per-slot fusion reaches **0.55 (square) / 0.74 (can)** at held-out
 viewpoints, where the single-view baseline M1 scores 0.00–0.02 and the conditioning-free L1
-baseline sits at the floor. **What is inert.**Plücker + camera-frame-history conditioning and auxiliary heads change nothing measurable (M3, M4). **What is load-bearing.** Multi-view *sampling*: the same encoder forced to one view per sample scores 0.04/0.05, and the ladder shows the ingredient is *enough views on average* — a knee between
+baseline sits at the floor. **What is inert.** Plücker + camera-frame-history conditioning and auxiliary heads change nothing measurable (M3, M4). **What is load-bearing.** Multi-view *sampling*: the same encoder forced to one view per sample scores 0.04/0.05, and the ladder shows the ingredient is *enough views on average* — a knee between
 mean-N 2.0 and 3.0, then a graded rise. **What is also load-bearing, and new (2026-10-01).** View
 *quality*: `m3pm60` drops the two ±90° views from the pool at an unchanged mean-N of 3.0 and lifts
 square's trained mean 0.456 → **0.728** and held-out 0.373 → **0.533** — reaching `[1,7]`'s
@@ -28,7 +28,13 @@ is within ~0.5% (direction) of the 11-view one. **What the clear run's held-out 
 nearest trained pose it reads **0.716** against 0.747 in-distribution, while past the ring
 (±82.5/±90) it falls to 0.310 and on the elevation orbit to **0 of 50 both ways** — so elevation is
 not a view-count problem, and at K=11/mean-N 6.0 it is *worse* there than the K=7 cells.
-**What is not explained.** Two distinct failure modes
+**What the base-frame arm adds (2026-10-08).**
+The clear run's recipe re-run with the per-view aux target in the **base** frame (view-invariant)
+instead of each slot's camera frame: the aux-supervision idea's second behavioural null,
+pre-registered — all four registered means inside the 0.15 band — while the latent series
+re-organizes as designed (`zv_pair_ratio` 0.485 → **0.239**, settling e57 vs e126, and the
+latents become *less* pose-decodable), so re-shaping `z_v`'s view/state balance is not what
+bounds behaviour. **What is not explained.** Two distinct failure modes
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
@@ -53,6 +59,7 @@ geometric conditioning and §2.4's aux heads are both inert.**
 | **(a) lift + `m3on`** | recovered 2026-10-01 — trained 09-26, then skipped by a guard bug | **does not break lift** (held-out 0.870 vs L1 0.873); elevation is where it gives ground |
 | **(b) `[1,5]` seed 43** | recovered 2026-10-01; first reproduction of any ladder rung | **Δ 0.052 / 0.083, inside the band** — the knee stands at two seeds |
 | **(c) ±60° pool** | recovered 2026-10-01; pool `[2,4,6,8,10]` at matched mean-N 3.0 | **pool curation is worth +0.272 trained / +0.160 held-out; reaches `[1,7]` at 2/3 its mean-N** (size/content confounded) |
+| **base-frame supervision** (`m4base`) | `m4base`, 2026-10-08 — the clear run's recipe with the per-view aux target's frame swapped camera→base (view-invariant) | **behavioural null (pre-registered), latent re-organized** — `zv_pair_ratio` 0.485→0.239, settles e57 vs e126; §2.4's frame axis closed |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -247,7 +254,9 @@ already in `z_v`** — a 151,888-parameter head can fit camera-frame targets pos
 latent that already encodes the scene. **Elevation cuts both ways and the cut is measured:**
 `m4on` 0.00 vs `m3on` 0.18 at `el_p15` does not survive its own check — `el_0` is the same
 camera pose as `az_0` and reads 0.70 vs 0.84, the 0.14 spread of *Noise and resolution*. Only
-square was run for M4.
+square was run for M4. **The frame axis is closed** (2026-10-08): a base-frame variant of the
+same heads (`m4base`, *The base-frame arm*, below) is also behaviourally null while the latent
+re-organizes — so the null is not about which frame the head predicts in.
 
 ## M5 — single-novel-view inference
 
@@ -514,6 +523,75 @@ explicit `2-D panel` label, and stops loudly on a digest whose fused series miss
 disagrees in length with `series.epochs`. No published number ever came from the broken path — the
 tool was committed and first run the same day.
 
+### The base-frame arm (`m4base`, 2026-10-08)
+
+**What it is.** The clear run's recipe with ONE variable changed: each slot's `z_v` is supervised
+by the raw stored absolute action chunk — the **base frame**, identical for every live slot, the
+explicit form of the cross-view consistency pressure multi-view sampling supplies implicitly —
+instead of the clear run's camera-frame chunk (view-specific, different per slot). The two task
+configs differ by exactly `aux_action_frame: base`; data, slots, pool ([1..11]), N-range [1,11],
+seed, aux weight (1.0) and the per-epoch latent probe are identical. **Pre-registered** in the
+driver header before launch: the M4-informed expectation was *within-band* on the registered
+means — another null, direction if any **not** predicted; three latent-series questions (settle
+epochs of the view-structure statistics, the final view-vs-state balance, `z_g` N-invariance);
+and the mechanism-live gate (aux loss falls below its batch-0 value, ratio recorded). The run
+completed clean at 201 epochs.
+
+**Result — the behavioural null held.** `success_rate`, 50 paired episodes, means vs `m4clear`:
+
+| registered mean | m4base | m4clear | Δ |
+|---|---|---|---|
+| in-dist ring (trained, 11 vp) | 0.796 | 0.747 | +0.049 |
+| off-grid ±7.5…±67.5 (10 vp) | 0.774 | 0.716 | +0.058 |
+| past the ring, ±82.5/±90 (4 vp) | 0.310 | 0.310 | 0.000 |
+| elevation el_0 / el_m15 / el_p15 | 0.840 / 0 / 0 | 0.700 / 0 / 0 | +0.140 / 0 / 0 |
+
+All four registered quantities sit inside the band (the elevation entry is three single cells,
+never read individually; el_0's +0.140 is inside the documented single-viewpoint spread,
+*Noise and resolution*). The point estimates lean slightly positive everywhere and are identical
+at the floor; the in-training rollout (N=1 at az_0, `test/mean_score`) reads 0.900 vs 0.760 at
+e200, descriptively in the same direction.
+
+**The instrument saw exactly what the design intended.** Against the clear run's digest (same
+probe, same 128 states, same draws):
+
+| final-epoch statistic | m4base | m4clear |
+|---|---|---|
+| `zv_pair_ratio` | **0.239** | 0.485 |
+| … its settle epoch | **57** | 126 |
+| `zv_norm_mean` | 8.39 | 6.91 |
+| `zv_rel_spread_mean` (settle 148 vs 72) | 0.235 | 0.224 |
+| `z_g` `rel(n1, full)` | 0.089 | 0.103 |
+| `cka(n1, full)` | 0.9985 | 0.9976 |
+
+The base-frame target **halved the view-specific component of `z_v`**, settling the view-vs-state
+balance more than twice as fast (`zv_pair_ratio` e57 vs e126; `zv_pr` unchanged, 148 vs 149; the
+within-view spread is the one statistic that stops *later*, 148 vs 72), while the fused latent
+became slightly *more* N-invariant. The paired probe grid (range `[1,11]`; draw fingerprints
+identical across the two cells, `mean_active` 6.046 both) adds the direction the digest cannot:
+the representation became **less pose-decodable** — `z_v` readouts (MLP) absolute pose
+5.25 cm / 2.28° vs 3.72 cm / 1.61°, relative pose 5.46 cm / 3.26° vs 3.35 cm / 1.38°, and the N=1
+`z_g` camera-pose readout (mean rotation 17.8° vs 10.8° ridge, 16.9° vs 13.6° MLP, n=110/28) —
+i.e. the view-invariant target removed the view-specific information it was designed to remove.
+Mechanism live: batch-0 `aux/diff` **0.333** (m4clear 0.315); `aux_loss` decays **74×**
+(0.361 → 0.0049). Both cells' collapse screens are healthy against their own random-init baselines
+(m4base 2.53e-02 vs 4.41e-03; m4clear 3.46e-02 vs 2.84e-03). The per-view statistics rest on
+`z_v` being N-agnostic; that check reads 2.0e-4 / 2.7e-4 here — negligible against the pair
+distances (~0.3–0.6), and its absolute scale is cell-dependent: NOTES *Latent probe* carries the
+corrected reading.
+
+**The reading.** The supervision did its designed job at the representation level and the
+behaviour did not move: per-view aux supervision is now behaviourally null in **both** frames
+while measurably reshaping `z_v` in one — §2.4's frame axis is closed, and the behavioural
+bottleneck is *not* `z_v`'s view/state balance, a quantity the instrument can now move at will.
+Caveats: single seed, 50 episodes, so the ≈+0.05 lean is not distinguishable from run noise at
+this budget; nothing is held out in this recipe (all 11 ring views train), so it is an
+instrument, not a ladder cell. **One reading trap this run exposed:** the per-epoch probe fires
+*after* the epoch's training (`train_diffusion_unet_image_workspace.py:225-231`), so
+`epoch_0000.npz` is one *trained* epoch, not initialization — the cross-cell e0 contrast
+(clear 0.857 vs m4base 0.484) is an early effect of the intervention, and e0 rows are not a
+shared baseline (NOTES *Per-epoch latent snapshots*).
+
 ## Findings
 
 What each follow-up experiment concluded — the result and the reading.
@@ -650,6 +728,7 @@ encoder compute per sample.
 | screens / probes | `screen_collapse.py`, `screen_conditioning.py`, `probe_relpose.py`, `tests/test_relpose_probe.py` (measurement tools, no training) |
 | clear-run analysis | `analyze_latent_series.py`, `tests/test_analyze_latent_series.py`, `data/clear_analysis.sh` (the per-epoch latent-series digest; npz stay on `miroc-server`) |
 | latent-distribution figures | `visualize_latent_distribution.py` (compute is numpy-only and runs where the npz are; plot is matplotlib), `tests/test_visualize_latent_distribution.py`, `data/clear_latent_viz.sh`, committed `data/analysis_clear/latent_viz_coords.json` + `data/analysis_clear/figures/` |
+| z_v supervision (`m4base`) | `config/task/m4_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_m4base_latent.yaml`, `data/m4base_{run,eval,analysis}.sh`; seam: `multiview_image_dataset.py` `aux_action_frame` (base-frame emission) |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE history;
