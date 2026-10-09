@@ -5,7 +5,9 @@ name: zgpose_image_abs_multiview_az75
 # camera-frame action chunk on z_v, the dataset emits -- and the policy
 # supervises the FUSED latent z_g on -- the POOLED CAMERA-POSE SET of the live
 # (drawn) views: a fixed (V=11, 9) target, row i == pool position i,
-# [pos(3) | rot6d(6)] of that view's camera, masked to the live views.
+# [pos(3) | rot6d(6)] of that view's camera; dead views are zero-filled and
+# EVERY row is scored -- scoring the dead ones as zero is what requires the
+# head to read which views are live out of z_g.
 #
 # Everything else is byte-identical to the m4base task: K=11 slots over ring
 # indices 1..11 == az -75..+75 every 15 deg (pool = the full ring minus the two

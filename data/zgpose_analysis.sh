@@ -181,21 +181,51 @@ say "PROBE_GATE_EXIT=$probe_rc"
 say "REGISTERED READOUTS (criteria in data/zgpose_run.sh's header)"
 "$PY" - >> "$LOG" 2>&1 <<'PYEOF'
 import json
+import os
 import numpy as np
+import hydra
+from omegaconf import OmegaConf
+OmegaConf.register_new_resolver('eval', eval, replace=True)
+from diffusion_policy.dataset.multiview_image_dataset import AUX_VIEW_POSE_KEY
 d = json.load(open('data/analysis_zgpose/analyze_latent_series.json'))
 a = np.array(d['fused']['n1_vs_full']['rel'])
 tail = float(a[-25:].mean())
 print(f'READOUT digest fused.rel: e200={a[200]:.5f} tail_mean(last 25)={tail:.5f} '
       f'max={a.max():.5f}@e{a.argmax()} (committed parents: tails 0.089 / 0.103; '
       f'peaks 0.128@e47 / 0.177@e20)')
-print(f'READOUT criterion (i) bites: tail > 0.13 -> {tail > 0.13}')
+print(f'READOUT instruments-moved (independent of aux): tail > 0.13 -> {tail > 0.13}')
 p = json.load(open('data/probe_relpose_grid_square_zgpose/probe_relpose.json'))
 s = p['latent_grid']['1,11']['zg_across_view_subsets']
 print(f'READOUT probe zg_across_view_subsets(1,11)={s:.5f} '
       f'(committed parents: 0.0663 / 0.0780)')
-print(f'READOUT criterion (i) also: subsets > 0.09 -> {s > 0.09}')
-print('READOUT if BOTH false while aux_loss fell below the CALIB floor: '
-      'outcome (ii) -- the head fit z_g post hoc (see the run header)')
+print(f'READOUT instruments-moved (independent of aux): subsets > 0.09 -> {s > 0.09}')
+
+# the registered aux bands: recompute the floor with the SAME dataset-only
+# recipe as the run driver's CALIBRATION stage (seed 0, 64 samples) and read
+# the run's final aux_loss, so the classification lands in committed files
+with hydra.initialize_config_dir(
+        config_dir=os.path.join(os.getcwd(), 'diffusion_policy', 'config'),
+        version_base=None):
+    cfg = hydra.compose(
+        config_name='train_diffusion_unet_image_workspace_zgpose_latent')
+dsd = hydra.utils.instantiate(cfg.task.dataset)
+V = len(dsd.view_pool)
+np.random.seed(0)
+idxs = np.random.choice(len(dsd), size=64, replace=False)
+tt = np.concatenate([dsd[int(i)][AUX_VIEW_POSE_KEY].numpy().reshape(-1, V, 9)
+                     for i in idxs])
+floor = float(((tt - tt.mean(0)) ** 2).mean())
+rows = [json.loads(l) for l in open(
+    'data/outputs/run_square_zgpose_s42_200ep/logs.json.txt') if l.strip()]
+aux_e200 = [r['aux_loss'] for r in rows if 'aux_loss' in r][-1]
+ratio = (aux_e200 / floor) if floor > 0 else float('inf')
+band = ('<=0.5*floor (loss beaten)' if ratio <= 0.5 else
+        'middle (PARTIAL)' if ratio < 0.9 else '>=0.9*floor (at floor)')
+print(f'READOUT floor={floor:.6f} aux_e200={aux_e200:.6f} '
+      f'ratio={ratio:.3f} -> band: {band}')
+print('READOUT map (run header): aux beaten + instruments moved -> (i); aux '
+      'beaten + flat -> (ii); at-floor + moved -> pressure reached the '
+      'representation but the head did not fit; at-floor + flat -> falsifier')
 PYEOF
 say "READOUT_EXIT=$?"
 

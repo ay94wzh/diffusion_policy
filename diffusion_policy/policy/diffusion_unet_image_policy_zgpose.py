@@ -9,6 +9,17 @@ parent's `compute_loss` / `_compute_loss_with_aux` (the weight-0 delegation to
 the base policy, `last_aux_loss` logging, the row-major (B, To) flatten) are
 inherited unchanged; only `aux_loss` is overridden.
 
+The scoring rule, and why it is load-bearing
+--------------------------------------------
+The loss scores ALL V rows against the zero-filled target -- dead rows are
+scored AGAINST ZERO. The pose table itself is static (the cameras never move),
+so liveness is the only sample-dependent content of the target; with every row
+scored, no input-independent head can beat the per-row-constant floor, and any
+improvement is sample variation read out of `z_g`. (REVISION 2, 2026-10-09:
+the first version scored live rows only, which a constant head satisfied
+exactly, taking the pre-registered floor to zero -- the run could not test its
+own premise; see data/zgpose_run.sh's header for the record.)
+
 The head swap
 -------------
 The parent builds its `PerViewAuxActionHead` LAST in `__init__`; this subclass
@@ -25,7 +36,7 @@ import torch
 import torch.nn.functional as F
 
 from diffusion_policy.policy.diffusion_unet_image_policy_aux import (
-    DiffusionUnetImagePolicyAux, masked_view_mean)
+    DiffusionUnetImagePolicyAux)
 from diffusion_policy.model.vision.view_pose_set_head import ViewPoseSetHead
 from diffusion_policy.dataset.multiview_image_dataset import (
     AUX_VIEW_POSE_KEY, AUX_VIEW_POSE_MASK_KEY, VIEW_POSE_DIM)
@@ -71,10 +82,15 @@ class DiffusionUnetImagePolicyZgPose(DiffusionUnetImagePolicyAux):
             hidden_dim=aux_hidden_dim)
 
     def aux_loss(self, enc: Dict[str, torch.Tensor], batch, batch_size: int):
-        """Masked-mean MSE of the pooled pose set, read from the FUSED latent.
+        """All-rows MSE of the pooled pose set, read from the FUSED latent.
 
-        Also usable standalone (tests, diagnostics) -- it needs only the
-        encoder's output dict and the batch.
+        Dead rows are scored AGAINST ZERO (the target is zero-filled there):
+        that is what makes the loss sample-dependent, and therefore what
+        requires the head to read which views are live out of `z_g` (a
+        constant-per-row head can only reach the floor -- see the module
+        docstring). Also usable standalone (tests, diagnostics).
+
+        The mask is still consumed -- but only by the cross-checks below.
         """
         V, P = self.aux_n_views, VIEW_POSE_DIM
         tgt = batch[AUX_VIEW_POSE_KEY]
@@ -107,8 +123,9 @@ class DiffusionUnetImagePolicyZgPose(DiffusionUnetImagePolicyAux):
         tgt = self.normalizer[AUX_VIEW_POSE_KEY].normalize(
             tgt.reshape(M, V, P))
         pred = self.aux_head(enc['z_global'])                    # (M, V, P)
-        pair = F.mse_loss(pred, tgt, reduction='none').mean(dim=-1)  # (M, V)
-        # `masked_view_mean`'s pair_loss contract is one entry per ACTIVE pair
-        # in row-major order (its `active.nonzero()`); gather before calling --
-        # the raw (M, V) tensor raises on any partially-active frame.
-        return masked_view_mean(pair[active], active)
+        # ALL V rows are scored, dead ones against their zero targets: the
+        # per-row-constant head is the floor, and beating it requires sample
+        # variation = liveness from z_g (REVISION 2; see the module docstring).
+        # Frames stay equally weighted; only WHICH entries within a frame are
+        # scored changed vs revision 1.
+        return F.mse_loss(pred, tgt, reduction='none').mean()

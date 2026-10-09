@@ -103,7 +103,8 @@ AUX_ACTION_KEY = 'aux_action'
 # (`view_mask` cannot be reused: it is slot-indexed). Row layout per view:
 # [pos(3) | rot6d(6)]. Neither key may enter shape_meta (the env would try to
 # serve them); the mask is not a normalizer key either -- it never passes
-# through the normalizer.
+# through the normalizer, and the policy scores ALL rows (dead ones against
+# their zero targets), keeping the mask only as a cross-check.
 AUX_VIEW_POSE_KEY = 'aux_view_pose'            # (To, V, 9) float32
 AUX_VIEW_POSE_MASK_KEY = 'aux_view_pose_mask'  # (To, V) float32, 1.0 == live
 VIEW_POSE_DIM = 9
@@ -729,9 +730,11 @@ class MultiViewImageDataset(BaseImageDataset):
             V = len(view_pool)
             live = np.zeros(V, dtype=np.float32)
             live[[self._pool_pos[int(r)] for r in chosen]] = 1.0
-            # dead rows are EXACTLY zero (live is 0.0 there): the masked loss
-            # and the calibration's zero-head value both rest on that. Tiled
-            # over obs steps like the cam vectors -- the target is per-sample.
+            # dead rows are EXACTLY zero (live is 0.0 there): the all-rows
+            # loss scores them AS zero -- which is what requires the policy to
+            # read liveness out of z_g -- and the calibration's zero-head
+            # value rests on it too. Tiled over obs steps like the cam
+            # vectors -- the target is per-sample.
             pose_tgt = {
                 AUX_VIEW_POSE_KEY: np.tile(self.pool_pose[None], (n_obs, 1, 1))
                 * live[None, :, None],

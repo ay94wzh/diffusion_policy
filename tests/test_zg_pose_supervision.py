@@ -15,13 +15,12 @@ What is checked, in rough order of how much it buys:
    ring-index implementation fails here), the mask marks exactly the views
    whose renders are in the sample's slots, dead rows are exactly zero, and
    the flag consumes no RNG.
-3. The `masked_view_mean` gather contract: `pair[active]`, not the raw
-   (M, V) tensor -- the raw form coincidentally works when every view is live,
-   so the partially-active fixture is the load-bearing one.
-4. The policy's aux term reads the FUSED latent, masks correctly, starts at
-   zero, and weight 0 remains bit-identical to the parent's loss and all
-   gradients (the anti-drift pin, as in tests/test_aux_action_heads.py).
-5. The configs compose, the model is byte-identical to M3/m4base's, and the
+3. The policy's aux term reads the FUSED latent, scores ALL rows against the
+   zero-filled target (dead rows are scored as zero; the anti-cheat pin shows
+   no input-independent head can reach zero), starts at zero, and weight 0
+   remains bit-identical to the parent's loss and all gradients (the
+   anti-drift pin, as in tests/test_aux_action_heads.py).
+4. The configs compose, the model is byte-identical to M3/m4base's, and the
    two train configs differ on EXACTLY the intended key set (the one-variable
    claim made executable).
 """
@@ -51,7 +50,7 @@ from diffusion_policy.model.vision.view_pose_set_head import ViewPoseSetHead
 from diffusion_policy.policy.diffusion_unet_image_policy import (
     DiffusionUnetImagePolicy)
 from diffusion_policy.policy.diffusion_unet_image_policy_aux import (
-    DiffusionUnetImagePolicyAux, masked_view_mean)
+    DiffusionUnetImagePolicyAux)
 from diffusion_policy.policy.diffusion_unet_image_policy_zgpose import (
     DiffusionUnetImagePolicyZgPose)
 from diffusion_policy.common.pytorch_util import dict_apply
@@ -189,6 +188,9 @@ def test_dataset_pose_set_emission():
                     rot6d_from_mat(quat_wxyz_to_mat(ds.cam_table[v][3:7])),
                 ])
                 assert np.abs(tgt[:, i] - want).max() < 1e-6, (idx, i, v)
+            # the EXACT zeros are load-bearing now: the all-rows loss scores
+            # dead rows as zero, and that is what makes the optimum
+            # sample-dependent (see the anti-cheat pin in the policy test)
             assert np.all(tgt[msk < 0.5] == 0.0)
             # the live rows are pairwise distinct (a constant row would make
             # the row-target check above pass vacuously)
@@ -271,60 +273,7 @@ def test_dataset_pose_set_emission():
 
 
 # ---------------------------------------------------------------------------
-# 3. the gather contract
-# ---------------------------------------------------------------------------
-
-def test_masked_view_mean_pose_gather():
-    """`masked_view_mean` takes one entry per ACTIVE pair. Hand-computed, both
-    sides of the contract: the raw (M, V) tensor raises on ANY mask
-    (`index_add_` checks dim 0), and the subtler FLATTENED-raw wrong path
-    silently coincides with the gather when every view is live -- which is
-    exactly why the partially-active case is the load-bearing one."""
-    active = torch.tensor([[True, True, False],
-                           [False, True, False]])
-    # active pairs row-major: (0,0) (0,1) (1,1); the counts DIFFER per row
-    # (2, 1), which is what makes the per-row divide observable
-    pair_flat = torch.tensor([1.0, 3.0, 14.0])
-    # row 0: mean(1, 3) = 2 ; row 1: 14 ; overall (2 + 14) / 2 = 8
-    got = float(masked_view_mean(pair_flat, active))
-    assert abs(got - 8.0) < 1e-6, got
-    # the discriminator: dividing by the TOTAL active count gives 6.0 instead
-    assert abs(pair_flat.mean().item() - got) > 1.0
-
-    pair_grid = torch.tensor([[1.0, 3.0, 0.0],
-                              [0.0, 14.0, 0.0]])
-    try:
-        masked_view_mean(pair_grid, active)          # WRONG contract
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError(
-            'raw (M, V) pair did not raise on a partially-active mask -- the '
-            'gather contract is unenforced')
-    all_on = torch.ones(2, 3, dtype=torch.bool)
-    # the SUBTLE wrong path is the flattened raw vector: on an all-active mask
-    # it runs and gives the SAME value as the gather, so a test that only ever
-    # uses all-active masks cannot tell the two contracts apart ...
-    flat_raw = pair_grid.reshape(-1)
-    v_wrong = float(masked_view_mean(flat_raw, all_on))
-    v_right = float(masked_view_mean(flat_raw[all_on.reshape(-1)], all_on))
-    assert abs(v_wrong - v_right) < 1e-6, (v_wrong, v_right)
-    # ... and the partially-active case is where it must raise, like the 2-D
-    # form does
-    try:
-        masked_view_mean(flat_raw, active)
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError(
-            'flattened raw pair did not raise on a partially-active mask')
-    print('  masked_view_mean matches hand-computed values; both raw forms '
-          'raise on a partial mask, and the flattened raw form coincides with '
-          'the gather only on an all-active one')
-
-
-# ---------------------------------------------------------------------------
-# 4. the policy
+# 3. the policy
 # ---------------------------------------------------------------------------
 
 def test_zgpose_policy_loss():
@@ -365,20 +314,20 @@ def test_zgpose_policy_loss():
               'output_shape still (521,)')
 
         # --- the head starts at exactly zero, so the aux value at init IS the
-        # hand-computed masked mean target-square (this is also what makes the
-        # driver's pre-launch calibration dataset-only) ---------------------
+        # hand-computed mean target-square over all rows (this is also what
+        # makes the driver's pre-launch calibration dataset-only) ------------
         assert torch.count_nonzero(ViewPoseSetHead(512, V, VIEW_POSE_DIM)(
             torch.randn(4, 512))) == 0
         tgt = batch[AUX_VIEW_POSE_KEY].numpy()
         mskb = batch[AUX_VIEW_POSE_MASK_KEY].numpy() > 0.5
-        want = np.mean([
-            np.mean(np.mean(tgt[b, to][mskb[b, to]] ** 2, axis=-1))
-            for b in range(B) for to in range(2)])
+        # ALL rows are scored (dead rows against their zero targets), so at
+        # the zero-init head the aux value is the plain mean target-square
+        want = np.mean(tgt ** 2)
         enc_out = on.obs_encoder.forward_full(this)
         aux_init = float(on.aux_loss(enc_out, batch, B))
         assert abs(aux_init - want) < 1e-6, (aux_init, want)
-        print(f'  zero-init head: aux at init == hand-computed masked mean '
-              f'target-square ({aux_init:.4f})')
+        print(f'  zero-init head: aux at init == hand-computed mean '
+              f'target-square over all rows ({aux_init:.4f})')
 
         # --- the zero-weight arm reproduces the parent EXACTLY ---------------
         torch.manual_seed(0)
@@ -420,18 +369,37 @@ def test_zgpose_policy_loss():
               f'aux {on.last_aux_loss:.4f}, ratio '
               f'{on.last_aux_loss / float(l_off):.3f})')
 
-        # --- masking: dead rows cannot move the loss, live rows must --------
+        # --- ALL rows are scored, dead ones too (their targets are zero) ----
         aux_a = on.aux_loss(enc_out, batch, B)
         poisoned = dict(batch)
         poisoned[AUX_VIEW_POSE_KEY] = batch[AUX_VIEW_POSE_KEY].clone()
         poisoned[AUX_VIEW_POSE_KEY][batch[AUX_VIEW_POSE_MASK_KEY] < 0.5] += 1e3
-        assert torch.allclose(aux_a, on.aux_loss(enc_out, poisoned, B)), (
-            'a dead pose row changed the aux loss')
+        assert float(on.aux_loss(enc_out, poisoned, B)) - float(aux_a) > 1.0, (
+            'poisoning a dead pose row did not change the aux loss -- the '
+            'loss is not scoring it, and the constant-head cheat is back')
         poisoned2 = dict(batch)
         poisoned2[AUX_VIEW_POSE_KEY] = batch[AUX_VIEW_POSE_KEY].clone()
         poisoned2[AUX_VIEW_POSE_KEY][batch[AUX_VIEW_POSE_MASK_KEY] > 0.5] += 1e3
         assert float(on.aux_loss(enc_out, poisoned2, B)) - float(aux_a) > 1.0
-        print('  dead rows cannot move the aux loss; live rows do (> 1.0)')
+        print('  every row is scored: poisoning DEAD rows raises the aux loss '
+              'too (that is what forbids the constant-head solution)')
+
+        # --- the anti-cheat pin: the target is sample-dependent (liveness
+        # varies), so no input-independent head -- the per-row constant
+        # included -- can reach zero. If this fails, the run's premise is gone.
+        np.random.seed(0)     # immediately before the draws; nothing between
+        ac = _batch_from_zg(ds, range(8))
+        tc = ac[AUX_VIEW_POSE_KEY].numpy().reshape(-1, V, VIEW_POSE_DIM)
+        mc = ac[AUX_VIEW_POSE_MASK_KEY].numpy().reshape(-1, V) > 0.5
+        n = mc.sum(0)
+        Mc = tc.shape[0]
+        assert ((n > 0) & (n < Mc)).any(), \
+            'no pool row is partially live -- the floor would be 0'
+        const = float(np.mean((tc - tc.mean(0)) ** 2))
+        assert const > 1e-4, const
+        assert float(np.mean(tc ** 2)) > const, 'zero head beats the constant'
+        print(f'  anti-cheat pin: the best per-row constant scores {const:.4f} '
+              f'> 0 (liveness must come from z_g)')
 
         # --- the gradient path: head -> z_g -> fusion -> conv1 --------------
         with torch.no_grad():
@@ -501,8 +469,7 @@ def test_zgpose_policy_loss():
         t1 = b1[AUX_VIEW_POSE_KEY].numpy()
         m1 = b1[AUX_VIEW_POSE_MASK_KEY].numpy() > 0.5
         assert (m1.sum(axis=-1) == 1).all(), 'N=1 fixture is not single-view'
-        w1 = np.mean([np.mean(t1[b, to][m1[b, to]] ** 2)
-                      for b in range(B) for to in range(2)])
+        w1 = np.mean(t1 ** 2)          # all rows scored; dead ones are zero
         assert np.isfinite(a1) and abs(a1 - w1) < 1e-6, (a1, w1)
         # the live row's POSITION matters: make one frame carry a DIFFERENT
         # view's pose (the next pool position's, as the dataset would emit for
@@ -519,15 +486,18 @@ def test_zgpose_policy_loss():
         b1m[AUX_VIEW_POSE_KEY] = t1m
         b1m[AUX_VIEW_POSE_MASK_KEY] = m1m
         a1m = float(pol_n1.aux_loss(enc1, b1m, B))
-        assert abs(a1m - a1) > 1e-3, (a1, a1m)
-        print(f'  N=1 samples: aux finite, == the live view\'s target-square '
-              f'({a1:.4f}), and moves when the live row moves ({a1m:.4f})')
+        # exact hand value first (pins the all-rows semantics), then the move
+        expected = float(np.mean(b1m[AUX_VIEW_POSE_KEY].numpy() ** 2))
+        assert abs(a1m - expected) < 1e-6, (a1m, expected)
+        assert abs(a1m - a1) > 1e-5, (a1, a1m)
+        print(f'  N=1 samples: aux finite, == the all-rows mean target-square '
+              f'({a1:.4f}), and moves when the live view changes ({a1m:.4f})')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 # ---------------------------------------------------------------------------
-# 5. the configs
+# 4. the configs
 # ---------------------------------------------------------------------------
 
 def test_zgpose_configs():
@@ -632,7 +602,6 @@ def test_zgpose_configs():
 def test():
     test_mat_to_rot6d_convention()
     test_dataset_pose_set_emission()
-    test_masked_view_mean_pose_gather()
     test_zgpose_policy_loss()
     test_zgpose_configs()
     print('ALL ZG POSE-SET SUPERVISION CHECKS PASSED')

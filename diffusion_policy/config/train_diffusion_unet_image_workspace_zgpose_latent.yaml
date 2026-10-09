@@ -44,8 +44,8 @@ policy:
 
   # PLACEHOLDER, not the registered weight. The driver computes
   # W = 0.33 * diff0 / aux0 (diff0 = 1.0828, the batch-0 diffusion loss
-  # measured on both committed parents; aux0 = the masked mean target-square
-  # under a zero-init head, measured pre-launch on the real zarr) and overrides
+  # measured on both committed parents; aux0 = the mean target-square over ALL
+  # rows under a zero-init head, measured pre-launch on the real zarr) and overrides
   # this key; the launch gate proves the override. Do NOT launch this config
   # without data/zgpose_run.sh.
   aux_loss_weight: 0.3573
