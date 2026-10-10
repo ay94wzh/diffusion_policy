@@ -2,7 +2,7 @@
 
 Direction and the original predictions: `PROPOSAL.md`. The module, its measured behaviour and
 the open questions: `PROGRESS.md`. Operational detail, runbooks and traps: `NOTES.md`.
-Last updated 2026-10-09.
+Last updated 2026-10-10.
 
 ## Constraints
 
@@ -40,6 +40,7 @@ Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 | **clear-run held-out eval** (instrument) | ✅ done 2026-10-07 | **interpolates**: off-grid ±7.5…±67.5 mean **0.716** vs 0.747 in-distribution, both inside the 0.15 threshold; ±82.5/±90 → 0.310 but view visibility is confounded there; **elevation 0 of 50 at both ±15°** — not a view-count problem (K=11, mean-N 6.0, the most views in the project) |
 | **latent-distribution figures** (instrument) | ✅ done 2026-10-07 | the ring's ordering is **inherited**, not learned — corr(pairwise `z_v` distance, \|Δaz\|) ≥ 0.986 at *every* epoch, epoch 0 included; and the N-invariance is **non-monotone** (cos-dist 0.17% → 1.57% at e22 → 0.53% at e200) |
 | **base-frame aux target** (`m4base`, §2.4's frame axis) | ✅ done 2026-10-08 | **behavioural null (pre-registered); the latent series re-organized** — `zv_pair_ratio` 0.485→0.239, settles e57 vs e126 |
+| **`z_g` supervision** (`zgpose`, candidate 2) | ✅ done 2026-10-10 | **outcome (i) at the representation, behaviour inside band** — `z_g` became view-set-aware (both instruments ~2× the parents; N=1 pose decodable at 1.2° / 1.9 cm), registered means a third null, **−0.170 past the ring**; M5's distillation premise re-opened |
 | **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded |
 | parked (encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics) | ⬜ stopped, findings kept | reasoning and revival conditions at git tag `docs-full-20260930` |
 
@@ -49,6 +50,12 @@ Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 ring and its latent-distribution figures — numbers in `PROGRESS.md`, verdicts in the table above.
 **Candidate 3 has now run too**: `m4base` (2026-10-08) executed its frame form — the aux target
 in the base frame — and closed it: behavioural null (pre-registered), latent re-organized.
+**And candidate 2 has run** (`zgpose`, 2026-10-10): the fused latent supervised on the live
+views' pooled camera-pose set came back **outcome (i) at the representation** — `z_g` became
+view-set-aware (both instruments ~2× the committed parents; the N=1 fused latent decodes the
+camera pose at 1.2° / 1.9 cm) — with the **behaviour inside the 0.15 band on both registered
+means** (0.735 in-dist / 0.714 off-grid) and **−0.170 past the ring**, a cost. That re-opens
+M5's distillation premise; it does not establish it (see `PROGRESS.md`).
 What remains are method changes. Design facts they build on (verified in the code, 2026-10-07;
 m4base 2026-10-08):
 - `z_v` has no loss of its own beyond (a) fusion → `z_g` → diffusion and (b) M4's camera-frame
@@ -66,12 +73,15 @@ m4base 2026-10-08):
 Candidates (one part at a time, per the constraints above):
 1. **Fusion with pose tokens** — an explicit pose/Plücker embedding per view token: the one
    conditioning path not yet tried (the inert ones were conv1 channels and pre-fusion FiLM).
-2. **`z_g` supervision** — the task loss already constructs `z_g` (cka to mean-pool 0.97 → 0.69
-   over training; N=1 vs N=11 0.998), so view-consistency has little headroom; supervision with
-   headroom would separate state from view (e.g. geometry prediction from `z_g`), or predict
-   camera-frame actions from `z_g` rather than `z_v`.
-3. **M5 distillation** (standing) — premise still weak: the N=1 fused latent is ~identical to
-   the full-view one, so a student would reproduce something the single view already determines.
+2. **`z_g` supervision** — ✅ executed as `zgpose` (2026-10-10): the *geometry* form (pooled
+   camera-pose set, all rows scored) landed outcome (i) at the representation with behaviour
+   inside band; the **action** form — camera-frame actions predicted from `z_g` rather than
+   `z_v` — remains untried, and is now the only variant of this candidate left.
+3. **M5 distillation** (standing) — premise **re-opened** by `zgpose`: the N=1 fused latent is
+   no longer ~identical to the full-view one (2× the parents' N-dependence; pose decodable at
+   1.2°), so a student would have something to learn. The deciding measurement — whether a
+   distilled student beats the plain N=1 path *behaviourally* — is still unmade, and `zgpose`'s
+   own behavioural null is a caution that representation-level headroom need not become success.
 
 ## Out of scope for now
 

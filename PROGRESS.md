@@ -10,7 +10,7 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-10-09.
+Last updated 2026-10-10.
 
 ## Summary
 
@@ -34,7 +34,14 @@ instead of each slot's camera frame: the aux-supervision idea's second behaviour
 pre-registered — all four registered means inside the 0.15 band — while the latent series
 re-organizes as designed (`zv_pair_ratio` 0.485 → **0.239**, settling e57 vs e126, and the
 latents become *less* pose-decodable), so re-shaping `z_v`'s view/state balance is not what
-bounds behaviour. **What is not explained.** Two distinct failure modes
+bounds behaviour. **What the `z_g`-supervision arm adds (2026-10-10).** The first supervision to
+reshape the *fused* latent: aiming it at the live views' pooled camera-pose set (all rows scored,
+dead ones against zero) makes `z_g` genuinely view-set-aware — digest N-dependence 0.199 vs the
+parents' 0.089/0.103, probe `zg_across_view_subsets` 0.1434 vs 0.0663/0.0780, N=1 camera-pose
+decodability **1.2° / 1.9 cm** vs 10.8–17.8° / 16.6–23.2 cm (outcome (i) of its pre-registration)
+— and the behaviour on the registered means is a **third null** (0.735 in-dist / 0.714 off-grid,
+inside the 0.15 band), with its one beyond-band move a *cost*: 0.140 vs 0.310 for both parents
+past the ±75° ring. **What is not explained.** Two distinct failure modes
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
@@ -49,7 +56,7 @@ geometric conditioning and §2.4's aux heads are both inert.**
 | **L1** | view diversity only: M1's exact model, its single camera slot filled per sample from a randomly drawn training view | task-split **in both directions** — solves lift out to ±75°, destroys square/can |
 | **M3** | view-conditioned encoder: per-view latents, Plücker + camera-frame-history conditioning, K=7 slots, per-sample N∈[1,7], MHA fusion | **solves square and can at held-out views**; its conditioning contributes nothing |
 | **M4** | per-view camera-frame auxiliary action heads | mechanism is real (`aux_loss` falls 52×), behaviour is null (+0.02/+0.04) |
-| **M5** | single-camera N=1 inference at a novel pose | **capability measured** — every M3 number is already this; the optional distillation stage is uncoded |
+| **M5** | single-camera N=1 inference at a novel pose | **capability measured** — every M3 number is already this; the optional distillation stage is uncoded, its premise **re-opened** 2026-10-10 by `zgpose` |
 | **N>1** | M3's model with one CLI line changed so every sample sees a single view | **the load-bearing ingredient** — reproduces L1, not M3 |
 | **ladder** | the N-diversity ladder closed: mean-N 1.0 / 1.5 / 2.0 / 3.0 / 4.0 | **knee between 2.0 and 3.0** (0.080 → 0.456), then graded to 0.764; `[1,5]` is *more* view-general than `[1,7]` |
 | **`[2,7]`** | min-N 2, mean-N 4.5 — never trains at N=1 | **indistinguishable from `[1,7]`** — enough views *on average* is the ingredient |
@@ -60,6 +67,7 @@ geometric conditioning and §2.4's aux heads are both inert.**
 | **(b) `[1,5]` seed 43** | recovered 2026-10-01; first reproduction of any ladder rung | **Δ 0.052 / 0.083, inside the band** — the knee stands at two seeds |
 | **(c) ±60° pool** | recovered 2026-10-01; pool `[2,4,6,8,10]` at matched mean-N 3.0 | **pool curation is worth +0.272 trained / +0.160 held-out; reaches `[1,7]` at 2/3 its mean-N** (size/content confounded) |
 | **base-frame supervision** (`m4base`) | `m4base`, 2026-10-08 — the clear run's recipe with the per-view aux target's frame swapped camera→base (view-invariant) | **behavioural null (pre-registered), latent re-organized** — `zv_pair_ratio` 0.485→0.239, settles e57 vs e126; §2.4's frame axis closed |
+| **`z_g` supervision** (`zgpose`) | 2026-10-10 — the fused latent supervised on the live views' pooled camera-pose set (all rows scored; dead zero-filled). Rev 1 killed pre-training (see the section) | **outcome (i) at the representation, behaviour inside band** — `z_g` became view-set-aware (both instruments ~2× the parents; pose decodable at 1.2°); registered means a third null, past the ring **−0.170**; M5's premise re-opened |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -592,6 +600,93 @@ instrument, not a ladder cell. **One reading trap this run exposed:** the per-ep
 (clear 0.857 vs m4base 0.484) is an early effect of the intervention, and e0 rows are not a
 shared baseline (NOTES *Per-epoch latent snapshots*).
 
+### The `z_g` pose-set arm (`zgpose`, 2026-10-10)
+
+**What it is.** `PLAN.md` candidate 2 in its *geometry-prediction* form: the clear run's recipe
+(K=11 over ring 1..11, N∈[1,11], seed 42, per-epoch latent probe, W = 0.33·diff0/aux0 calibrated
+pre-launch to **1.33**) with ONE design-level change — the per-view aux head is retired and the
+**fused latent `z_g`** predicts the live views' **pooled camera-pose set**: a fixed (V=11, 9)
+target, row i == pool position i, `[pos(3) | rot6d(6)]`, **dead rows zero-filled and ALL rows
+scored**. The driver measures the constant-predictor floor on 64 calibration samples
+(**0.108586**) and refuses to launch unless some pool row is partially live over them — the gate
+that makes a static target impossible to mistake for a test.
+
+**Revision 2, and why it exists.** Attempt 1 scored the **live rows only**. The pose table is
+static (the cameras never move), so the only sample-dependent content of the target is *which
+views are live* — and a masked mean excludes exactly that: an input-independent head emitting the
+table on every row matched every scored row exactly. The calibration's floor measured
+**0.000000** (`ratio_aux0_floor` 4.5e11) and the registered tree degenerated — the "loss below
+the floor" outcome was unreachable while the falsifier was vacuous. Attempt 1 was killed 2.5
+minutes in, before any completed rollout; its `aux_loss` had already collapsed **0.4525 → 2.1e-06
+within epoch 0's 439 steps** — the cheat, visible in the log. Revision 2 scores all V rows
+against the zero-filled target, so the best input-independent predictor is the per-row constant
+and beating it *requires* reading liveness out of `z_g`. Commits: `7da7ba5` (rev 1), `7b97ee5`
+(rev 2, with `data/zgpose_run.sh`'s header carrying the revised pre-registration).
+
+**Results — behavioural.** `success_rate`, 50 paired episodes, registered means vs the two
+parents:
+
+| registered mean | **zgpose** | m4base | m4clear |
+|---|---|---|---|
+| in-dist ring (11 vp, trained) | **0.735** | 0.796 | 0.747 |
+| off-grid ±7.5…±67.5 (10 vp, held out) | **0.714** | 0.774 | 0.716 |
+| past the ring ±82.5/±90 (4 vp) | **0.140** | 0.310 | 0.310 |
+| elevation el_0 / el_m15 / el_p15 | 0.820 / 0 / 0 | 0.840 / 0 / 0 | 0.700 / 0 / 0 |
+
+**Behaviour is inside the 0.15 band on both registered means** — the supervision line's third
+behavioural null — **except past the ring**, where it is **0.170 below both parents** (az_m82.5
+0.180 vs 0.440/0.400; az_p82.5 0.300 vs 0.660/0.560): the first registered behavioural number
+this project has moved beyond band, and a *cost*. `el_0` (same pose as `az_0`) reads 0.820, the
+harness's usual consistency.
+
+**Results — the instruments (this run's distinguishing diagnostic), all at e200:**
+
+| readout | **zgpose** | m4base | m4clear |
+|---|---|---|---|
+| digest `rel(zg_n1, zg_full)` — tail(last 25) | **0.199** (peak 0.914 @e7) | 0.0889 | 0.1031 |
+| digest `cka(n1, full)` | 0.9975 | 0.9985 | 0.9976 |
+| probe `zg_across_view_subsets(1,11)` | **0.1434** | 0.0663 | 0.0780 |
+| probe `zv_pair_ratio` (1,11) | **2.255** | 0.267 | 0.544 |
+| probe `zv_across_states` (1,11) | 0.412 | 1.115 | 1.086 |
+| probe N=1 `zg` pose readout (ridge, 1,11) | **1.20° / 1.90 cm** | 17.8° / 23.2 cm | 10.8° / 16.6 cm |
+| digest `cka(zg_full, zv_az0)` | **0.981** | 0.678 | 0.690 |
+| digest `zv_pair_ratio`, final (settle) | **1.308** (91) | 0.239 (57) | 0.485 (126) |
+| digest `zv_rel_spread_mean` / `zg_norm_mean` final | 0.093 / **65.8** | 0.235 / 5.4 | 0.224 / 3.5 |
+| collapse screen, `[11,11]` (× its random-init) | 3.30e-03 (2.03×) | 2.53e-02 (5.7×) | 3.46e-02 (12.2×) |
+
+The aux term is beaten by four orders of magnitude (`aux_e200` 8e-06 = 7e-05 of the floor).
+**Both instruments moved, ~2× beyond the parents** (digest tail 0.199 > 0.13; subsets 0.1434 >
+0.09) → **outcome (i), the "supervision bites the fusion" branch.** The probe's draw fingerprints
+match the committed m4base probes in all four ranges (`mean_active` 6.046), so the cross-cell
+probe comparison is on identical draws; the digest ran `--strict` with every gate passing
+(scalar recheck 4.1e-04; no holes) and no warnings. The in-training e200 rollout (N=1 at az_0)
+reads 0.820 (m4base 0.900, m4clear 0.760) and the e200 diffusion term 0.00423 sits at the
+parents' level (0.00588 / 0.00692), so the policy is intact.
+
+**The reading.** Everything the arm was designed to change, it changed: `z_g` is decodably
+view-set-dependent; the N=1 fused latent carries the camera pose almost exactly (1.2° / 1.9 cm —
+~15× the parents' decodability); the fusion output moved *towards* the per-view latents
+(`cka(zg_full, zv_az0)` 0.98 vs 0.69 — the fusion now largely preserves view-token information);
+and the pressure reached back into `z_v` (pair ratio 1.31–2.26 vs 0.24–0.54, within-view spread
+halved). **And neither registered behavioural mean moved.** The project's central null therefore
+extends to the fused latent itself: making `z_g` genuinely view-aware is *not* the behavioural
+bottleneck — the third supervision target (per-view actions, base-frame actions, fused-latent
+geometry) reshaped without buying success. **M5's distillation premise is re-opened** — the
+pre-registration says to state this explicitly when (i) lands: a student regressing `z_g` would
+now have something to learn that the N=1 path does not already determine, unlike the parents
+(N-invariant to 0.5% / 0.998 CKA). The cost sits at extrapolation: past the ring, a third below
+both parents.
+
+**Caveats.** One seed, 50 episodes per viewpoint; an *instrument* cell (all 11 ring views train,
+nothing held out), so its numbers are not ladder-comparable. The collapse screen reads 3.30e-03,
+below the ~1e-02 healthy anchor though 2.0× its own random-init baseline and five orders above
+the degenerate band; the digest explains the mechanism — `z_g`'s norm grew 4–19× (65.8) while its
+*relative* state spread halved, i.e. the fused latent became view-dominated, and the screen's
+absolute anchors were calibrated on state-dominated cells. This is a shift in the view/state
+balance, not a collapse (the probe's `zv_across_states` 0.412 vs `m3v12`'s 2.7e-05). The
+batch-0 `aux/diff` realized **0.20** rather than the nominal 0.33 — batch 0 drew a liveness set
+2.4σ below the population mean (per-item sd 0.127 over 256 sampled items), a draw, not a bug.
+
 ## Findings
 
 What each follow-up experiment concluded — the result and the reading.
@@ -694,7 +789,12 @@ encoder compute per sample.
   which no result so far shows. The clear-run analysis is the first evidence *against* the
   premise rather than merely its absence: at inference the fused latent at N=1 is within ~0.5%
   (direction) of the 11-view one, so whatever the extra views contribute is not visible in `z_g`
-  at test time.
+  at test time. **Updated 2026-10-10 (`zgpose`).** That reading is now reversed at the
+  representation — with the pose-set supervision `z_g` is ~2× the parents' N-dependence and the
+  N=1 fused latent decodes the camera pose at 1.2° / 1.9 cm, so a student *would* have something
+  to learn. The same run also shows the other side: making `z_g` view-aware bought no behaviour,
+  so the premise is re-opened, not established — the deciding measurement (does a distilled
+  student beat the plain N=1 path behaviourally?) is still unmade.
 
 ## Where the rest is
 
@@ -729,6 +829,7 @@ encoder compute per sample.
 | clear-run analysis | `analyze_latent_series.py`, `tests/test_analyze_latent_series.py`, `data/clear_analysis.sh` (the per-epoch latent-series digest; npz stay on `miroc-server`) |
 | latent-distribution figures | `visualize_latent_distribution.py` (compute is numpy-only and runs where the npz are; plot is matplotlib), `tests/test_visualize_latent_distribution.py`, `data/clear_latent_viz.sh`, committed `data/analysis_clear/latent_viz_coords.json` + `data/analysis_clear/figures/` |
 | z_v supervision (`m4base`) | `config/task/m4_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_m4base_latent.yaml`, `data/m4base_{run,eval,analysis}.sh`; seam: `multiview_image_dataset.py` `aux_action_frame` (base-frame emission) |
+| z_g supervision (`zgpose`) | `config/task/zgpose_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_zgpose_latent.yaml`, `model/vision/view_pose_set_head.py`, `policy/diffusion_unet_image_policy_zgpose.py`, `tests/test_zg_pose_supervision.py`, `data/zgpose_{run,eval,analysis}.sh`; seam: `multiview_image_dataset.py` `emit_aux_view_pose` (zero-filled pooled pose-set target, all rows scored) |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE history;

@@ -383,6 +383,25 @@ camera-frame direction against a world-frame expected direction without applying
 independent numpy projector at **non-identity** poses with five mutation power checks, and
 `tests/test_aux_action_heads.py` does the same for the rot6d transform.
 
+### A masked loss over a static target supervises nothing
+
+`zgpose` revision 1 (2026-10-09) supervised the fused latent on the live views' camera-pose set
+with a **masked** mean, scoring only the rows of views that were drawn. The target values are
+static (the cameras never move), so the *only* sample-dependent content was which rows were live
+— and the mask excluded exactly that: a head that ignores its input and emits the pose table on
+every row matches every scored row exactly, and the loss then pressures nothing. Revision 1's
+`aux_loss` fell 0.4525 → 2.1e-06 inside epoch 0, and the pre-launch calibration printed
+`floor_constant_predictor=0.000000` — the constant predictor was *exact* (`ratio_aux0_floor`
+4.5e11 is the tell). It was killed 2.5 minutes in, before any completed rollout.
+
+- **Read the floor, not the decay.** A large aux decay means nothing by itself; the honest
+  reference is the best *input-independent* predictor, and it must be strictly positive for the
+  target to have headroom. Revision 2 scores all rows (dead ones against their zero targets):
+  floor 0.108586 vs aux0 0.268672, and beating it requires reading liveness out of `z_g`.
+- **A guard that can't fail proves nothing, again:** the calibration now *asserts* that some pool
+  row is partially live over its samples, so a static target fails at launch instead of being
+  read as a behavioural null.
+
 ### Silent degradation
 
 The expensive failures in this project produced no error and no implausible number: a
