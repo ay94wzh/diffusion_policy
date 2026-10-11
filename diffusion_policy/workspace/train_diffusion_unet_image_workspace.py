@@ -199,6 +199,20 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                         aux_loss_cpu = getattr(self.model, 'last_aux_loss', None)
                         if aux_loss_cpu is not None:
                             step_log['aux_loss'] = aux_loss_cpu
+                        # zvzg seam: the two SEPARATE auxiliary terms, when the
+                        # policy has them (the combined-supervision arm). For
+                        # that arm the `aux_loss` above is the weighted total;
+                        # these are the raw per-term values, each comparable to
+                        # its own parent arm's `aux_loss`. Guarded identically --
+                        # the attributes are absent for every other policy.
+                        aux_action_cpu = getattr(
+                            self.model, 'last_aux_action_loss', None)
+                        if aux_action_cpu is not None:
+                            step_log['aux_action_loss'] = aux_action_cpu
+                        aux_pose_cpu = getattr(
+                            self.model, 'last_aux_pose_loss', None)
+                        if aux_pose_cpu is not None:
+                            step_log['aux_pose_loss'] = aux_pose_cpu
 
                         is_last_batch = (batch_idx == (len(train_dataloader)-1))
                         if not is_last_batch:

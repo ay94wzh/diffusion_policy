@@ -62,6 +62,14 @@ data/*
 !data/zgpose_run.sh
 !data/zgpose_eval.sh
 !data/zgpose_analysis.sh
+# 2026-10-12: the combined-supervision run (zvzg) -- m4base's per-view
+# base-frame action head on z_v AND zgpose's pooled camera-pose set on z_g,
+# both live at once. The run driver's header carries the PRE-REGISTRATION
+# (both terms' bands, the tension readout); same rationale as the
+# m4base/zgpose drivers above.
+!data/zvzg_run.sh
+!data/zvzg_eval.sh
+!data/zvzg_analysis.sh
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*
@@ -94,6 +102,12 @@ data/outputs/run_*_m4*_s42_200ep/*
 !data/outputs/run_*_zgpose_s42_200ep/
 data/outputs/run_*_zgpose_s42_200ep/*
 !data/outputs/run_*_zgpose_s42_200ep/logs.json.txt
+# combined-supervision run (zvzg): logs only, never the 4.6 GB checkpoints
+# (same rule as the blocks above). A future seed-mate needs its own line --
+# the `_s42`-only trap the M3 and L1 blocks record.
+!data/outputs/run_*_zvzg_s42_200ep/
+data/outputs/run_*_zvzg_s42_200ep/*
+!data/outputs/run_*_zvzg_s42_200ep/logs.json.txt
 # M1 re-train (2026-09-25): recovers the single-view baseline weights that were deleted
 # 2026-09-19, so its ENCODER can be collapse-screened -- the question is whether the
 # original baseline was itself collapsed. Same rule: logs only, never the checkpoints.
