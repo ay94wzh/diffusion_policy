@@ -180,7 +180,7 @@ W_POSE = round(0.33 * diff0 / aux0_pose, 4)
 t_act = np.concatenate(t_act)                       # (M, K, C*Da)
 v_mask = np.concatenate(v_mask) > 0.5               # (M, K)
 ta = norm[AUX_ACTION_KEY].normalize(
-    t_act.reshape(M * K, C * ACTION_DIM)).numpy()    # normalized units
+    t_act.reshape(M * K, C * ACTION_DIM)).detach().numpy()   # normalized units
 am = v_mask.reshape(M * K)
 assert am.any() and not am.all()
 aux0_action = float((ta[am] ** 2).mean())

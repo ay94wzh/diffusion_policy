@@ -242,7 +242,7 @@ for i in idxs:
 tp = np.concatenate(tp)
 floor_pose = float(((tp - tp.mean(0)) ** 2).mean())
 ta = norm[AUX_ACTION_KEY].normalize(
-    np.concatenate(ta).reshape(-1, C * 10)).numpy()
+    np.concatenate(ta).reshape(-1, C * 10)).detach().numpy()
 am = (np.concatenate(vm) > 0.5).reshape(-1)
 aux0_action = float((ta[am] ** 2).mean())
 
