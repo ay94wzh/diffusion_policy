@@ -78,6 +78,11 @@ data/*
 # m4base/zgpose/zvzg drivers above.
 !data/prob_run.sh
 !data/prob_eval.sh
+# 2026-10-16: the prob round's INSTRUMENT battery (digest + viz coords + screens
+# + the relpose grid + the deferred variance-quality read). Same rationale as
+# the *_analysis.sh drivers above; the variance script's header carries the
+# thresholds the run driver deferred to it.
+!data/prob_analysis.sh
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*

@@ -10,7 +10,7 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-10-14.
+Last updated 2026-10-16.
 
 ## Summary
 
@@ -49,7 +49,13 @@ encoding healthy (`zv_across_states` 0.916 ≈ the parents', collapse screen 12.
 init). Behaviour is a **fourth in-distribution null** (0.751) and the **weakest held-out cell
 of the four**: off-grid ±7.5…±67.5 **0.606** — 0.168 below `m4base`, the first *banded*
 registered mean outside the 0.15 band — and past the ring **0.100**, no recovery of `zgpose`'s
-cost. **What is not explained.** Two distinct failure modes
+cost. **What the probabilistic-fusion round adds (2026-10-16).** `PLAN_G.md` stage 1 — per-view
+Gaussians (`mu_v`, `logvar_v`) fused by PoE, against a deterministic MHA-over-means control and
+a plain-mean arm — is **behaviourally flat**: in-distribution all three cells sit inside the band
+(0.793–0.829), the held-out contrast C-vs-B is **−0.074, inside the band and unresolved**, PoE is
+the weakest of the three off-grid, and the best held-out cell is the control that never uses
+uncertainty; the learned variances are real (view spread 0.447, clamp never binds) and buy
+nothing. **What is not explained.** Two distinct failure modes
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
@@ -77,6 +83,7 @@ geometric conditioning and §2.4's aux heads are both inert.**
 | **base-frame supervision** (`m4base`) | `m4base`, 2026-10-08 — the clear run's recipe with the per-view aux target's frame swapped camera→base (view-invariant) | **behavioural null (pre-registered), latent re-organized** — `zv_pair_ratio` 0.485→0.239, settles e57 vs e126; §2.4's frame axis closed |
 | **`z_g` supervision** (`zgpose`) | 2026-10-10 — the fused latent supervised on the live views' pooled camera-pose set (all rows scored; dead zero-filled). Rev 1 killed pre-training (see the section) | **outcome (i) at the representation, behaviour inside band** — `z_g` became view-set-aware (both instruments ~2× the parents; pose decodable at 1.2°); registered means a third null, past the ring **−0.170**; M5's premise re-opened |
 | **joint supervision** (`zvzg`) | 2026-10-14 — both aux lines at once: `m4base`'s base-frame action head on `z_v` (w 1.0) + `zgpose`'s pose-set on `z_g` (w 1.33) | **the strongest view-aware `z_g` of the four cells, with the encoder healthy** (N-dependence 2.2–2.3× `zgpose`; screen 12.3× its random init) — in-dist a fourth null (0.751); **off-grid 0.606: −0.168 vs `m4base`, the first banded mean outside its band** (−0.108 vs `zgpose`, inside); past-ring 0.100, no recovery of `zgpose`'s cost |
+| **probabilistic fusion** (`prob_b/c/d`) | 2026-10-16 — `PLAN_G.md` stage 1: per-view Gaussians, three fusions — MHA-over-means (B, the deterministic control), PoE (C), plain mean (D); cell A = the committed `m4base`, not retrained | **behaviourally flat** — in-dist all inside band (0.829 / 0.804 / 0.793 vs A's 0.796); off-grid C−B **−0.074** and D−C **+0.060**, both unresolved, B the best held-out (0.738); past the ring **B 0.370** (above A) with C/D 0.210 / 0.195 (partial, no third floor); the variance learns (C: view spread 0.447, clamp 0.011/0.071) and buys nothing |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -798,6 +805,118 @@ cells. Comparisons are design-level (the header's explicit non-claim of RNG lock
 parents). "Intermediate" on the tension readout is the registered bin, not a predicted
 direction.
 
+## The probabilistic-fusion round (PLAN_G, 2026-10-16)
+
+**What it is.** `PLAN_G.md` stage 1 asks whether a *probabilistic* view representation beats a
+deterministic one. A small shared head now turns each view's latent `z_v` into a Gaussian — a
+mean `mu_v` (that view's estimate of the 512-dim control state) and a log-variance `logvar_v`
+(how unsure the view is). The mean branch is residual and zero-initialised
+(`mu_v = z_v + f_mu(z_v)`), so at init it *is* the old latent, bit for bit; the variance branch
+is zero-initialised and clamped to [−6, 2], so at init every view claims the same uncertainty.
+Four cells, one variable apart:
+
+| cell | fusion | what it isolates |
+|---|---|---|
+| **A** | MHA over `z_v` | the committed `m4base` run, **not retrained** |
+| **B** | MHA over the means `mu_v` | the projection + the supervision move, with no probability in the model |
+| **C** | **PoE** — multiply the live views' Gaussians | uncertainty-weighted fusion |
+| **D** | the plain average of the means | whether PoE beats simple averaging |
+
+The recipe is `m4base`'s: square, K=11 slots over pool [1..11], N ∈ [1,11], seed 42, 201 epochs,
+base-frame aux at w = 1.0, the per-epoch latent probe. Two things change — the aux action head
+reads `mu_v` instead of `z_v`, and the diffusion head consumes the fused **mean** `mu_g` — so
+this round tests probabilistic state estimation and fusion, not stochastic action generation.
+The head adds ~0.53 M parameters (0.18% of the policy) and draws from a private RNG stream, so no
+other draw moves; the logs confirm it: B's batch-0 `train_loss` is bit-identical to `m4base`'s
+(1.4437798), all three cells' batch-0 aux loss equals `m4base`'s `aux_loss` (0.360947847366333),
+and C and D share a batch-0 loss (1.4688555) — at init C and D are the same model.
+
+**Results — behaviour.** `success_rate`, 50 paired episodes, the registered means (band 0.15):
+
+| registered mean | **B** | **C** | **D** | A = m4base |
+|---|---|---|---|---|
+| in-dist ring (11 vp, trained) | **0.829** | **0.804** | **0.793** | 0.796 |
+| off-grid ±7.5…±67.5 (10 vp, held out) | **0.738** | **0.664** | **0.724** | 0.774 |
+| past the ring ±82.5/±90 (4 vp) | **0.370** | **0.210** | **0.195** | 0.310 |
+| elevation el_0 / el_m15 / el_p15 | 0.92 / 0 / 0 | 0.88 / 0 / 0 | 0.74 / 0 / 0 | 0.84 / 0 / 0 |
+
+**In-distribution, all three cells are inside A's band** (Δ +0.033 / +0.008 / −0.003), so the
+projection and the supervision move did no harm; all three also read at or above the other
+committed arms (m4clear 0.747, zgpose 0.735, zvzg 0.751). **Off-grid — the round's headline
+question — both registered contrasts land inside the band and are therefore unresolved**: C − B
+= **−0.074** and D − C = **+0.060**. Both point away from the hypothesis: PoE is the weakest of
+the three (−0.110 against A), C sits below B at 9 of the 12 shared held-out viewpoints, and D —
+whose variance branch never trains — beats C at 8 of 12. **Past the ring the registered question
+was "recovery, or a third floor?"; the answer is recovery for B (0.370, above A) and partial
+recovery for C and D** (0.210 / 0.195 — above the pose arms' 0.140 / 0.100, below A). So there
+is no third floor, but the arm that recovers is the one that never uses uncertainty. Elevation
+is descriptive, as ever: 0 of 50 at both ±15° for every cell, and each cell's `el_0` differs
+from its own `az_0` by 0.10 / 0.10 / 0.04 — inside the documented same-pose spread.
+
+**Results — the instruments.** The four *registered* representation readouts (probe
+`zv_pair_ratio`(1,11), probe `zg_across_view_subsets`(1,11), digest `rel(zg_n1, zg_full)` tail,
+probe N=1 pose readout) need the probe and digest scripts on `miroc-server` and **have not been
+run yet** — the whole battery is staged as `data/prob_analysis.sh` (2026-10-16), which prints
+those four against envelopes computed from the committed grids and runs the variance read below.
+What the run logs already carry:
+
+*Mechanism gates, all passed.* `mu_resid_rel` — how far the mean has moved off `z_v` — reads
+0.015 / 0.015 / 0.014 after epoch 0 and rises to **0.321 / 0.279 / 0.293** by e200: the residual
+head works in all three cells, so none is a re-seeded `m4base` (the exact 0.0 at init is pinned
+by the CPU test, since the probe fires *after* epoch 0). All 201 epoch-end rows are finite and
+complete in every cell. The in-training rollout (N=1 at az_0) climbs 0.00 → 0.58 / 0.62 / 0.66 →
+0.80 / 0.84 / 0.82 — no collapse. **D's `lv_std` is 0.0 exactly**, as registered — and **B's is
+too**: B's fusion never reads `logvar`, so its variance branch is dead by construction. So the
+registration's "do not read D's uncertainty numbers as uncertainty" caveat extends to B as well —
+neither cell's variance numbers mean anything.
+
+*Variance quality — cell C only, the one cell where the variance is trained.* `lv_view_spread`
+**0.447** > 0: the views genuinely disagree about their uncertainty, so PoE's weights are not
+uniform (C is not a re-parameterized D). The clamp fractions are 0.011 / 0.071, far under the 0.9
+line — the bound never binds. The fused variance is far tighter than any single view (`lvg_mean`
+−4.20 vs `lv_mean` −1.32), and the N=1 degeneracy holds on the real model (`lvg_n1_vs_lv`
+2.4e-07: one expert's product is that expert).
+
+*The digest scalars the earlier arms' tables carry* (same tool, same convention; `m4base`'s
+reproduces its committed settle of 57, so the comparison is like for like):
+
+| scalar, final (settle) | B | C | D | m4base |
+|---|---|---|---|---|
+| `zv_pair_ratio` | 0.244 (65) | 0.256 (**11**) | 0.235 (**32**) | 0.239 (57) |
+| `zv_norm_mean` | 9.78 | 14.03 | 12.18 | 8.39 |
+| `zg_norm_mean` | 5.59 | **13.03** | 11.15 | 5.41 |
+| `zg_rel_spread` | 0.139 | 0.144 | 0.172 | 0.154 |
+
+All three cells keep `z_v` in the baseline's state-dominated band (`zv_pair_ratio` 0.23–0.26
+against `m4base`'s 0.239) — the projection alone does not push the representation the way the
+supervision arms did (zgpose 1.308, zvzg 0.751) — while C and D's fused latent carries ~2–2.4×
+`m4base`'s norm. The registration fixes mechanism claims to its four readouts only, so these are
+context.
+
+**The reading.** Round 1 does not show that probabilistic fusion helps. In `PLAN_G.md`'s terms:
+**H2** (better out-of-distribution generalization) is not supported — the registered contrast is
+unresolved and leans the wrong way (−0.074); **H1** (better fusion than the original MHA) is not
+shown either — C reads 0.110 below A off-grid (inside band) and the three cells are
+indistinguishable from one another; **H3** is not tested by this round, since all three cells
+keep the base-frame supervision. What the round does add: the uncertainty machinery demonstrably
+learns something — the views disagree, the clamp never binds, the product fuses and degenerates
+exactly as designed — and buys nothing behaviourally. That is the same pattern the supervision
+arms showed at the representation level, now on a different axis. Its one behavioural move is
+outside the headline: past the ring all three cells leave the pose arms' floor, and the best of
+them is the arm that never uses uncertainty.
+
+**Caveats.** One seed, 50 episodes per viewpoint; the off-grid contrasts' registered read is
+"unresolved inside 0.15", and the measured mean-scale spread is 0.05–0.08, so this round cannot
+resolve differences below that — "PoE ≈ MHA-over-means" is a bound, not a demonstrated equality.
+The cells are instrument-comparable to `m4base` (every ring view trains), not
+ladder-comparable. C and D's batch-0 diffusion term is cell-specific by construction (they start
+at the masked mean, not MHA), so their early loss curves are not read against A's. The
+variance-quality thresholds for the stage-2 uncertainty read (`corr(logvar, error)` and
+calibration) were fixed **before** those numbers existed, in `analyze_variance_quality.py`'s
+header (written 2026-10-16); the script runs on cell C only, with a dead-logvar assertion in
+place of a read for B and D. Its numbers — and the four readouts above — land in this section
+only after the `miroc-server` run.
+
 ## Findings
 
 What each follow-up experiment concluded — the result and the reading.
@@ -946,6 +1065,7 @@ encoder compute per sample.
 | z_v supervision (`m4base`) | `config/task/m4_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_m4base_latent.yaml`, `data/m4base_{run,eval,analysis}.sh`; seam: `multiview_image_dataset.py` `aux_action_frame` (base-frame emission) |
 | z_g supervision (`zgpose`) | `config/task/zgpose_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_zgpose_latent.yaml`, `model/vision/view_pose_set_head.py`, `policy/diffusion_unet_image_policy_zgpose.py`, `tests/test_zg_pose_supervision.py`, `data/zgpose_{run,eval,analysis}.sh`; seam: `multiview_image_dataset.py` `emit_aux_view_pose` (zero-filled pooled pose-set target, all rows scored) |
 | joint supervision (`zvzg`) | `config/task/zvzg_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_zvzg_latent.yaml`, `policy/diffusion_unet_image_policy_zvzg.py`, `tests/test_zvzg_supervision.py`, `data/zvzg_{run,eval,analysis}.sh`; both dataset targets reuse the `m4base`/`zgpose` emissions unchanged; seam: `train_diffusion_unet_image_workspace.py` (per-term `aux_action_loss`/`aux_pose_loss` log lines) |
+| probabilistic fusion (`prob_b/c/d`) | `model/vision/per_view_gaussian.py`, `model/vision/prob_view_conditioned_obs_encoder.py`, `policy/diffusion_unet_image_policy_prob.py`, `workspace/train_diffusion_unet_image_workspace_probprobe.py`, `config/task/prob_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_prob_latent.yaml`, `tests/test_prob_gaussian_fusion.py`, `data/prob_{run,eval}.sh`; seam: `train_diffusion_unet_image_workspace_latentprobe.py` (`_probe_extras` extension hook — the base returns nothing, so every existing run's npz/JSONL artifacts stay byte-identical) |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE history;

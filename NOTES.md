@@ -270,6 +270,16 @@ python3 visualize_latent_distribution.py plot -i data/analysis_<cell>/latent_viz
   below storage resolution. Conventions and the settle definition live in `PROGRESS.md`
   *The per-epoch latent series*.
 
+**The prob round's instrument battery** (`data/prob_analysis.sh`, added 2026-10-16) is the
+`m4base`/`zgpose`/`zvzg` battery plus one new stage: `analyze_variance_quality.py`, the script
+`data/prob_run.sh` deferred the variance-quality thresholds to (PLAN_G §5 stage 4 / §7.2 — does
+the predicted uncertainty mean anything). It runs on the PoE cell (C) only; cells B and D get
+`--assert-dead-logvar`, which asserts the logvar branch is *exactly* zero and exits nonzero if it
+is not — that premise ("do not read B/D's variance numbers as uncertainty") is written into
+`PROGRESS.md`, so if the assertion ever fails, the doc is wrong, not the check. The battery's
+npz gate is cell-aware for the same reason: it fails a B/D snapshot whose `lv` is nonzero and a
+C snapshot whose `lvg` is missing. Full run line and the commit list are in the driver's header.
+
 ### Data generation (M2)
 
 ```bash
