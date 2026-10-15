@@ -296,7 +296,18 @@ done
 #   * `latent_probe/lv_mean` ~ 0 early, and in cell `d` `lv_std` pinned at 0.0
 #     exactly (no gradient path -- an instrument check, not a finding);
 #   * `aux_action_loss` (the unweighted per-term key) vs the CALIB aux0_active
-#     and vs m4base's committed 0.361 -> 0.0049 (74x, floor 0.2692);
+#     (0.362935, the run's own printed value) and vs m4base's committed
+#     0.361 -> 0.0049 (74x, against the BASE-frame floor 0.308614 -- the
+#     CALIB floor_const above, reproduced exactly by zvzg's 2026-10-12
+#     calibration). CORRECTION (2026-10-15, pre-launch, comment-only): the
+#     0.2692 this line used to cite is the CAMERA-frame target's floor from the
+#     m4on/m4off milestone (PROGRESS.md, M4; its batch-0 was 0.2389), not this
+#     campaign's. Reading a base-frame loss against it overstates convergence
+#     by ~14%; do not reuse it here.
+#     (aux0_active 0.362935 vs m4base's batch-0 0.36095 is a DRAW difference,
+#     not a data change -- m4base's is its first shuffled training batch, this
+#     is the registered seed-0 64-sample draw; the dataset is provably the
+#     same, which stage 1 asserts and the 0.00e+00 deltas confirm.)
 #   * batch-0 `train_loss` is CELL-SPECIFIC (A/B fuse via MHA, C/D start at
 #     the masked mean): read each cell's own, never reuse m4base's 1.0828.
 say "DONE -- next: data/prob_eval.sh (cell by cell), then the uncertainty read"
