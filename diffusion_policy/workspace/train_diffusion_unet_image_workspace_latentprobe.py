@@ -23,6 +23,12 @@ view-vs-state pair ratio -- the same statistic ``probe_relpose`` reports) and
 optionally writes raw fp16 ``z_v``/``z_g`` tensors to
 ``<output_dir>/latent_snapshots/`` (remote-only; never committed).
 
+Subclasses may extend the snapshot through the ``_probe_extras`` seam: it
+returns extra per-epoch arrays (written into the same npz, documented in
+``EXTRA_ARRAY_DOCS`` and ``meta.json``) and extra scalars (merged into the
+step log). The base implementation returns nothing, so every existing run's
+artifacts are byte-identical to what this hook wrote before.
+
 Why it cannot disturb training
 ------------------------------
 - numpy / torch-CPU / CUDA RNG states are saved and restored around EVERY call
@@ -89,6 +95,10 @@ def _participation_ratio(z):
 
 
 class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspace):
+    # npz-array documentation for `_probe_extras` subclasses; keys returned by
+    # an override are described here so meta.json's `arrays` block stays honest.
+    EXTRA_ARRAY_DOCS: dict = {}
+
     def __init__(self, cfg: OmegaConf, output_dir=None):
         super().__init__(cfg, output_dir=output_dir)
         if cfg.get('latent_probe', None) is None:
@@ -191,6 +201,19 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
         self._probe_cache = cache
         return cache
 
+    def _probe_extras(self, o_full, o_n1, cache):
+        """Extension seam: extra snapshot arrays and scalars, or nothing.
+
+        ``o_full``/``o_n1`` are the two ``forward_full`` outputs (full draw and
+        N=1 az_0), ``cache`` is the probe cache. Returns
+        ``(arrays, stats)`` with arrays as CPU numpy arrays named for the npz
+        (document their meaning in ``EXTRA_ARRAY_DOCS``) and stats as finite
+        floats merged into the per-epoch step log. Runs inside the hook's
+        RNG save/restore and under ``torch.no_grad``, like everything else
+        here; keep it compute-only (reductions over the two forward outputs).
+        """
+        return {}, {}
+
     # ------------------------------------------------------------------- hook
     def _run_latent_probe(self, policy):
         """One epoch's snapshot; returns scalar summaries for the step log."""
@@ -265,6 +288,10 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
         zg = o_full['z_global'].float()       # (S, D)
         zg_n1 = o_n1['z_global'].float()      # (S, D)
 
+        # extension seam: the base returns ({}, {}), so every existing run's
+        # npz/jsonl/meta artifacts are byte-identical to before
+        extra_arrays, extra_stats = self._probe_extras(o_full, o_n1, cache)
+
         # ---- summaries (torch on device; small) --------------------------
         pair = [_rel_dist(zv[:, i], zv[:, j])
                 for i in range(K) for j in range(i + 1, K)]
@@ -283,6 +310,7 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
             'zv_pr': _participation_ratio(zv.reshape(-1, zv.shape[-1])),
             'zg_pr': _participation_ratio(zg),
         }
+        stats.update(extra_stats)
 
         # ---- raw snapshots ------------------------------------------------
         if bool(pcfg.save_raw):
@@ -301,7 +329,11 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
                             zv='(S,K,D) fp16; canonical slot j == ring pool_ring[j]',
                             zg='(S,D) fp16 (full draw)',
                             zg_n1='(S,D) fp16 (single az_0 slot)',
-                            state_idx='(S,) int64 dataset indices'),
+                            state_idx='(S,) int64 dataset indices',
+                            **{k: self.EXTRA_ARRAY_DOCS.get(
+                                k, '(undocumented extra array; see the '
+                                   'workspace subclass that produced it)')
+                               for k in extra_arrays}),
                         normalizer='policy.normalizer (identity for cam/mask/hist)',
                         note='EMA weights, eval mode; draws fixed per state by seed',
                     ), f, indent=2)
@@ -310,7 +342,8 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
                      zv=zv.half().cpu().numpy(),
                      zg=zg.half().cpu().numpy(),
                      zg_n1=zg_n1.half().cpu().numpy(),
-                     state_idx=cache['state_idx'].numpy())
+                     state_idx=cache['state_idx'].numpy(),
+                     **{k: np.asarray(v) for k, v in extra_arrays.items()})
             with open(os.path.join(out_dir, 'snapshots.jsonl'), 'a') as f:
                 f.write(json.dumps(dict(epoch=epoch, **stats)) + '\n')
 

@@ -1,0 +1,224 @@
+defaults:
+  - _self_
+  - task: prob_base_image_abs_multiview_az75
+
+name: train_diffusion_unet_image_prob_latent
+# PLAN_G.md stage 1: per-view Gaussian (mu, logvar) heads + fusion options, on
+# the m4base recipe (same 11-slot ring, BASE-frame aux target, seed 42). The
+# committed config is CELL B (fusion_mode: mha -- the deterministic-projection
+# control: the parent's attention over the per-slot means, everything
+# supervised through mu). The other cells are ONE CLI override on this file:
+#   C (PoE):  policy.obs_encoder.fusion_mode=poe
+#   D (mean): policy.obs_encoder.fusion_mode=mean
+# Cell A is the committed m4base run; nothing here retrains it.
+# The workspace subclass extends the per-epoch latent probe with the per-view
+# mu/logvar arrays and sigma scalars (latent_probe.save_gaussian), which is
+# what makes "does the variance learn anything?" checkable during the run.
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace_probprobe.TrainDiffusionUnetImageWorkspaceProbProbe
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+horizon: 16
+n_obs_steps: 2
+n_action_steps: 8
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+
+latent_probe:
+  # 128 fixed dataset states, encoded every epoch at a full 11-view draw and at
+  # the N=1 az_0 inference condition. ring index 6 == az_0 (index 0 is az -90).
+  n_states: 128
+  seed: 12345
+  az0_view: 6
+  save_raw: true
+  out_dir: latent_snapshots
+  # additionally save mu/lv (per-view, fp16) and the fused PoE logvar, and log
+  # the sigma scalars (mu_resid_rel, lv_mean, clamp fractions, ...);
+  # ~+4.5 MB/epoch into <run>/latent_snapshots/ -- see the prob-probe workspace
+  save_gaussian: true
+
+policy:
+  # PLAN_G.md stage 1: the M4 policy with the aux head's input switchable.
+  # aux_input=mu_v moves the base-frame action supervision from z_v onto the
+  # per-view Gaussian mean (PLAN_G section 3); everything else -- the forward
+  # path, the loss body, the draw order -- is inherited unchanged.
+  _target_: diffusion_policy.policy.diffusion_unet_image_policy_prob.DiffusionUnetImagePolicyProb
+
+  shape_meta: ${shape_meta}
+
+  # 1.0, as registered for this cell family: both terms are in normalized
+  # action units, and the unweighted aux term is logged as
+  # `aux_action_loss` (comparable to m4base's `aux_loss`).
+  aux_loss_weight: 1.0
+  # must match task.dataset.aux_n_steps (asserted in the config test)
+  aux_n_steps: 8
+  aux_hidden_dim: 256
+  # 'z_v' = m4base's wiring; 'mu_v' = supervise the quantity the fusion fuses
+  aux_input: mu_v
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
+    clip_sample: True # required when predict_epsilon=False
+    prediction_type: epsilon # or sample
+
+  # Same backbone and forward path as m4base (fused_dim 512, output_shape 521,
+  # so global_cond_dim 1042 and the UNet stay byte-identical); what changes is
+  # what happens after the per-view latents exist: a shared per-view Gaussian
+  # head, and the fusion selected by fusion_mode. In non-mha modes the parent's
+  # attention is still built (RNG lockstep across cells) but has no gradient
+  # path; z_global_logvar is non-None only in 'poe' mode.
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.prob_view_conditioned_obs_encoder.ProbViewConditionedObsEncoder
+    shape_meta: ${shape_meta}
+    rgb_model:
+      _target_: diffusion_policy.model.vision.model_getter.get_resnet
+      name: resnet18
+      weights: null
+    # --- PLAN_G.md stage 1 knobs ---
+    # 'mha' (cell B) | 'poe' (cell C) | 'mean' (cell D); the run driver
+    # overrides this per cell and the launch gate reads the resolved value
+    fusion_mode: mha
+    # logvar clamp. 0 is strictly inside it, so the zero-init logvar branch
+    # starts UNCLAMPED at sigma^2 = 1 (cell C starts as plain averaging); the
+    # bounds cap the precision ratio at e^8 and sum(p) at 11*e^6, so the PoE
+    # cannot overflow (see per_view_gaussian.py's docstring).
+    logvar_min: -6.0
+    logvar_max: 2.0
+    gauss_hidden: 256
+    # the Gaussian head is built from a private RNG stream seeded here, so it
+    # consumes NOTHING from the global stream: every shared parameter -- and
+    # every later draw (UNet init, aux-head init, DataLoader shuffle seed,
+    # crops, noise, timesteps) -- is bit-identical to m4base's. Pinned in
+    # tests/test_prob_gaussian_fusion.py.
+    head_init_seed: 42
+    # fused_dim 512 makes output_shape() == 512 + 9 == 521, identical to M1/L1,
+    # so global_cond_dim (1042) and the UNet are byte-identical and a gain is
+    # attributable to conditioning rather than capacity. The encoder asserts
+    # this against the stock encoder's width.
+    fused_dim: 512
+    n_heads: 8
+    cond_dim: 128
+    # the two ablations (PROPOSAL.md section 7's question: is one signal enough?)
+    use_plucker: True
+    use_eef_hist: True
+    # must match task.dataset.eef_hist_steps
+    eef_hist_steps: 4
+    crop_shape: [76, 76]
+    # constant center crop
+    random_crop: True
+    use_group_norm: True
+    # M3 has exactly ONE shared backbone; the stock default (False) would build
+    # one per view, so the encoder raises on it
+    share_rgb_model: True
+    imagenet_norm: True
+
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 100
+  obs_as_global_cond: ${obs_as_global_cond}
+  # crop_shape: null
+  diffusion_step_embed_dim: 128
+  down_dims: [512, 1024, 2048]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+
+  # scheduler.step params
+  # predict_epsilon: True
+
+ema:
+  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  # optimization
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 8000
+  gradient_accumulate_every: 1
+  # EMA destroys performance when used with BatchNorm
+  # replace BatchNorm with GroupNorm.
+  use_ema: True
+  freeze_encoder: False
+  # training loop control
+  # in epochs
+  rollout_every: 50
+  checkpoint_every: 50
+  val_every: 1
+  sample_every: 5
+  # steps per epoch
+  max_train_steps: null
+  max_val_steps: null
+  # misc
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: diffusion_policy_debug
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 5
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}
