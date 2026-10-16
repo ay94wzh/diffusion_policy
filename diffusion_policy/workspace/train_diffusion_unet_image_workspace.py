@@ -213,6 +213,24 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                             self.model, 'last_aux_pose_loss', None)
                         if aux_pose_cpu is not None:
                             step_log['aux_pose_loss'] = aux_pose_cpu
+                        # z-supervision round seam (PLAN_Z): the align/cons
+                        # terms and the pure diffusion term, when the policy
+                        # has them. For that family `aux_loss` above is the
+                        # UNWEIGHTED aux value, so the objective decomposes
+                        # from the log: train_loss = diff_loss + 1.0*aux_loss
+                        # [+ align_weight*align_loss][+ cons_weight*cons_loss].
+                        # `diff_loss` is the instrument that shows whether the
+                        # cons term fights the diffusion objective. Guarded
+                        # identically -- absent for every other policy.
+                        align_cpu = getattr(self.model, 'last_align_loss', None)
+                        if align_cpu is not None:
+                            step_log['align_loss'] = align_cpu
+                        cons_cpu = getattr(self.model, 'last_cons_loss', None)
+                        if cons_cpu is not None:
+                            step_log['cons_loss'] = cons_cpu
+                        diff_cpu = getattr(self.model, 'last_diff_loss', None)
+                        if diff_cpu is not None:
+                            step_log['diff_loss'] = diff_cpu
 
                         is_last_batch = (batch_idx == (len(train_dataloader)-1))
                         if not is_last_batch:

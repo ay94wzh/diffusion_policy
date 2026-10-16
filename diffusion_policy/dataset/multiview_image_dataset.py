@@ -108,6 +108,12 @@ AUX_ACTION_KEY = 'aux_action'
 AUX_VIEW_POSE_KEY = 'aux_view_pose'            # (To, V, 9) float32
 AUX_VIEW_POSE_MASK_KEY = 'aux_view_pose_mask'  # (To, V) float32, 1.0 == live
 VIEW_POSE_DIM = 9
+# z-supervision round (PLAN_Z): a SECOND, independent view draw of the same K
+# slots, at the TOP LEVEL of the sample dict as a nested obs-shaped dict (same
+# inner key names as `obs`, minus the view-independent low-dim keys). Never a
+# shape_meta key; never passed through `normalize(batch)` -- the policy calls
+# `normalize(batch[SECOND_OBS_KEY])` so each inner key hits its own normalizer.
+SECOND_OBS_KEY = 'obs2'
 
 
 def _identity_normalizer(dim: int):
@@ -270,6 +276,7 @@ class MultiViewImageDataset(BaseImageDataset):
             eef_hist_steps=4,
             emit_aux_action=False,
             emit_aux_view_pose=False,
+            emit_second_draw=False,
             aux_n_steps=8,
             aux_action_frame='camera',
             view_mask_key='view_mask',
@@ -335,6 +342,17 @@ class MultiViewImageDataset(BaseImageDataset):
         # (top-level, next to AUX_ACTION_KEY). Defaults off, so every
         # pre-existing config and dataset test is unchanged.
         self.emit_aux_view_pose = bool(emit_aux_view_pose)
+        # z-supervision round: emit a second, independent view draw as the
+        # top-level SECOND_OBS_KEY dict. Defaults off; the flag itself consumes
+        # no RNG, and the second draw rides a per-sample private stream (see
+        # `_m3_draw` / `_m3_second_draw`), so draw 1 stays bit-identical to a
+        # run without it.
+        self.emit_second_draw = bool(emit_second_draw)
+        if self.emit_second_draw and view_pool is None:
+            raise ValueError(
+                'emit_second_draw needs view_pool: the second draw fills the '
+                'same K slots from the pool (it is meaningless in subset mode)')
+        self.seed = int(seed)
         self.pool_pose = None     # (V, VIEW_POSE_DIM) float32, built below
         self._pool_pos = None     # {ring index -> position in view_pool}
         if self.emit_aux_view_pose and view_pool is None:
@@ -679,8 +697,61 @@ class MultiViewImageDataset(BaseImageDataset):
             out.append(arr.reshape(n_obs, h, -1).astype(np.float32))
         return out
 
+    def _m3_draw(self, rng=None):
+        """One view-subset draw -> ``(k_active, chosen)``.
+
+        ``rng=None`` uses the module-level ``np.random`` functions -- methods of
+        that same global RandomState -- so this is bit-identical to the inline
+        pair it was refactored from. The z-supervision second draw passes its
+        own ``RandomState`` and so consumes nothing from the global stream.
+        """
+        view_pool = self.view_pool
+        view_count_range = self.view_count_range
+        if view_pool is None or view_count_range is None:
+            raise RuntimeError(
+                '_m3_draw requires view_pool and view_count_range')
+        lo, hi = view_count_range
+        rng = np.random if rng is None else rng
+        k_active = int(rng.randint(lo, hi + 1))
+        # without replacement: when k_active == n_slots this is a permutation of
+        # the drawn subset, so the encoder cannot key off slot identity (and the
+        # fusion is permutation-invariant)
+        chosen = rng.choice(view_pool, size=k_active, replace=False)
+        return k_active, chosen
+
     def _m3_slots(self, idx: int, action_chunk: np.ndarray):
-        """All K view slots + camera vectors + activity mask + EE history.
+        """This sample's one draw: all K view slots + camera vectors + activity
+        mask + EE history.
+
+        Draws on the global stream, then `_m3_emit`; the schema and the aux
+        contracts live there. Returns ``(obs_dict, aux_action, aux_view_pose)``.
+        """
+        k_active, chosen = self._m3_draw()
+        return self._m3_emit(idx, action_chunk, k_active, chosen)
+
+    def _m3_second_draw(self, idx: int):
+        """The second, independent view draw -> its own obs dict (no aux).
+
+        Rides a stateless per-sample private stream ``RandomState(seed + idx)``:
+        it consumes nothing from the global numpy stream -- so draw 1, the crop
+        indices and every DataLoader draw stay bit-identical to a run without it
+        -- and it is a pure function of ``(seed, idx)``, i.e. a given sample
+        always sees the same second subset, reproducible across epochs and
+        workers. The schema matches `_m3_slots`' obs dict, so it collates like
+        one; aux targets are NOT emitted (this draw feeds only the z_g
+        consistency loss).
+        """
+        if not self.emit_second_draw:
+            raise RuntimeError('_m3_second_draw requires emit_second_draw')
+        rng = np.random.RandomState(self.seed + int(idx))
+        k_active, chosen = self._m3_draw(rng)
+        obs_dict, _, _ = self._m3_emit(
+            idx, None, k_active, chosen, with_aux=False, with_pose=False)
+        return obs_dict
+
+    def _m3_emit(self, idx, action_chunk, k_active, chosen,
+                 with_aux=True, with_pose=True):
+        """Emit the K-slot obs dict for ONE draw ``(k_active, chosen)``.
 
         Every slot is always emitted: a ragged schema (only the drawn views)
         would not collate. `view_mask` marks which slots are live for this
@@ -689,30 +760,24 @@ class MultiViewImageDataset(BaseImageDataset):
         rather than subtly wrong.
 
         Returns ``(obs_dict, aux_action, aux_view_pose)``. `aux_action` is
-        ``(To, K, C*10)`` (M4), or None when `emit_aux_action` is off -- it is
-        returned SEPARATELY rather than placed in `obs_dict`, because it
-        derives from demonstrated future actions and must never reach the
-        policy's obs normalizer. The per-slot camera-frame chunk for obs step
-        `to` is built from the SAME view draw as that slot's image, so the
-        pairing cannot drift.
+        ``(To, K, C*10)`` (M4), or None when `emit_aux_action` is off or
+        `with_aux` is False -- it is returned SEPARATELY rather than placed in
+        `obs_dict`, because it derives from demonstrated future actions and must
+        never reach the policy's obs normalizer. The per-slot camera-frame chunk
+        for obs step `to` is built from the SAME view draw as that slot's image,
+        so the pairing cannot drift.
 
         `aux_view_pose` is a dict of the PLAN-candidate-2 keys
         (`AUX_VIEW_POSE_KEY` ``(To, V, 9)`` + `AUX_VIEW_POSE_MASK_KEY`
-        ``(To, V)``), or None when `emit_aux_view_pose` is off. Row i == pool
-        view `view_pool[i]`; the mask marks the live (drawn) views -- derived
-        from the SAME `chosen` draw, so it consumes no RNG of its own.
+        ``(To, V)``), or None when `emit_aux_view_pose` is off or `with_pose`
+        is False. Row i == pool view `view_pool[i]`; the mask marks the live
+        (drawn) views -- derived from the SAME `chosen` draw, so it consumes no
+        RNG of its own.
         """
         n_slots = self.n_slots
         view_pool = self.view_pool
-        view_count_range = self.view_count_range
-        if view_pool is None or view_count_range is None:
-            raise RuntimeError('_m3_slots requires view_pool and view_count_range')
-        lo, hi = view_count_range
-        k_active = int(np.random.randint(lo, hi + 1))
-        # without replacement: when k_active == n_slots this is a permutation of
-        # the drawn subset, so the encoder cannot key off slot identity (and the
-        # fusion is permutation-invariant)
-        chosen = np.random.choice(view_pool, size=k_active, replace=False)
+        if view_pool is None:
+            raise RuntimeError('_m3_emit requires view_pool')
 
         n_obs = self.n_obs_steps if self.n_obs_steps is not None else self.horizon
         pos, quat, grip = self._eef_history(idx)   # (To,H,3),(To,H,4),(To,H,2)
@@ -723,10 +788,15 @@ class MultiViewImageDataset(BaseImageDataset):
             (n_obs, n_slots, EEF_HIST_STEP_DIM * self.eef_hist_steps),
             dtype=np.float32)
         C = self.aux_n_steps
+        aux_gate = with_aux and self.emit_aux_action
+        if aux_gate and action_chunk is None:
+            raise ValueError(
+                'aux emission needs action_chunk (a second draw must pass '
+                'with_aux=False)')
         aux = (np.zeros((n_obs, n_slots, C * ACTION_DIM), dtype=np.float32)
-               if self.emit_aux_action else None)
+               if aux_gate else None)
         pose_tgt = None
-        if self.emit_aux_view_pose:
+        if with_pose and self.emit_aux_view_pose:
             V = len(view_pool)
             live = np.zeros(V, dtype=np.float32)
             live[[self._pool_pos[int(r)] for r in chosen]] = 1.0
@@ -831,4 +901,9 @@ class MultiViewImageDataset(BaseImageDataset):
         if aux_view_pose is not None:
             for k, v in aux_view_pose.items():
                 torch_data[k] = torch.from_numpy(v)
+        if self.emit_second_draw:
+            # z-supervision second draw: emitted AFTER draw 1, on its own
+            # per-sample stream, so nothing here can touch draw 1's RNG.
+            torch_data[SECOND_OBS_KEY] = dict_apply(
+                self._m3_second_draw(idx), torch.from_numpy)
         return torch_data

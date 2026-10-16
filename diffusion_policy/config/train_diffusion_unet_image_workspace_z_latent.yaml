@@ -1,0 +1,212 @@
+defaults:
+  - _self_
+  - task: z_base_image_abs_multiview_az75
+
+name: train_diffusion_unet_image_z_latent
+# The z-supervision round (PLAN_Z): the committed m4base recipe (MHA fusion,
+# base-frame aux at w=1.0, K=11 over pool [1..11], N ~ [1,11], latent probe)
+# with two new cross-view losses, one class, two weights:
+#   align_weight -- L_align on draw 1's z_v: a shared semantic projection head
+#                   P_s, pairwise MSE of L2-normalized projections over live
+#                   view pairs (views of the same state should agree in
+#                   shared-semantics space; z_v itself is left free).
+#   cons_weight  -- L_cons on z_g: a second, independent view draw (the dataset
+#                   emits top-level `obs2`) makes z_g2; the SAME noisy action,
+#                   timestep and noise go through the UNet under both conds and
+#                   the two noise predictions are pulled together.
+# Cells are CLI overrides, sharing one calibrated (W_ALIGN, W_CONS):
+#   a zalign: align_weight=W_ALIGN cons_weight=0.0     emit_second_draw=false
+#   b zcons : align_weight=0.0     cons_weight=W_CONS  emit_second_draw=true
+#   c zboth : align_weight=W_ALIGN cons_weight=W_CONS  emit_second_draw=true
+# so C decomposes as A + B. The committed defaults below are both 0.0: a bare
+# run of this config is the aux control (== m4base), not a cell.
+# The workspace is the latentprobe one unchanged; the model, the loss and the
+# training loop are the aux policy's + the ZSup file's two terms. The in-repo
+# seams are the getattr-guarded `align_loss`/`cons_loss`/`diff_loss` log lines
+# in the base workspace and the dataset's `emit_second_draw` flag.
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace_latentprobe.TrainDiffusionUnetImageWorkspaceLatentProbe
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+horizon: 16
+n_obs_steps: 2
+n_action_steps: 8
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+
+latent_probe:
+  # 128 fixed dataset states, encoded every epoch at a full 11-view draw and at
+  # the N=1 az_0 inference condition. ring index 6 == az_0 (index 0 is az -90).
+  n_states: 128
+  seed: 12345
+  az0_view: 6
+  save_raw: true
+  out_dir: latent_snapshots
+
+policy:
+  # PLAN_Z: the aux policy plus the shared-semantics head and the two cross-view
+  # terms. Weights are calibrated pre-launch (W = 0.33 * diff0 / loss0) and
+  # registered in the driver header; 0.0 on both reproduces the aux policy
+  # bit-for-bit (pinned in tests/test_z_supervision.py).
+  _target_: diffusion_policy.policy.diffusion_unet_image_policy_zsup.DiffusionUnetImagePolicyZSup
+
+  shape_meta: ${shape_meta}
+
+  # unchanged from m4base -- the round adds terms, it does not remove any
+  aux_loss_weight: 1.0
+  # must match task.dataset.aux_n_steps (asserted in the config test)
+  aux_n_steps: 8
+  aux_hidden_dim: 256
+  # PLAN_Z weights -- set per cell on the CLI from the driver's calibration
+  align_weight: 0.0
+  cons_weight: 0.0
+  # the shared semantic head P_s: NOT zero-init (a zero-init head would make
+  # L_align identically zero with exactly-zero gradients -- see the head file)
+  semantic_hidden_dim: 256
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
+    clip_sample: True # required when predict_epsilon=False
+    prediction_type: epsilon # or sample
+
+  # M3: one shared, view-conditioned backbone in place of MultiImageObsEncoder.
+  # Same dict-in -> (B*To, D) out contract, so DiffusionUnetImagePolicy and the
+  # whole training loop are untouched (no new loss).
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.view_conditioned_obs_encoder.ViewConditionedObsEncoder
+    shape_meta: ${shape_meta}
+    rgb_model:
+      _target_: diffusion_policy.model.vision.model_getter.get_resnet
+      name: resnet18
+      weights: null
+    # fused_dim 512 makes output_shape() == 512 + 9 == 521, identical to M1/L1,
+    # so global_cond_dim (1042) and the UNet are byte-identical and a gain is
+    # attributable to conditioning rather than capacity. The encoder asserts
+    # this against the stock encoder's width.
+    fused_dim: 512
+    n_heads: 8
+    cond_dim: 128
+    # the two ablations (PROPOSAL.md section 7's question: is one signal enough?)
+    use_plucker: True
+    use_eef_hist: True
+    # must match task.dataset.eef_hist_steps
+    eef_hist_steps: 4
+    crop_shape: [76, 76]
+    # constant center crop
+    random_crop: True
+    use_group_norm: True
+    # M3 has exactly ONE shared backbone; the stock default (False) would build
+    # one per view, so the encoder raises on it
+    share_rgb_model: True
+    imagenet_norm: True
+
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 100
+  obs_as_global_cond: ${obs_as_global_cond}
+  # crop_shape: null
+  diffusion_step_embed_dim: 128
+  down_dims: [512, 1024, 2048]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+
+  # scheduler.step params
+  # predict_epsilon: True
+
+ema:
+  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  # optimization
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 8000
+  gradient_accumulate_every: 1
+  # EMA destroys performance when used with BatchNorm
+  # replace BatchNorm with GroupNorm.
+  use_ema: True
+  freeze_encoder: False
+  # training loop control
+  # in epochs
+  rollout_every: 50
+  checkpoint_every: 50
+  val_every: 1
+  sample_every: 5
+  # steps per epoch
+  max_train_steps: null
+  max_val_steps: null
+  # misc
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: diffusion_policy_debug
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 5
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

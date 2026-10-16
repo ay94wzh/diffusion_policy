@@ -83,6 +83,28 @@ data/*
 # the *_analysis.sh drivers above; the variance script's header carries the
 # thresholds the run driver deferred to it.
 !data/prob_analysis.sh
+# 2026-10-16: the z-supervision round (PLAN_Z) -- the m4base recipe plus
+# cross-view shared-semantics alignment on z_v (L_align, a shared projection
+# head) and cross-view action consistency on z_g (L_cons, two independent view
+# draws through the UNet). The run driver's header carries the PRE-REGISTRATION
+# (bands vs m4base, the mechanism gates, the claimed-and-CPU-pinned RNG
+# contract, the lambda calibration rule); same rationale as the drivers above.
+!data/z_run.sh
+!data/z_eval.sh
+!data/z_analysis.sh
+# z-supervision runs (za zalign / zb zcons / zc zboth): logs only, never the
+# 4.6 GB checkpoints (same rule as the blocks below). The run driver's first
+# shell writes data/z_calib_env.sh, the shared (W_ALIGN, W_CONS) -- a local
+# run artifact, deliberately NOT whitelisted.
+!data/outputs/run_*_za_s42_200ep/
+data/outputs/run_*_za_s42_200ep/*
+!data/outputs/run_*_za_s42_200ep/logs.json.txt
+!data/outputs/run_*_zb_s42_200ep/
+data/outputs/run_*_zb_s42_200ep/*
+!data/outputs/run_*_zb_s42_200ep/logs.json.txt
+!data/outputs/run_*_zc_s42_200ep/
+data/outputs/run_*_zc_s42_200ep/*
+!data/outputs/run_*_zc_s42_200ep/logs.json.txt
 # ring montages only -- data/multiview/ also holds the multi-GB zarrs
 !data/multiview/
 data/multiview/*
