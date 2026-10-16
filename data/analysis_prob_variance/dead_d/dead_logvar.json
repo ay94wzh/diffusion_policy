@@ -1,0 +1,17 @@
+{
+  "schema": 1,
+  "tool": "analyze_variance_quality.py",
+  "mode": "assert_dead_logvar",
+  "checkpoint": "/data/zihan/runs/run_square_prob_d_s42_200ep/checkpoints/latest.ckpt",
+  "settings": {
+    "fusion_mode": "mean",
+    "emits_mu": true,
+    "logvar_min": -6.0,
+    "logvar_max": 2.0,
+    "aux_input": "mu_v",
+    "aux_key": "mu_views"
+  },
+  "max_abs_logvar_live": 0.0,
+  "fused_logvar_absent": true,
+  "dead": true
+}

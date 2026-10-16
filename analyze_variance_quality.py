@@ -463,9 +463,20 @@ def collect(policy, cfg, device, n_states):
             mu = enc[policy.aux_key].float()                 # (To, K, D)
             lv = enc['logvar_views'].float()                 # (To, K, D)
             active = enc['view_active'].bool()               # (To, K)
-            # the aux head's own per-pair error, the reduction the policy uses
+            # the aux head's own per-pair error, the reduction the policy uses.
+            # s[AUX_ACTION_KEY] is already (To, K, aux_n_steps * ACTION_DIM) --
+            # exactly the shape `mu[active]` is indexed against -- and the
+            # normalizer applies over the last dim, so no reshape is needed.
+            # FIXED 2026-10-16: this line read
+            #   `.unsqueeze(0).to(device).reshape(-1, K, -1)`
+            # which can never work -- `reshape` infers at most ONE dimension, so
+            # the second -1 raised `RuntimeError: only one dimension can be
+            # inferred` the moment stage 8 first ran on a real checkpoint. The
+            # CPU test suite did not catch it: tests/test_variance_quality.py
+            # covers the dead-logvar path and the reductions, not this collect()
+            # line against a live PoE checkpoint.
             aux_tgt = policy.normalizer[AUX_ACTION_KEY].normalize(
-                s[AUX_ACTION_KEY].unsqueeze(0).to(device).reshape(-1, K, -1))
+                s[AUX_ACTION_KEY].to(device))
             pair = F.mse_loss(policy.aux_head(mu[active]), aux_tgt[active],
                               reduction='none').mean(dim=-1)
             err_aux = torch.full(active.shape, float('nan'), device=device)
