@@ -2,7 +2,7 @@
 
 Direction and the original predictions: `PROPOSAL.md`. The module, its measured behaviour and
 the open questions: `PROGRESS.md`. Operational detail, runbooks and traps: `NOTES.md`.
-Last updated 2026-10-10.
+Last updated 2026-10-16.
 
 ## Constraints
 
@@ -41,6 +41,8 @@ Numbers and their provenance live in `PROGRESS.md`; this table is verdicts only.
 | **latent-distribution figures** (instrument) | ✅ done 2026-10-07 | the ring's ordering is **inherited**, not learned — corr(pairwise `z_v` distance, \|Δaz\|) ≥ 0.986 at *every* epoch, epoch 0 included; and the N-invariance is **non-monotone** (cos-dist 0.17% → 1.57% at e22 → 0.53% at e200) |
 | **base-frame aux target** (`m4base`, §2.4's frame axis) | ✅ done 2026-10-08 | **behavioural null (pre-registered); the latent series re-organized** — `zv_pair_ratio` 0.485→0.239, settles e57 vs e126 |
 | **`z_g` supervision** (`zgpose`, candidate 2) | ✅ done 2026-10-10 | **outcome (i) at the representation, behaviour inside band** — `z_g` became view-set-aware (both instruments ~2× the parents; N=1 pose decodable at 1.2° / 1.9 cm), registered means a third null, **−0.170 past the ring**; M5's distillation premise re-opened |
+| **joint supervision** (`zvzg`, both aux lines at once) | ✅ done 2026-10-14 | strongest view-aware `z_g` the project has made, encoder healthy — in-dist a fourth null, **held-out weakest of the four cells** (0.606, −0.168 vs `m4base`): the view-awareness axis buys no behaviour |
+| **probabilistic fusion** (`prob_b/c/d`, PLAN_G stage 1) | ✅ done 2026-10-16 | **behaviourally flat** — C−B −0.074 / D−C +0.060, both unresolved; past-ring recovery belongs to B, the arm that never uses uncertainty; battery complete: all four registered readouts **in-envelope**, variance **spread but no signal** (R2 weak, R3/R4 null-to-against) — H1/H2 not supported, H3 untested |
 | **M5** — single-novel-view inference | 🟡 capability **measured**, not pending | every M3 number is already an N=1 inference at a novel pose; only the optional distillation stage is uncoded |
 | parked (encoder collapse, the `[1,3]` second failure mode, the balance refutation, the `m3v15` gap, instrument diagnostics) | ⬜ stopped, findings kept | reasoning and revival conditions at git tag `docs-full-20260930` |
 
@@ -82,6 +84,14 @@ Candidates (one part at a time, per the constraints above):
    1.2°), so a student would have something to learn. The deciding measurement — whether a
    distilled student beats the plain N=1 path *behaviourally* — is still unmade, and `zgpose`'s
    own behavioural null is a caution that representation-level headroom need not become success.
+
+**PLAN_G stage 1 has now run too** (`prob_b/c/d`, 2026-10-16): per-view Gaussians fused by PoE,
+against a deterministic MHA-over-means control and a plain-mean arm — behaviourally flat on both
+registered means, all four registered representation readouts in-envelope, and the variance real
+spread that ranks no errors. `PLAN_G.md`'s stage 2 (KL / calibration objectives, its §3.1 and §8)
+is therefore a decision, not a queue item — and the evidence for taking it now includes a
+variance axis this round measured as behaviourally inert; read `PROGRESS.md` *The
+probabilistic-fusion round* before deciding.
 
 ## Out of scope for now
 
