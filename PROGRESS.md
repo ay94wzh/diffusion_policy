@@ -91,8 +91,12 @@ in-distribution **0.653 vs 0.813** (−0.160) and interpolation **0.618 vs 0.784
 just outside the 0.15 band; past-ring is a null (0.355 vs 0.365, both at the ~0.36 floor), and
 elevation is lower (0.293 vs 0.347, descriptive). B1 matches the committed `m4base` reference
 (0.813/0.784 vs 0.796/0.774), so it is a valid internal baseline. S is one seed and its margins
-are 0.010–0.016 over the threshold; **R is implemented and CPU-gated (2026-10-29) but untrained;
-RH/RHG are not implemented**.
+are 0.010–0.016 over the threshold. **R**, S plus a feature-level ray address on the attention
+key, is the **fifth behavioural null**: in-distribution **0.602 vs S's 0.653** (−0.051) and
+interpolation **0.604 vs 0.618** (−0.014), both inside the band; it still sits −0.211/−0.180
+below B1, so the ray address does not recover the ring. The ray path is live in `z_v`
+(`zv_norm_mean` 0.184 vs S 0.105) but `z_g`'s coarse structure is unchanged (`zg_pr` 2.06 vs
+2.08). **RH/RHG are not implemented**.
 
 ## Status
 
@@ -120,7 +124,7 @@ RH/RHG are not implemented**.
 | **z supervision** (`zalign`/`zcons`/`zboth`) | 2026-10-28 — `PLAN_Z.md`: L2-normalised `z_v` shared-semantics alignment (a), cross-view ε-consistency on `z_g` at W=190.46 (b), both (c); same two weights in all three so `c` decomposes as `a + b`; baseline = the committed `m4base`, not retrained | **`a` null, `b` and `c` collapse** — `a` reproduces A to three decimals (0.7964/0.764) because its head collapses to a constant (`cos_across` 1.0000, `L_align` 3.5e-09) and the encoder is untouched (screen 12.2×, all four readouts in-range); `b` 0.155/0.150 and `c` 0.129/0.150 with encoders at **1.6×/1.7×** random init and `z_g` uninformative (3 of 4 readouts MOVED); **`c` = `b` to four decimals off-grid**; the registered `diff_loss` R2 instrument **did not fire** |
 | **encoder B** (`enc_b0`/`enc_b1`) | 2026-10-29 — corrected `eef_hist_window=episode` (B1) against the legacy `sample` (B0), one variable; K=11 pool [1..11], N ∈ [1,11], 201 epochs, seed 42 | **history null** — every registered mean inside the 0.15 band: in-dist −0.062, interp −0.072, past −0.045, elev +0.020 (descriptive); B1 is the encoder ladder's internal baseline |
 | **encoder S** (`enc_s`) | 2026-10-29 — pure-RGB layer3 spatial tokens + one shared 512-d query + 8-head intra-image attention, B's masked cross-view fusion; structural, not RNG-locked to B | **negative on the ring** — in-dist 0.653 vs B1 0.813 (−0.160), interp 0.618 vs 0.784 (−0.166), both just outside the 0.15 band; past-ring null (0.355 vs 0.365); elevation 0.293 vs 0.347; seed 42 only |
-| **encoder R** (`enc_r`) | 2026-10-29 — S + feature-level ray encoding: Plücker `[d, m/L]` at each layer3 cell's receptive-field centre (same crop window), MLP → 512-d added to the attention KEY; 5,284,928 encoder params | **implemented / CPU-gated / untrained** — code, configs and run/eval scripts landed; the CPU suite pins the ray convention, crop alignment, masking and the activation order |
+| **encoder R** (`enc_r`) | 2026-10-29 — S + feature-level ray encoding: Plücker `[d, m/L]` at each layer3 cell's receptive-field centre (same crop window), MLP → 512-d added to the attention KEY; 5,284,928 encoder params | **fifth behavioural null** — inside the 0.15 band of S on both registered means: in-dist 0.602 vs 0.653 (−0.051), interp 0.604 vs 0.618 (−0.014); past-ring 0.370 vs 0.355; elevation 0.327 vs 0.293 (descriptive). It does not recover toward B1 (0.813 / 0.784). The ray path is live in the latent (`zv_norm_mean` 0.184 vs S 0.105, `zv_rel_spread_mean` 0.362 vs 0.242), but `zg_pr` is unchanged (2.06 vs 2.08) and behaviour did not follow |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -1172,9 +1176,9 @@ e200 for all three cells despite the collapse; a future registration of this fai
 anchor on the collapse screen and the three moved readouts, which did fire, rather than on
 `diff_loss`.
 
-## The encoder ladder: B0/B1/S (2026-10-29)
+## The encoder ladder: B0/B1/S/R (2026-10-29)
 
-**What it is.** The first two stages of `ENCODER_EXPERIMENT_PLAN.md`. **B** keeps the M3 policy
+**What it is.** The first three stages of `ENCODER_EXPERIMENT_PLAN.md`. **B** keeps the M3 policy
 (no aux head) and changes only the EE-history protocol: B0 is the legacy
 `eef_hist_window=sample` — the window-start clip that every committed M3/M4 run used, which with
 To=2 gives `[B,B,B,B]` / `[B,B,B,B+1]` and therefore almost no history — and B1 is `episode`, the
@@ -1187,7 +1191,11 @@ layer3 → 1×1 conv 256→512 → 25 spatial tokens → one shared zero-init 51
 intra-image cross-attention → one 512-d token per view → the same masked cross-view MHA fusion
 as B. S is a **structural** comparison, not RNG-lockstep with B (module construction consumes
 different global torch RNG), and its 5,016,640 encoder parameters are half B's 12,532,928, so
-S−B is not capacity-matched either.
+S−B is not capacity-matched either. **R** is S plus one structural addition: each layer3 cell's
+Plücker ray `[d, m/L]`, evaluated at the cell's receptive-field centre with the same crop
+window, is MLP-encoded to 512-d and added to the attention KEY (`k = W_K LN(f + e)`,
+`v = W_V LN(f)`). It adds 268,288 parameters (5,284,928 vs S's 5,016,640) and is not RNG-lockstep
+with S.
 
 **Protocol.** Square PH, `_abs` actions; pool [1..11] = az −75…+75 every 15°, **all trained**
 (unlike M2/M3's even/odd split — see *Setup and protocol*); N uniform in [1,11]; 201 epochs;
@@ -1198,12 +1206,12 @@ Band **0.15** mean-over-viewpoints, pre-registered; direction not predicted.
 
 **Results — behaviour.** Strict `success_rate`, 50 paired episodes per viewpoint:
 
-| registered mean | B0 (`sample`) | B1 (`episode`) | S | m4base |
-|---|---|---|---|---|
-| in-dist ring (11 vp, trained) | 0.751 | **0.813** | 0.653 | 0.796 |
-| interpolation ±7.5…±67.5 (10 vp) | 0.712 | **0.784** | 0.618 | 0.774 |
-| past the ring ±82.5/±90 (4 vp) | 0.320 | **0.365** | 0.355 | 0.310 |
-| elevation el_0 / m15 / p15 | 0.80 / 0.10 / 0.20 | 0.90 / 0.02 / 0.12 | 0.60 / 0.04 / 0.24 | 0.84 / 0.00 / 0.00 |
+| registered mean | B0 (`sample`) | B1 (`episode`) | S | R | m4base |
+|---|---|---|---|---|---|
+| in-dist ring (11 vp, trained) | 0.751 | **0.813** | 0.653 | 0.602 | 0.796 |
+| interpolation ±7.5…±67.5 (10 vp) | 0.712 | **0.784** | 0.618 | 0.604 | 0.774 |
+| past the ring ±82.5/±90 (4 vp) | 0.320 | **0.365** | 0.355 | 0.370 | 0.310 |
+| elevation el_0 / m15 / p15 | 0.80 / 0.10 / 0.20 | 0.90 / 0.02 / 0.12 | 0.60 / 0.04 / 0.24 | 0.68 / 0.06 / 0.24 | 0.84 / 0.00 / 0.00 |
 
 **B0 vs B1 is a null.** Every registered mean is inside the 0.15 band: in-distribution −0.062,
 interpolation −0.072, past-ring −0.045, elevation +0.020 (descriptive). B1 is if anything
@@ -1220,6 +1228,21 @@ and disappears at the past-ring floor. S's epoch-200 in-training score (0.62) is
 epoch-150 topk (0.66) while B1's epoch 200 is its best (0.86); the registered protocol evaluates
 epoch 200, and selecting the topk would be post-hoc checkpoint selection, which the plan forbids.
 
+**R vs S is a null — the fifth behavioural null.** R−S is −0.051 in-distribution and −0.014
+interpolation, both well inside the pre-registered 0.15 band; past-ring is a null (0.370 vs
+0.355, both at the ~0.36 floor) and the descriptive elevation cells are slightly higher (0.327 vs
+0.293; `el_0` 0.68 vs 0.60). R does **not** recover S's deficit toward B1: it sits 0.211 / 0.180
+below B1, about the same distance as S (0.160 / 0.166). The ray address therefore does not buy
+back what the pooled encoder had.
+
+**The ray path is live in the latent.** At epoch 200 the per-view latent moved: `zv_norm_mean`
+0.184 vs S's 0.105 and `zv_rel_spread_mean` 0.362 vs 0.242 (`zv_pair_ratio` 0.734 vs 0.669). The
+fused latent's coarse structure did not: `zg_pr` 2.06 vs 2.08 and `zg_norm_mean` 0.054 vs 0.046.
+So this is not "the ray branch never activated" — the CPU suite pins its activation order and the
+probe shows it reshaped `z_v` — but the change did not reach the fused representation or
+behaviour. Scale caveat: these probe scalars are norm-sensitive across architectures, so the
+sizes are read as a within-S/R comparison only, not against B1's much larger `z_v` (0.606).
+
 **B1 vs m4base validates the baseline.** +0.017 in-distribution and +0.010 interpolation, inside
 the band; past-ring +0.055 and elevation +0.067 (descriptive). `m4base` carries the base-frame
 aux head, so this is a reference check rather than a clean comparator; B1 is the encoder ladder's
@@ -1231,11 +1254,12 @@ The elevation cells are descriptive, not registered, but no encoder change so fa
 
 **Caveats.** One seed (42) and 50 episodes per viewpoint. The S margins are only 0.010–0.016
 over the threshold, so S is not yet a confirmed regression; the plan's next comparison is seed
-43/44. The S/B runs are not RNG-lockstep (unlike B0/B1), so S−B is a structural and
-capacity-confounded comparison, not a paired ablation. The S eval uses epoch 200 (`latest.ckpt`)
-per protocol; its topk is epoch 150. The per-epoch latent probe ran in all three cells and the
-npz series are on `miroc-server`; the mechanism-live reads (FiLM gamma/beta norms, probe series)
-were not analysed here — the behavioural result is the headline.
+43/44. R−S is comfortably inside the band, but R is also one seed. The S/B/R runs are not
+RNG-lockstep (unlike B0/B1), so S−B and R−S are structural, capacity-confounded comparisons, not
+paired ablations. Each cell evaluates epoch 200 (`latest.ckpt`) per protocol; S's topk is epoch
+150. The per-epoch latent probe ran in all four cells and the npz series are on `miroc-server`;
+the B/S FiLM and probe series were not analysed, but R's epoch-200 probe scalars are read against
+S's above.
 
 **Operational note.** The first launch died at `wandb.init()` with the known client/server
 incompatibility (`CommError: 'NoneType' object has no attribute 'get'`; wandb 0.15.12 cannot talk
@@ -1245,11 +1269,11 @@ first attempts are preserved as `*_ABORTED_wandb_20261028`. The campaign shared 
 another user's CPU-heavy RoboTwin evaluation, which stretched B0 and the B1 sweep; no run failed,
 and the episode/seed protocol is unchanged, so the numbers are unaffected.
 
-**Artifacts.** `data/outputs/run_square_enc_{b0,b1,s}_s42_200ep/logs.json.txt` (probe scalars per
-epoch); `data/eval_{interp,heldout,el}_square_enc_{b0,b1,s}/eval_log.json`; the run dirs under
-`/data/zihan/runs/run_square_enc_*` (~9 GB each) hold `latest.ckpt` and the latent-probe npz and
-stay on `miroc-server`. **R is implemented and CPU-gated (2026-10-29) but untrained; RH and RHG
-are not implemented.**
+**Artifacts.** `data/outputs/run_square_enc_{b0,b1,s,r}_s42_200ep/logs.json.txt` (probe scalars
+per epoch); `data/eval_{interp,heldout,el}_square_enc_{b0,b1,s,r}/eval_log.json`; the run dirs
+under `/data/zihan/runs/run_square_enc_*` (~9 GB each) hold `latest.ckpt` and the latent-probe
+npz and stay on `miroc-server`. **R is trained and evaluated (2026-10-29); RH and RHG are not
+implemented.**
 
 ## Findings
 
@@ -1332,23 +1356,28 @@ encoder compute per sample.
 
 `screen_collapse.py` compares various architectures against a random-initialization baseline based on relative dispersion: `[1,2]` collapses (performing 28,000× worse than the baseline) with the image pathway severed, and the L1 "square/can" configuration similarly collapses—explaining L1's task specialization, as a constant `z_g` renders the policy open-loop. However, collapse is merely **one** failure mode: `[1,3]` maintains a healthy encoder yet remains at the performance floor, demonstrating that a healthy screen does not guarantee a usable policy; meanwhile, `m3n1gate` suggests the issue may stem from view variation rather than the number of views.
 
-### The encoder ladder — B and S
+### The encoder ladder — B, S and R
 
 **Method.** B0 vs B1 changes only `eef_hist_window` (`sample` vs `episode`) on the M3 recipe; S
 replaces B's 9-channel RGB+Plücker conv1, per-stage FiLM and global pool with a pure-RGB
 spatial-token readout (one shared 512-d query, 8-head intra-image attention) and B's cross-view
-fusion. Registered means over 50 paired episodes; band 0.15.
+fusion; R adds each token's Plücker ray `[d, m/L]`, MLP-encoded to 512-d, on the attention KEY
+(the VALUE stays visual). Registered means over 50 paired episodes; band 0.15.
 
 **Result.** B0−B1 is null on every registered mean (in-dist −0.062, interp −0.072, past −0.045,
 elevation +0.020 descriptive), so the corrected history is behaviourally inert. S−B1 is −0.160
 in-distribution and −0.166 interpolation, both just outside the band; past-ring is a null
-(−0.010 — both at the ~0.36 floor) and elevation is lower (−0.053, descriptive). B1 matches
-`m4base` within the band.
+(−0.010 — both at the ~0.36 floor) and elevation is lower (−0.053, descriptive). R−S is −0.051
+in-distribution and −0.014 interpolation, inside the band; past-ring +0.015 and elevation +0.033
+(descriptive). R does not approach B1 (−0.211 / −0.180). B1 matches `m4base` within the band.
 
 **Conclusion.** The history correction does not matter behaviourally; the pure-RGB spatial
 readout costs ~0.16 on the trained/interpolated ring but does not move the past-ring floor, so it
-is not a free replacement for the view-conditioned encoder. S is one seed, just over the
-threshold; a second seed is the registered confirmation step. R/RH/RHG remain untested.
+is not a free replacement for the view-conditioned encoder; adding the ray address changes the
+per-view latent (`zv_norm_mean` +76%, `zv_rel_spread_mean` +50% vs S) but not the fused latent or
+behaviour, so it is the fifth behavioural null and does not recover the ring. S and R are one
+seed each; S's margins are just over the threshold, so a second seed remains the registered
+confirmation step. RH/RHG remain untested.
 
 ## Open questions
 
@@ -1391,14 +1420,15 @@ threshold; a second seed is the registered confirmation step. R/RH/RHG remain un
   `zgpose`'s, the N=1 fused latent 2.17° / 3.93 cm pose-decodable — so a student would have
   still more to learn, while the held-out behaviour is the weakest of the four cells: the same
   caution again, at a stronger setting.
-- **Does the S regression survive a second seed, and can R/RH/RHG recover the ring?** S is
+- **Does the S regression survive a second seed, and can RH/RHG recover the ring?** S is
   −0.160 in-distribution and −0.166 interpolation against B1, both just outside the 0.15 band,
-  on one seed; the plan's next comparison is seed 43/44. **R (ray encoding on the attention
-  keys) is implemented and CPU-gated as of 2026-10-29** — `ray_spatial_readout_obs_encoder.py`,
-  the `enc_r` configs and `data/enc_r_{run,eval}.sh`; it is untrained, so whether the ray
-  address recovers B1's ring performance is open. RH (full EE-trajectory-conditioned shared
-  query) and RHG (point-to-ray attention bias) remain specified but unimplemented in
-  `ENCODER_EXPERIMENT_PLAN.md`.
+  on one seed; the plan's next comparison is seed 43/44. **R was trained and evaluated
+  2026-10-29: it is the fifth behavioural null** — R−S is −0.051 in-distribution and −0.014
+  interpolation (inside the band), and it sits −0.211 / −0.180 below B1, so the ray address
+  does not recover the ring. The ray path is live in `z_v` (`zv_norm_mean` 0.184 vs S 0.105)
+  while `z_g`'s coarse structure is unchanged (`zg_pr` 2.06 vs 2.08). RH (full
+  EE-trajectory-conditioned shared query) and RHG (point-to-ray attention bias) remain
+  specified but unimplemented in `ENCODER_EXPERIMENT_PLAN.md`.
 
 ## Where the rest is
 
@@ -1419,7 +1449,7 @@ threshold; a second seed is the registered confirmation step. R/RH/RHG remain un
 - **`NOTES.md`** — runbooks (launch and sweep commands), timings, disk, and the recurring traps.
 - **`PLAN.md`** — the milestone plan and what remains: the three runs, and the deferred work.
 - **`ENCODER_EXPERIMENT_PLAN.md`** — the encoder ladder's stages, structures and pre-registered
-  evaluation protocol; B0/B1/S are measured here, R/RH/RHG remain to implement.
+  evaluation protocol; B0/B1/S/R are measured here, RH/RHG remain to implement.
 - **`PROPOSAL.md`** — the direction and the original predictions.
 
 **Code map** — every milestone lands as new files; these are them.

@@ -1,6 +1,6 @@
 # Encoder 实验计划
 
-版本：v0.8；更新日期：2026-10-29。状态：B、S 已训练并有结果（见 `PROGRESS.md`）；R 已实现/待训练；RH/RHG 方案阶段。  
+版本：v0.8；更新日期：2026-10-29。状态：B、S、R 已训练并有结果（见 `PROGRESS.md`）；RH/RHG 方案阶段。  
 配套资料：[参考文献与方法概括](ENCODER_REFERENCES.md)。
 
 目标：在不使用场景深度的前提下，逐步检验空间读出、ray 编码、真实 EEF 历史查询和显式几何偏置的作用。动作 diffusion UNet 与现有低维状态接口保持一致。
@@ -206,7 +206,7 @@ B 需在修正协议后重新训练，作为本轮匹配基线。
 |---|---|---|
 | B | 已训练（B0/B1，见 `PROGRESS.md`） | 原结构的修正历史基线 |
 | S | 已训练（见 `PROGRESS.md`） | B |
-| R | 已实现/待训练 | S |
+| R | 已训练（见 `PROGRESS.md`） | S |
 | RH | 待实现/训练 | R |
 | RHG | 待实现/训练 | RH |
 
@@ -220,7 +220,7 @@ B 需在修正协议后重新训练，作为本轮匹配基线。
 | S | `diffusion_policy/model/vision/spatial_readout_obs_encoder.py` | `config/task/enc_s_image_abs_multiview_az75.yaml` | `config/train_diffusion_unet_image_workspace_enc_s_latent.yaml` | `data/enc_s_run.sh` / `data/enc_s_eval.sh` | `tests/test_spatial_readout_obs_encoder.py` |
 | R | `diffusion_policy/model/vision/ray_spatial_readout_obs_encoder.py`（+ `model/vision/plucker.py` 新增 `plucker_ray_map_at` / `ray_dirs_cam_at`） | `config/task/enc_r_image_abs_multiview_az75.yaml` | `config/train_diffusion_unet_image_workspace_enc_r_latent.yaml` | `data/enc_r_run.sh` / `data/enc_r_eval.sh` | `tests/test_ray_spatial_readout_obs_encoder.py` |
 
-共享管线不变：`diffusion_policy/dataset/multiview_image_dataset.py`（slot/cam/mask/history 与 `eef_hist_window`）和 `diffusion_policy/workspace/train_diffusion_unet_image_workspace_latentprobe.py`（latent probe）。S 的运行目录为 `/data/zihan/runs/run_square_enc_s_s42_200ep`（201 epochs，seed 42，K=11，pool 1..11，probe 128/az0_view 6）；R 为 `/data/zihan/runs/run_square_enc_r_s42_200ep`，数据、slot、pool、N 分布、seed、epoch 数与 probe 完全相同。S 的 dataset/runner 仍按 B 的 schema 发出相机向量与 EE 历史；S 的 encoder 忽略它们，这是为了让 S−B 保持单变量结构比较，且不改动已提交的数据/runner/probe schema。
+共享管线不变：`diffusion_policy/dataset/multiview_image_dataset.py`（slot/cam/mask/history 与 `eef_hist_window`）和 `diffusion_policy/workspace/train_diffusion_unet_image_workspace_latentprobe.py`（latent probe）。S 的运行目录为 `/data/zihan/runs/run_square_enc_s_s42_200ep`（201 epochs，seed 42，K=11，pool 1..11，probe 128/az0_view 6）；R 为 `/data/zihan/runs/run_square_enc_r_s42_200ep`，数据、slot、pool、N 分布、seed、epoch 数与 probe 完全相同。S 的 dataset/runner 仍按 B 的 schema 发出相机向量与 EE 历史；S 的 encoder 忽略它们，这是为了让 S−B 保持单变量结构比较，且不改动已提交的数据/runner/probe schema。R 与 S 的唯一结构差异是 ray 地址；评测结果见 `PROGRESS.md`：R−S 分布内 −0.051、插值 −0.014，均在 0.15 带内，且未恢复到 B1（−0.211 / −0.180）。
 
 S 结构一句话：76×76 crop → 纯 RGB ResNet18 layer3 5×5×256 → 1×1 conv 256→512 → 25×512 空间 tokens → 1 个共享的零初始化 512 维 query（8 heads，图像内 cross-attention）→ 每视角 1×512 → 原 M3 masked MHA 融合 → 521；无 ray、无 FiLM、无二维位置编码。参数量 5,016,640（B 为 12,532,928），因此 S−B 是结构比较，不是等容量比较。
 
