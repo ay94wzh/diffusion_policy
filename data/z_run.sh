@@ -229,7 +229,15 @@ device = torch.device(dev if torch.cuda.is_available() else 'cpu')
 batch = dict_apply(batch, lambda x: x.to(device))
 
 torch.manual_seed(42)
-pol = hydra.utils.instantiate(cfg_z.policy)
+# BOTH terms must be enabled to be MEASURED at all: the policy gates each one on
+# its own weight (diffusion_unet_image_policy_zsup.py:335-340 sets
+# `last_align_loss = 0.0` when `align_weight == 0.0`), and the committed config
+# defaults are 0.0/0.0. Instantiating at the defaults made align0/cons0 read
+# exactly 0.0 and tripped the `align0 > 0` assert below on the first launch
+# (2026-10-16 21:35) -- the head was never dead. The weight does NOT scale the
+# measured loss (the total is assembled after, line ~355), so 1.0/1.0 recovers
+# the raw values; verified: diff0 is bit-identical at (0,0) and (1,1).
+pol = hydra.utils.instantiate(cfg_z.policy, align_weight=1.0, cons_weight=1.0)
 pol.set_normalizer(ds_on.get_normalizer())
 pol.to(device)
 pol.train()          # match the run's crop regime (random_crop consumes RNG)
@@ -290,6 +298,21 @@ for CELL in $CELLS; do
     # 201 epochs, not 200: checkpoint and rollout fire on epoch % 50 == 0 and
     # there is no save at the end, so 201 makes epoch 200 fire.
     # training.resume=false: the config default is True and it SILENTLY resumes.
+    #
+    # logging.mode=${LOG_MODE:-online} -- added 2026-10-17, default unchanged.
+    # The installed wandb client (0.15.12, Aug 2023) can no longer talk to the
+    # wandb server, which now returns `ServerSettingsType: null` in its settings
+    # introspection; the client's unguarded `res.get(...).get(...)` chain then
+    # raises `CommError: 'NoneType' object has no attribute 'get'` inside
+    # wandb.init() and the run dies before its first epoch. 0.17.9 fails the
+    # same way (tested), so this needs a large version jump, not a pin. The
+    # workspace passes `mode` EXPLICITLY (`wandb.init(**cfg.logging)`), so
+    # WANDB_MODE=offline in the environment is IGNORED -- the override has to
+    # come through the config, which is what this is. Run the campaign with
+    # LOG_MODE=offline and sync the .wandb/offline-run-* dirs later, once the
+    # client is upgraded. Eval and analysis are unaffected: eval_novel_view.py
+    # only imports wandb for the Video type and never calls init, and no
+    # analysis script imports it at all.
     "$PY" train.py --config-name=train_diffusion_unet_image_workspace_z_latent \
       task=z_base_image_abs_multiview_az75 \
       training.seed=42 training.num_epochs=201 training.device="$DEV" \
@@ -298,6 +321,7 @@ for CELL in $CELLS; do
       policy.align_weight="$W_AL" policy.cons_weight="$W_CO" \
       task.dataset.emit_second_draw="$FS" \
       logging.project=diffusion_policy_view \
+      logging.mode="${LOG_MODE:-online}" \
       hydra.run.dir="$RUN" >> data/train_z_${CELL}.log 2>&1 &
     TRAIN_PID=$!
     say "TRAIN_PID=$TRAIN_PID"

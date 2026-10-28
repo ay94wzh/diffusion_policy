@@ -1,0 +1,23 @@
+{
+ "schema": 1,
+ "tool": "analyze_semantic_head.py",
+ "checkpoint": "/data/zihan/runs/run_square_zc_s42_200ep/checkpoints/latest.ckpt",
+ "npz": "/data/zihan/runs/run_square_zc_s42_200ep/latent_snapshots/epoch_0200.npz",
+ "n_states": 128,
+ "n_slots": 11,
+ "dim": 512,
+ "semantic_hidden_dim": 256,
+ "semantic_init_seed": 42,
+ "trained": {
+  "L_align": -2.262267173591681e-08,
+  "cos_within": 1.0,
+  "cos_across": 1.0
+ },
+ "reinit_control": {
+  "L_align": 0.02832140401005745,
+  "cos_within": 0.9858392477035522,
+  "cos_across": 0.5207667350769043
+ },
+ "collapse_signature": true,
+ "fp16_storage_floor_rel": 0.00049
+}

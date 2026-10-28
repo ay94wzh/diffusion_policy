@@ -10,7 +10,7 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-10-16.
+Last updated 2026-10-28.
 
 ## Summary
 
@@ -58,7 +58,24 @@ uncertainty; the learned variances are real (view spread 0.447, clamp never bind
 nothing. The completed battery (2026-10-16) reads all four registered representation readouts
 **in-envelope** — by the round's own convention, no mechanism claim is available — and the
 variance as **real spread that ranks no errors** (`rho(lvg, state residual)` −0.242): `PLAN_G.md`
-stage 1 closes the probability axis with a null. **What is not explained.** Two distinct failure modes
+stage 1 closes the probability axis with a null. **What the z-supervision round adds (2026-10-28).**
+`PLAN_Z.md`'s two supervisions, one at a time and together, against `m4base`. **`z_v`
+shared-semantics alignment is inert and degenerate**: cell `a` reproduces the baseline to three
+decimals (in-dist 0.7964 vs 0.796, off-grid 0.764 vs 0.774) because the projection head collapses
+to a constant — `cos_across` **1.0000** against a random head's 0.48, `L_align` 3.5e-09 — so the
+loss is satisfied trivially and the encoder is never pressured (screen 12.2×, all four readouts
+in-range). **`z_g` cross-view consistency destroys the encoder**: at the calibrated
+`W_CONS = 190.46` (63× the driver's own `W > 3` warning) cells `b` and `c` collapse to **1.6× /
+1.7×** their random-init baselines — below any arm in the project — `z_g` loses view-set
+dependence (`zg_across_view_subsets` 0.0027 / 0.0054 against A's 0.0663) and camera-pose
+decodability (47.6° / 27.5° against an envelope top of 17.8°), and behaviour falls to
+**0.155 / 0.129** in-distribution and **0.150 / 0.150** off-grid. **`c` = `b` exactly** (off-grid
+0.1500 both; `a` contributes nothing to either arm), so PLAN_Z §3's `C = A + B` decomposition
+comes out clean with `A ≈ 0`. The round's new instrument — the semantic readout of the trained
+head — is what turns `a`'s null from "alignment doesn't help" into "**this loss cannot help**".
+The pre-registered R2 instrument (`diff_loss` rising above the family band) read **clear** at e200
+for all three cells while the encoder and behaviour were collapsing, so that instrument does not
+detect this failure mode; the collapse screen and the readouts do. **What is not explained.** Two distinct failure modes
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
@@ -87,6 +104,7 @@ geometric conditioning and §2.4's aux heads are both inert.**
 | **`z_g` supervision** (`zgpose`) | 2026-10-10 — the fused latent supervised on the live views' pooled camera-pose set (all rows scored; dead zero-filled). Rev 1 killed pre-training (see the section) | **outcome (i) at the representation, behaviour inside band** — `z_g` became view-set-aware (both instruments ~2× the parents; pose decodable at 1.2°); registered means a third null, past the ring **−0.170**; M5's premise re-opened |
 | **joint supervision** (`zvzg`) | 2026-10-14 — both aux lines at once: `m4base`'s base-frame action head on `z_v` (w 1.0) + `zgpose`'s pose-set on `z_g` (w 1.33) | **the strongest view-aware `z_g` of the four cells, with the encoder healthy** (N-dependence 2.2–2.3× `zgpose`; screen 12.3× its random init) — in-dist a fourth null (0.751); **off-grid 0.606: −0.168 vs `m4base`, the first banded mean outside its band** (−0.108 vs `zgpose`, inside); past-ring 0.100, no recovery of `zgpose`'s cost |
 | **probabilistic fusion** (`prob_b/c/d`) | 2026-10-16 — `PLAN_G.md` stage 1: per-view Gaussians, three fusions — MHA-over-means (B, the deterministic control), PoE (C), plain mean (D); cell A = the committed `m4base`, not retrained | **behaviourally flat** — in-dist all inside band (0.829 / 0.804 / 0.793 vs A's 0.796); off-grid C−B **−0.074** and D−C **+0.060**, both unresolved, B the best held-out (0.738); past the ring **B 0.370** (above A) with C/D 0.210 / 0.195 (partial, no third floor); the variance learns (C: view spread 0.447, clamp 0.011/0.071) and buys nothing; **battery completed 2026-10-16**: all four registered representation readouts **in-envelope** for B/C/D, and the variance **spread but no signal** (R2 weak; R3/R4 null-to-against; double-count 2.23) |
+| **z supervision** (`zalign`/`zcons`/`zboth`) | 2026-10-28 — `PLAN_Z.md`: L2-normalised `z_v` shared-semantics alignment (a), cross-view ε-consistency on `z_g` at W=190.46 (b), both (c); same two weights in all three so `c` decomposes as `a + b`; baseline = the committed `m4base`, not retrained | **`a` null, `b` and `c` collapse** — `a` reproduces A to three decimals (0.7964/0.764) because its head collapses to a constant (`cos_across` 1.0000, `L_align` 3.5e-09) and the encoder is untouched (screen 12.2×, all four readouts in-range); `b` 0.155/0.150 and `c` 0.129/0.150 with encoders at **1.6×/1.7×** random init and `z_g` uninformative (3 of 4 readouts MOVED); **`c` = `b` to four decimals off-grid**; the registered `diff_loss` R2 instrument **did not fire** |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -995,6 +1013,146 @@ the `zgpose` round used (probe subsets > 0.09, digest tail > 0.13), C would have
 both; its descriptive position inside the envelope (≈80% of the way from A to `zgpose`) is
 recorded above for exactly that reason, and it is where any follow-up would start.
 
+## The z-supervision round (PLAN_Z, 2026-10-28)
+
+**What it is.** `PLAN_Z.md` proposes two supervisions on the multi-view encoder, each tested alone
+and then together against the committed `m4base` baseline (not retrained):
+
+| cell | supervision | mechanism |
+|---|---|---|
+| **a** `zalign` | `L_align` on `z_v` | a shared projection head `P_s` maps each live view's `z_v` into a "shared semantics" space; the loss is the **L2 between L2-normalised projections** of two views of the same state |
+| **b** `zcons` | `L_cons` on `z_g` | two independent view draws give `z_g^(i)` and `z_g^(j)`; the **same** noisy action, timestep and noise pass through the UNet twice and the two ε-predictions are pulled together |
+| **c** `zboth` | both | the same two weights as a and b, so `c` decomposes as `a + b` |
+
+The recipe is `m4base`'s throughout: square, K=11 slots over pool [1..11], N ∈ [1,11], seed 42, 201
+epochs, base-frame aux at w = 1.0, the per-epoch latent probe. The two weights are calibrated
+pre-launch by the family convention `W = 0.33·diff0/loss0` from one train-mode forward at init
+(`data/z_run.sh` stage 1): `diff0 = 1.078701`, `align0 = 0.041532`, `cons0 = 0.001869` →
+**W_ALIGN = 8.571**, **W_CONS = 190.4601**. Both exceed the driver's `W > 3` warning and were
+**registered, not adjusted**, per the pre-registration; the same pair went into all three cells so
+that `c` is exactly `a + b`.
+
+**Results — behaviour.** `success_rate`, 50 paired episodes, the registered means (band 0.15
+against A):
+
+| registered mean | **a** | **b** | **c** | A = m4base |
+|---|---|---|---|---|
+| in-dist ring (11 vp, trained) | **0.796** | **0.155** | **0.129** | 0.796 |
+| off-grid ±7.5…±67.5 (10 vp, held out) | **0.764** | **0.150** | **0.150** | 0.774 |
+| past the ring ±82.5/±90 (4 vp) | **0.375** | 0.135 | 0.125 | 0.310 |
+| elevation el_0 / el_m15 / el_p15 | **0.840 / 0 / 0** | 0.080 / 0.04 / 0.04 | 0.020 / 0.04 / 0.08 | 0.840 / 0 / 0 |
+
+**`a` is a null so exact that it is a replica of the baseline.** In-distribution 0.7964 against
+0.796 (Δ +0.0004); off-grid 0.764 against 0.774 (Δ −0.010, far inside the band); `el_0` identical
+at 0.840; the past-ring 0.375 is nominally the highest of any arm but that cell is registered
+separately, band-less, and mixes two ±82.5° cells with two ±90° cells pinned at the floor. **`b`
+is a collapse, not a null**: −0.641 in-distribution and −0.624 off-grid, impaired at every one of
+the 11 *trained* viewpoints (0.06–0.26) and — uniquely in the lineage — at the untrained elevation
+cells too (0.080 / 0.04 / 0.04, where every other arm reads 0 / 0). **`c` = `b`**: off-grid
+matching to four decimals (0.1500 both), in-distribution 0.129 against 0.155, elevation the worst
+of the three. PLAN_Z §3's `C = A + B` decomposition therefore comes out exact, with `A ≈ 0`.
+
+**Results — the registered readouts.** `data/z_analysis.sh` (digests, probes, screens, plus the
+round's new semantic head read), read against envelopes computed from the four committed grids
+(`m4base`/`m4clear`/`zgpose`/`zvzg`); "moved" means outside the envelope by more than 10% of its
+own width:
+
+| registered readout | envelope (A … zvzg) | **a** | **b** | **c** |
+|---|---|---|---|---|
+| probe `zv_pair_ratio`(1,11) | [0.267, 2.255] | 0.2634 | 0.1472 | 0.1624 |
+| probe `zg_across_view_subsets`(1,11) | [0.066, 0.327] | 0.0485 | **0.0027 MOVED** | **0.0054 MOVED** |
+| digest `rel(zg_n1, zg_full)` tail(25) | [0.090, 0.433] | 0.0649 | **0.0045 MOVED** | **0.0085 MOVED** |
+| probe N=1 `zg` pose readout (ridge) | [1.20°, 17.8°] / [1.9, 23.2] cm | 14.1° / 22.3 cm | **47.6° / 61.8 cm MOVED** | **27.5° / 39.6 cm MOVED** |
+
+All four of `a`'s readouts are in-range — by the round's own convention that is a *bound*, and the
+bound says the encoder did not move. `b` and `c` move the same three, in the same direction:
+`z_g` loses view-set dependence (subsets 0.0027 / 0.0054 against A's 0.0663), the N=1 latent
+becomes indistinguishable from the full-draw one (tail 0.0045 / 0.0085 against A's 0.0895), and
+camera-pose decodability degrades to 47.6° / 27.5° from an envelope top of 17.8°. That is not
+"more view-invariant"; it is `z_g` carrying less information about anything. The probe
+comparability gate passes — draw fingerprints are byte-identical across all seven committed grids.
+
+**Collapse screens** (matched [11,11] draw, each cell against its own random-init baseline) are
+what separate the two arms:
+
+| cell | trained spread | × own random-init | `mean_norm` |
+|---|---|---|---|
+| **a** | 4.02e-02 | **12.2×** | 5.15 |
+| **b** | 4.41e-03 | **1.6×** | 44.05 |
+| **c** | 7.31e-03 | **1.7×** | 5.66 |
+| m4base (ref) | 2.53e-02 | 5.7× | 5.25 |
+| zgpose (ref, previous worst) | 3.30e-03 | 2.0× | 63.3 |
+
+`a`'s encoder is healthy and indistinguishable from m4clear's 12.2×. `b` and `c` sit at
+**1.6× / 1.7×** — below every arm in the project, zgpose's 2.0× included. The digest agrees on
+`b`: `zg_norm_mean` **44.8** (m4base 5.41) with `zg_rel_spread` **0.0298** (m4base 0.1045) — a huge
+norm and almost no spread, the signature of features converging onto one common vector.
+
+**The semantic readout** — `analyze_semantic_head.py`, the round's new instrument and risk R1's
+check — asks whether the *encoder* or the *head* absorbed the alignment pressure:
+
+| cell | trained `L_align` | trained `cos_within` | trained `cos_across` | re-init `cos_across` | `collapse_signature` |
+|---|---|---|---|---|---|
+| **a** | 3.5e-09 | 1.0000 | **1.0000** | 0.4838 | **True** |
+| **b** | 0.0237 | 0.9881 | 0.5007 | 0.5007 (identical) | False |
+| **c** | −0.0 | 1.0000 | **1.0000** | 0.5208 | **True** |
+
+`a`'s head maps views of *different physical states* to the same direction — `cos_across` 1.0000
+against a random head's 0.4838 — so `L_align → 0` is satisfied trivially and no gradient carrying
+view-invariance reaches `z_v`. `b`'s head was never trained (`align_weight = 0`) and the instrument
+returns its re-init control **to six decimals**, which independently validates the instrument;
+`c`'s head collapses exactly as `a`'s.
+
+**Mechanism gates.** Batch-0 `diff_loss` is **1.08283198 in all three cells**, bit-identical to
+`m4base`'s derived 1.082832 (its `train_loss` 1.4437798 minus its `aux_loss` 0.360948) — the
+RNG-lockstep claim read from the artifacts rather than asserted. `align_loss` falls from 0.0405 at
+batch 0 to ~1e-09 by e200 in `a` and `c`; `cons_loss` falls from 0.0021 to ~1e-06 in `b` and `c`.
+The in-training rollout does not collapse in `a` (0.00 → 0.60 → 0.76 → 0.76 → 0.82), and sits at
+the floor in `b` (0.00 → 0.00 → 0.10 → 0.12 → 0.22) and `c` (0.00 → 0.04 → 0.06 → 0.08 → 0.08).
+**The registered R2 instrument did not fire**: `diff_loss` at e200 reads 0.00229 / 0.00281 /
+0.00238, at or *below* the family band's 0.0028 floor, so the pre-registered "a cons term that
+shrinks the UNet's dependence on conditioning would show up here" test reported clear while the
+encoder and the behaviour were collapsing. That insensitivity is itself a result: `diff_loss` can
+stay low on the low-dim observations alone, so it is not a collapse detector.
+
+**The reading.** Both mechanisms fail, each in its own way, and in each case the failure is in the
+loss as specified rather than in the training.
+
+*`L_align` (PLAN_Z §1) is degenerate.* An L2 between L2-normalised projections has a global minimum
+at a constant, and the optimiser finds it: both trained heads collapse (`cos_across` 1.0000),
+`L_align → 0` becomes trivial, and nothing about view-invariance reaches the encoder — cell `a`'s
+screen is 12.2× (healthy), its `zv_pair_ratio` is 0.2634 against A's 0.2672, all four readouts are
+in-range, and its behaviour is the baseline's to three decimals. This is not "alignment does not
+help"; it is "**this objective cannot help**". PLAN_Z §1 lists InfoNCE as a later option, and this
+round says that option is not optional: the standard remedy is the one that supplies *negative*
+pairs and therefore keeps `cos_across` low.
+
+*`L_cons` (PLAN_Z §2) destroys the representation.* At `W_CONS = 190.46` the cheapest way to make
+two independent view draws agree is to make the encoder produce the same thing for every view, and
+that is what happens: 1.6× / 1.7× random init, `z_g` uninformative on three readouts, behaviour at
+the floor on every axis including untrained elevations. The weight is not an accident of the run:
+it is the family's `0.33·diff0/loss0` convention applied to a target ~500× smaller than `diff0`,
+and the driver's `W > 3` warning fired at 190. The pre-registration chose to record rather than
+adjust it, which is precisely what makes this a clean, attributable result instead of an ambiguous
+one.
+
+*The two do not interact.* `a` = baseline, `b` = collapse, `c` = `b` — on the registered means, on
+every instrument, and on the encoder health screen. Adding `z_v` alignment to the collapsed arm
+changes nothing measurable, in either direction.
+
+**Caveats.** One seed, 50 episodes per viewpoint; all contrasts are read on the 0.15 band whose
+measured mean-scale spread is 0.05–0.08, so "c = b" is a bound, not a demonstrated equality. The
+cells are instrument-comparable to `m4base` (every ring view trains), not ladder-comparable.
+`W_ALIGN`/`W_CONS` were calibrated once (on cuda:1) and reused by `b` and `c` from
+`data/z_calib_env.sh`, which is what preserves the `C = A + B` decomposition; both tripped the
+`W > 3` warning and were registered rather than adjusted. The three runs are **wandb-offline**
+(`logging.mode=offline`): the installed client (0.15.12) can no longer reach the wandb server, and
+0.17.9 fails identically, so the `.wandb/offline-run-*` directories under `/data/zihan/runs/*/wandb/`
+still need syncing after a client upgrade. Finally, the registered R2 instrument read **clear** at
+e200 for all three cells despite the collapse; a future registration of this failure mode should
+anchor on the collapse screen and the three moved readouts, which did fire, rather than on
+`diff_loss`.
+
 ## Findings
 
 What each follow-up experiment concluded — the result and the reading.
@@ -1092,6 +1250,16 @@ encoder compute per sample.
   `[1,2]` cell read 1.8e-7 relative spread, four orders of magnitude under the 4.9e-4 storage
   floor — so a collapsing run's npz can only **bound** how early its collapse started; the fp32
   scalars in its `logs.json.txt` remain the deep instrument. It contains no collapse itself.
+  **Added 2026-10-28 (`zcons`/`zboth`).** The project now has its first **fully diagnosed** encoder
+  collapse, which makes a useful reference signature for the unexplained ones: cells `b` and `c`
+  of the z round collapsed *because* a supervision term at `W_CONS = 190.46` was cheapest to
+  satisfy by making every view encode identically. The signature there is a matched-draw screen at
+  **1.6×/1.7×** its own random init, `zv_pair_ratio` 0.135/0.154 (against A's 0.267), and — on
+  `b` — a fused latent with `zg_norm_mean` **44.8** against 5.41 and `zg_rel_spread` **0.0298**
+  against 0.1045. Note that `diff_loss` stayed *low* throughout (0.0028 at e200, the bottom of the
+  healthy band), so the diffusion loss does **not** flag this kind of collapse; the screen and the
+  readouts do. Whether the unexplained collapses (`[1,2]`, `[1,3]`, L1) share this signature is an
+  open question this reference now makes testable.
 - **M5's premise.** M3 already does N=1 novel-view inference well, so distillation is only
   worth it if the fused latent demonstrably carries something the single-view path cannot,
   which no result so far shows. The clear-run analysis is the first evidence *against* the

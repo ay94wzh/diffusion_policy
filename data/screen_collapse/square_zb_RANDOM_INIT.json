@@ -1,0 +1,17 @@
+{
+  "n_states": 16,
+  "feature_dim": 512,
+  "mean_norm": 9.482071876525879,
+  "max_spread": 0.026001248508691788,
+  "relative_spread": 0.002742148470133543,
+  "random_init": true,
+  "cell_view_count_range": [
+    1,
+    11
+  ],
+  "effective_range": [
+    11,
+    11
+  ],
+  "checkpoint": "/data/zihan/runs/run_square_zb_s42_200ep/checkpoints/latest.ckpt"
+}
