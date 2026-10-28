@@ -62,6 +62,11 @@ run_cell() {
     window=$2
     run=$3
     say "TRAIN_START $cell (eef_hist_window=$window) -> $run ($DEV)"
+    # logging.mode: the installed wandb 0.15.12 cannot talk to the current
+    # server (`CommError: 'NoneType' object has no attribute 'get'` inside
+    # init(), before epoch 1). The workspace passes `mode` explicitly, so
+    # WANDB_MODE in the environment is ignored; the override has to come
+    # through the config. Default offline; same fix as data/z_run.sh.
     "$PY" train.py --config-name=train_diffusion_unet_image_workspace_enc_b_latent \
         task=enc_b_image_abs_multiview_az75 \
         task.dataset.eef_hist_window="$window" \
@@ -70,6 +75,7 @@ run_cell() {
         dataloader.num_workers=14 val_dataloader.num_workers=2 \
         checkpoint.topk.k=1 \
         logging.project=diffusion_policy_view \
+        logging.mode="${LOG_MODE:-offline}" \
         hydra.run.dir="$run" >> "data/train_enc_b_${cell}.log" 2>&1 &
     pid=$!
     say "TRAIN_PID($cell)=$pid"

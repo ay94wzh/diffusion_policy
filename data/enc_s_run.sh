@@ -69,6 +69,11 @@ done
 say "CPU_GATES_PASSED"
 
 say "TRAIN_START (stage S, pure-RGB spatial readout) -> $RUN ($DEV)"
+# logging.mode: the installed wandb 0.15.12 cannot talk to the current server
+# (`CommError: 'NoneType' object has no attribute 'get'` inside init(), before
+# epoch 1). The workspace passes `mode` explicitly, so WANDB_MODE in the
+# environment is ignored; the override has to come through the config.
+# Default offline; same fix as data/z_run.sh.
 "$PY" train.py --config-name=train_diffusion_unet_image_workspace_enc_s_latent \
     task=enc_s_image_abs_multiview_az75 \
     training.seed=42 training.num_epochs=201 training.device="$DEV" \
@@ -76,6 +81,7 @@ say "TRAIN_START (stage S, pure-RGB spatial readout) -> $RUN ($DEV)"
     dataloader.num_workers=14 val_dataloader.num_workers=2 \
     checkpoint.topk.k=1 \
     logging.project=diffusion_policy_view \
+    logging.mode="${LOG_MODE:-offline}" \
     hydra.run.dir="$RUN" >> "data/train_enc_s.log" 2>&1 &
 pid=$!
 say "TRAIN_PID=$pid"

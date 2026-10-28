@@ -10,7 +10,7 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-10-28.
+Last updated 2026-10-29.
 
 ## Summary
 
@@ -79,7 +79,19 @@ detect this failure mode; the collapse screen and the readouts do. **What is not
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
-geometric conditioning and §2.4's aux heads are both inert.**
+geometric conditioning and §2.4's aux heads are both inert.** **What the encoder ladder adds
+(2026-10-29).** `ENCODER_EXPERIMENT_PLAN.md`'s first two stages, B and S, were trained and
+swept. **B**, the corrected EE-history protocol, is a clean one-variable pair — B0 `sample` vs
+B1 `episode` — and is a **null on every registered mean**: in-distribution **0.751 vs 0.813**
+(−0.062), interpolation 0.712 vs 0.784
+(−0.072), past-ring 0.320 vs 0.365 (−0.045), elevation 0.367 vs 0.347 (+0.020, descriptive).
+The history branch is behaviourally inert with the clean pair the M3/M4 null lacked. **S**, the
+pure-RGB spatial-readout replacement, is **negative on the trained and interpolation rings**:
+in-distribution **0.653 vs 0.813** (−0.160) and interpolation **0.618 vs 0.784** (−0.166), both
+just outside the 0.15 band; past-ring is a null (0.355 vs 0.365, both at the ~0.36 floor), and
+elevation is lower (0.293 vs 0.347, descriptive). B1 matches the committed `m4base` reference
+(0.813/0.784 vs 0.796/0.774), so it is a valid internal baseline. S is one seed and its margins
+are 0.010–0.016 over the threshold; **R/RH/RHG are not implemented**.
 
 ## Status
 
@@ -105,6 +117,8 @@ geometric conditioning and §2.4's aux heads are both inert.**
 | **joint supervision** (`zvzg`) | 2026-10-14 — both aux lines at once: `m4base`'s base-frame action head on `z_v` (w 1.0) + `zgpose`'s pose-set on `z_g` (w 1.33) | **the strongest view-aware `z_g` of the four cells, with the encoder healthy** (N-dependence 2.2–2.3× `zgpose`; screen 12.3× its random init) — in-dist a fourth null (0.751); **off-grid 0.606: −0.168 vs `m4base`, the first banded mean outside its band** (−0.108 vs `zgpose`, inside); past-ring 0.100, no recovery of `zgpose`'s cost |
 | **probabilistic fusion** (`prob_b/c/d`) | 2026-10-16 — `PLAN_G.md` stage 1: per-view Gaussians, three fusions — MHA-over-means (B, the deterministic control), PoE (C), plain mean (D); cell A = the committed `m4base`, not retrained | **behaviourally flat** — in-dist all inside band (0.829 / 0.804 / 0.793 vs A's 0.796); off-grid C−B **−0.074** and D−C **+0.060**, both unresolved, B the best held-out (0.738); past the ring **B 0.370** (above A) with C/D 0.210 / 0.195 (partial, no third floor); the variance learns (C: view spread 0.447, clamp 0.011/0.071) and buys nothing; **battery completed 2026-10-16**: all four registered representation readouts **in-envelope** for B/C/D, and the variance **spread but no signal** (R2 weak; R3/R4 null-to-against; double-count 2.23) |
 | **z supervision** (`zalign`/`zcons`/`zboth`) | 2026-10-28 — `PLAN_Z.md`: L2-normalised `z_v` shared-semantics alignment (a), cross-view ε-consistency on `z_g` at W=190.46 (b), both (c); same two weights in all three so `c` decomposes as `a + b`; baseline = the committed `m4base`, not retrained | **`a` null, `b` and `c` collapse** — `a` reproduces A to three decimals (0.7964/0.764) because its head collapses to a constant (`cos_across` 1.0000, `L_align` 3.5e-09) and the encoder is untouched (screen 12.2×, all four readouts in-range); `b` 0.155/0.150 and `c` 0.129/0.150 with encoders at **1.6×/1.7×** random init and `z_g` uninformative (3 of 4 readouts MOVED); **`c` = `b` to four decimals off-grid**; the registered `diff_loss` R2 instrument **did not fire** |
+| **encoder B** (`enc_b0`/`enc_b1`) | 2026-10-29 — corrected `eef_hist_window=episode` (B1) against the legacy `sample` (B0), one variable; K=11 pool [1..11], N ∈ [1,11], 201 epochs, seed 42 | **history null** — every registered mean inside the 0.15 band: in-dist −0.062, interp −0.072, past −0.045, elev +0.020 (descriptive); B1 is the encoder ladder's internal baseline |
+| **encoder S** (`enc_s`) | 2026-10-29 — pure-RGB layer3 spatial tokens + one shared 512-d query + 8-head intra-image attention, B's masked cross-view fusion; structural, not RNG-locked to B | **negative on the ring** — in-dist 0.653 vs B1 0.813 (−0.160), interp 0.618 vs 0.784 (−0.166), both just outside the 0.15 band; past-ring null (0.355 vs 0.365); elevation 0.293 vs 0.347; seed 42 only |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -125,15 +139,18 @@ every reset from a base pose captured on first use. Policy rollouts at each view
 attributable to the camera rather than to the episode draws. 50 episodes per viewpoint. Two
 metrics: strict `EnvRobosuite.is_success()` (`success_rate`) and max-reward (`mean_score`).
 
-**Viewpoints.** Azimuth presets `azimuth_sweep5` (0, ±15°, ±30°) and `azimuth_interp`
-(0, ±15°, ±30°, ±45°, ±60°, ±75°). Elevation is `elevation_az0` — an **orbit** about the
+**Viewpoints.** Azimuth presets `azimuth_sweep5` (0, ±15°, ±30°), `azimuth_interp`
+(0, ±15°, ±30°, ±45°, ±60°, ±75°), and `azimuth_offgrid` (7.5° offsets — ±7.5° … ±67.5° —
+plus ±82.5°/±90°). Elevation is `elevation_az0` — an **orbit** about the
 look-at point at 0/±15°, the off-manifold test. `el_0` is the same camera pose as `az_0`,
 which makes it the internal consistency check.
 
 **Multi-view data (M2).** A 13-pose azimuth ring every 15° out to ±90°. The **even indices**
 (az −90/−60/−30/0/+30/+60/+90, every 30°) form the *training pool*; the **odd indices**
 (±15/±45/±75) are **never sampled during training**, so every "held out" column below is held
-out by construction.
+out by construction. **The encoder ladder (2026-10-29) uses a different pool** — indices 1..11
+(az −75…+75 every 15°), all trained — so its in-distribution cell is the trained ring and its
+`azimuth_offgrid` grid is the held-out azimuth set; see *The encoder ladder* below.
 
 **Noise and resolution.** Treat differences below **~0.1 on a single viewpoint as unmeasured**:
 two 50-episode sweeps of one checkpoint through two presets that place the camera at the *same*
@@ -1153,6 +1170,84 @@ e200 for all three cells despite the collapse; a future registration of this fai
 anchor on the collapse screen and the three moved readouts, which did fire, rather than on
 `diff_loss`.
 
+## The encoder ladder: B0/B1/S (2026-10-29)
+
+**What it is.** The first two stages of `ENCODER_EXPERIMENT_PLAN.md`. **B** keeps the M3 policy
+(no aux head) and changes only the EE-history protocol: B0 is the legacy
+`eef_hist_window=sample` — the window-start clip that every committed M3/M4 run used, which with
+To=2 gives `[B,B,B,B]` / `[B,B,B,B+1]` and therefore almost no history — and B1 is `episode`, the
+true H most recent poses inside the same episode, clipped only at the episode start, which is
+exactly what both rollout paths (`CamKeyImageWrapper`, `ViewpointImageWrapper`) serve. One CLI
+flag differs; the data, K=11 slots over pool [1..11], N ∈ [1,11], the M3 policy, the latent
+probe, seed 42 and all schedules are identical, and the view-draw/crop RNG is unchanged by the
+flag, so B0/B1 is a clean one-variable pair. **S** replaces the encoder: pure-RGB ResNet18
+layer3 → 1×1 conv 256→512 → 25 spatial tokens → one shared zero-init 512-d query, 8-head
+intra-image cross-attention → one 512-d token per view → the same masked cross-view MHA fusion
+as B. S is a **structural** comparison, not RNG-lockstep with B (module construction consumes
+different global torch RNG), and its 5,016,640 encoder parameters are half B's 12,532,928, so
+S−B is not capacity-matched either.
+
+**Protocol.** Square PH, `_abs` actions; pool [1..11] = az −75…+75 every 15°, **all trained**
+(unlike M2/M3's even/odd split — see *Setup and protocol*); N uniform in [1,11]; 201 epochs;
+EMA epoch 200; 50 paired episodes per viewpoint; strict `success_rate`. Registered means:
+in-distribution ring (11 vp, trained), interpolation ±7.5…±67.5 (10 vp, held out),
+past-ring ±82.5/±90 (4 vp, outside the training range), elevation el_0/±15 (3 vp, descriptive).
+Band **0.15** mean-over-viewpoints, pre-registered; direction not predicted.
+
+**Results — behaviour.** Strict `success_rate`, 50 paired episodes per viewpoint:
+
+| registered mean | B0 (`sample`) | B1 (`episode`) | S | m4base |
+|---|---|---|---|---|
+| in-dist ring (11 vp, trained) | 0.751 | **0.813** | 0.653 | 0.796 |
+| interpolation ±7.5…±67.5 (10 vp) | 0.712 | **0.784** | 0.618 | 0.774 |
+| past the ring ±82.5/±90 (4 vp) | 0.320 | **0.365** | 0.355 | 0.310 |
+| elevation el_0 / m15 / p15 | 0.80 / 0.10 / 0.20 | 0.90 / 0.02 / 0.12 | 0.60 / 0.04 / 0.24 | 0.84 / 0.00 / 0.00 |
+
+**B0 vs B1 is a null.** Every registered mean is inside the 0.15 band: in-distribution −0.062,
+interpolation −0.072, past-ring −0.045, elevation +0.020 (descriptive). B1 is if anything
+slightly better on the ring. The corrected history therefore changes nothing measurable. This is
+the clean version of the M3/M4 "history is inert" result: those runs used `sample` and could not
+test the true past; B0/B1 differs only in the flag, and the flag changes the history tensor
+values without touching the view-draw/crop RNG.
+
+**S vs B1 is negative on the ring.** In-distribution **−0.160** and interpolation **−0.166** are
+both just outside the 0.15 band; past-ring is a null (−0.010 — both cells sit at the ~0.36
+floor), and elevation is lower (−0.053; `el_0` 0.60 vs 0.90, `el_m15` 0.04 vs 0.02, `el_p15` 0.24
+vs 0.12). The penalty is concentrated on the trained and interpolated ring, where B is strong,
+and disappears at the past-ring floor. S's epoch-200 in-training score (0.62) is below its
+epoch-150 topk (0.66) while B1's epoch 200 is its best (0.86); the registered protocol evaluates
+epoch 200, and selecting the topk would be post-hoc checkpoint selection, which the plan forbids.
+
+**B1 vs m4base validates the baseline.** +0.017 in-distribution and +0.010 interpolation, inside
+the band; past-ring +0.055 and elevation +0.067 (descriptive). `m4base` carries the base-frame
+aux head, so this is a reference check rather than a clean comparator; B1 is the encoder ladder's
+internal baseline.
+
+**Elevation is not fixed.** The downward-elevation failure persists in every cell: `el_m15` 0.02
+(B1) / 0.10 (B0) / 0.04 (S), against `el_0` 0.90 / 0.80 / 0.60; `el_p15` is 0.12 / 0.20 / 0.24.
+The elevation cells are descriptive, not registered, but no encoder change so far touches them.
+
+**Caveats.** One seed (42) and 50 episodes per viewpoint. The S margins are only 0.010–0.016
+over the threshold, so S is not yet a confirmed regression; the plan's next comparison is seed
+43/44. The S/B runs are not RNG-lockstep (unlike B0/B1), so S−B is a structural and
+capacity-confounded comparison, not a paired ablation. The S eval uses epoch 200 (`latest.ckpt`)
+per protocol; its topk is epoch 150. The per-epoch latent probe ran in all three cells and the
+npz series are on `miroc-server`; the mechanism-live reads (FiLM gamma/beta norms, probe series)
+were not analysed here — the behavioural result is the headline.
+
+**Operational note.** The first launch died at `wandb.init()` with the known client/server
+incompatibility (`CommError: 'NoneType' object has no attribute 'get'`; wandb 0.15.12 cannot talk
+to the current server, and 0.17.9 fails identically). Both run scripts now pass
+`logging.mode="${LOG_MODE:-offline}"`, the same fix and reasoning as `data/z_run.sh`; the failed
+first attempts are preserved as `*_ABORTED_wandb_20261028`. The campaign shared the machine with
+another user's CPU-heavy RoboTwin evaluation, which stretched B0 and the B1 sweep; no run failed,
+and the episode/seed protocol is unchanged, so the numbers are unaffected.
+
+**Artifacts.** `data/outputs/run_square_enc_{b0,b1,s}_s42_200ep/logs.json.txt` (probe scalars per
+epoch); `data/eval_{interp,heldout,el}_square_enc_{b0,b1,s}/eval_log.json`; the run dirs under
+`/data/zihan/runs/run_square_enc_*` (~9 GB each) hold `latest.ckpt` and the latent-probe npz and
+stay on `miroc-server`. **R, RH and RHG are not implemented.**
+
 ## Findings
 
 What each follow-up experiment concluded — the result and the reading.
@@ -1234,6 +1329,24 @@ encoder compute per sample.
 
 `screen_collapse.py` compares various architectures against a random-initialization baseline based on relative dispersion: `[1,2]` collapses (performing 28,000× worse than the baseline) with the image pathway severed, and the L1 "square/can" configuration similarly collapses—explaining L1's task specialization, as a constant `z_g` renders the policy open-loop. However, collapse is merely **one** failure mode: `[1,3]` maintains a healthy encoder yet remains at the performance floor, demonstrating that a healthy screen does not guarantee a usable policy; meanwhile, `m3n1gate` suggests the issue may stem from view variation rather than the number of views.
 
+### The encoder ladder — B and S
+
+**Method.** B0 vs B1 changes only `eef_hist_window` (`sample` vs `episode`) on the M3 recipe; S
+replaces B's 9-channel RGB+Plücker conv1, per-stage FiLM and global pool with a pure-RGB
+spatial-token readout (one shared 512-d query, 8-head intra-image attention) and B's cross-view
+fusion. Registered means over 50 paired episodes; band 0.15.
+
+**Result.** B0−B1 is null on every registered mean (in-dist −0.062, interp −0.072, past −0.045,
+elevation +0.020 descriptive), so the corrected history is behaviourally inert. S−B1 is −0.160
+in-distribution and −0.166 interpolation, both just outside the band; past-ring is a null
+(−0.010 — both at the ~0.36 floor) and elevation is lower (−0.053, descriptive). B1 matches
+`m4base` within the band.
+
+**Conclusion.** The history correction does not matter behaviourally; the pure-RGB spatial
+readout costs ~0.16 on the trained/interpolated ring but does not move the past-ring floor, so it
+is not a free replacement for the view-conditioned encoder. S is one seed, just over the
+threshold; a second seed is the registered confirmation step. R/RH/RHG remain untested.
+
 ## Open questions
 
 - **What makes training collapse?** Known: not "too few views" (`m3n1gate` trains at N=1 and is
@@ -1275,6 +1388,12 @@ encoder compute per sample.
   `zgpose`'s, the N=1 fused latent 2.17° / 3.93 cm pose-decodable — so a student would have
   still more to learn, while the held-out behaviour is the weakest of the four cells: the same
   caution again, at a stronger setting.
+- **Does the S regression survive a second seed, and can R/RH/RHG recover the ring?** S is
+  −0.160 in-distribution and −0.166 interpolation against B1, both just outside the 0.15 band,
+  on one seed; the plan's next comparison is seed 43/44. The remaining encoder-ladder stages —
+  R (ray encoding on the keys), RH (full EE-trajectory-conditioned shared query), RHG
+  (point-to-ray attention bias) — are specified in `ENCODER_EXPERIMENT_PLAN.md` but not yet
+  implemented, so whether any recovers B1's ring performance is open.
 
 ## Where the rest is
 
@@ -1294,6 +1413,8 @@ encoder compute per sample.
   (proprio moved 5.2× from n=8 to n=64) — though the severed-path finding survives at n=64.
 - **`NOTES.md`** — runbooks (launch and sweep commands), timings, disk, and the recurring traps.
 - **`PLAN.md`** — the milestone plan and what remains: the three runs, and the deferred work.
+- **`ENCODER_EXPERIMENT_PLAN.md`** — the encoder ladder's stages, structures and pre-registered
+  evaluation protocol; B0/B1/S are measured here, R/RH/RHG remain to implement.
 - **`PROPOSAL.md`** — the direction and the original predictions.
 
 **Code map** — every milestone lands as new files; these are them.
@@ -1312,10 +1433,13 @@ encoder compute per sample.
 | z_g supervision (`zgpose`) | `config/task/zgpose_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_zgpose_latent.yaml`, `model/vision/view_pose_set_head.py`, `policy/diffusion_unet_image_policy_zgpose.py`, `tests/test_zg_pose_supervision.py`, `data/zgpose_{run,eval,analysis}.sh`; seam: `multiview_image_dataset.py` `emit_aux_view_pose` (zero-filled pooled pose-set target, all rows scored) |
 | joint supervision (`zvzg`) | `config/task/zvzg_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_zvzg_latent.yaml`, `policy/diffusion_unet_image_policy_zvzg.py`, `tests/test_zvzg_supervision.py`, `data/zvzg_{run,eval,analysis}.sh`; both dataset targets reuse the `m4base`/`zgpose` emissions unchanged; seam: `train_diffusion_unet_image_workspace.py` (per-term `aux_action_loss`/`aux_pose_loss` log lines) |
 | probabilistic fusion (`prob_b/c/d`) | `model/vision/per_view_gaussian.py`, `model/vision/prob_view_conditioned_obs_encoder.py`, `policy/diffusion_unet_image_policy_prob.py`, `workspace/train_diffusion_unet_image_workspace_probprobe.py`, `config/task/prob_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_prob_latent.yaml`, `tests/test_prob_gaussian_fusion.py`, `data/prob_{run,eval}.sh`; seam: `train_diffusion_unet_image_workspace_latentprobe.py` (`_probe_extras` extension hook — the base returns nothing, so every existing run's npz/JSONL artifacts stay byte-identical) |
+| encoder ladder (B/S) | `model/vision/spatial_readout_obs_encoder.py`, `config/task/enc_{b,s}_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_enc_{b,s}_latent.yaml`, `data/enc_{b,s}_{run,eval}.sh`, `tests/test_spatial_readout_obs_encoder.py` (plus the 32-line extension of `tests/test_view_conditioned_obs_encoder.py`), `ENCODER_EXPERIMENT_PLAN.md`, `ENCODER_REFERENCES.md`; seam: `multiview_image_dataset.py` `eef_hist_window` |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE history;
-and the `view_count_range` guard removed 2026-09-24 so the ladder can run `[1, 2]`),
+the `eef_hist_window` selector added 2026-10-28 — `sample` default for committed runs, `episode`
+for the corrected protocol; and the `view_count_range` guard removed 2026-09-24 so the ladder
+can run `[1, 2]`),
 `eval_novel_view.py` (`--m3-slots`, `--eef-hist-steps`, the elevation orbit),
 `summarize_novel_view.py` (sort key for `el_*` names), and the `getattr`-guarded aux log lines
 in the upstream `train_diffusion_unet_image_workspace.py` (`step_log['aux_loss']`, plus the
