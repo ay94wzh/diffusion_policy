@@ -342,11 +342,13 @@ class ViewpointImageWrapper(RobomimicImageWrapper):
     def _push_eef(self, raw_obs):
         """Append the current EE pose, seeding the buffer at episode start.
 
-        The seed repeats the first pose `eef_hist_steps` times, which is the
-        same rule `MultiViewImageDataset._eef_history` applies when clipping the
-        history to the sample window. If the two ever disagree the history is
-        wrong only at episode starts -- nearly invisible in training, and wrong
-        at rollout -- so both sides share `eef_hist_to_cam` and this pad rule.
+        The seed repeats the first pose `eef_hist_steps` times at the EPISODE
+        start; thereafter the deque rolls one true pose per env step. This is
+        the target semantics. `MultiViewImageDataset._eef_history` matches it
+        when `eef_hist_window='episode'`; the legacy `'sample'` mode instead
+        clips at each sample window's start and therefore disagrees
+        mid-episode. Both sides share `eef_hist_to_cam` and the step-major
+        flattening.
         """
         pose = (np.asarray(raw_obs['robot0_eef_pos'], dtype=np.float64),
                 np.asarray(raw_obs['robot0_eef_quat'], dtype=np.float64),

@@ -31,7 +31,7 @@ from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs, Jpeg2
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.dataset.multiview_image_dataset import (
     MultiViewImageDataset, quat_wxyz_to_mat, fovy_to_intrinsics,
-    project_world_to_pixel,
+    project_world_to_pixel, eef_hist_to_cam,
 )
 register_codecs()
 
@@ -212,6 +212,151 @@ def test_dataset(path, shape_meta, episode_ends):
     print('camera_params OK (azimuths, poses, fovy, intrinsics, base pose)')
 
 
+def _expected_history(frames, ep_start, h):
+    frames = np.asarray(frames, dtype=np.int64)
+    return np.clip(frames[:, None] - (h - 1) + np.arange(h)[None, :],
+                   int(ep_start), frames[:, None])
+
+
+def _find_row(ds, buffer_start=None, sample_start=None, tail=False):
+    for i, row in enumerate(ds.sampler.indices):
+        b, e, ss, se = (int(x) for x in row)
+        if buffer_start is not None and b != buffer_start:
+            continue
+        if sample_start is not None and ss != sample_start:
+            continue
+        if tail and (se - ss) >= ds.horizon:
+            continue
+        return i, b, e, ss, se
+    raise AssertionError(
+        f'no sample with buffer_start={buffer_start}, '
+        f'sample_start={sample_start}, tail={tail}')
+
+
+def test_eef_history(path, shape_meta):
+    """Pin both EE-history window rules and the training/inference match.
+
+    'sample' is the legacy sample-window clip (kept for committed runs);
+    'episode' is the true per-observation past-four that both rollout paths
+    serve. The last check simulates the rollout deque and is the regression
+    that would have caught the original mismatch.
+    """
+    rb = ReplayBuffer.create_from_path(path, mode='r')
+    ends = np.asarray(rb.episode_ends[:], dtype=np.int64)
+    pos_all = np.asarray(rb['robot0_eef_pos'][:])
+
+    common = dict(
+        shape_meta=shape_meta, dataset_path=path, horizon=4,
+        pad_before=1, pad_after=7, n_obs_steps=2, abs_action=True,
+        view_pool=[0, 1, 2], view_count_range=[1, 3],
+        eef_hist_steps=4, seed=0, val_ratio=0.34)
+    ds = MultiViewImageDataset(eef_hist_window='episode', **common)
+    assert ds.eef_hist_window == 'episode'
+    h = ds.eef_hist_steps
+
+    # ordinary mid-episode sample in episode 1 (episode start is frame 5)
+    idx, b, _, _, _ = _find_row(ds, buffer_start=8)
+    assert b == 8
+    pos, quat, grip = ds._eef_history(idx)
+    np.testing.assert_array_equal(
+        pos, pos_all[_expected_history([8, 9], 5, h)])
+
+    # the legacy 'sample' rule on the same sample: only B and B+1 appear
+    ds.eef_hist_window = 'sample'
+    pos_s, _, _ = ds._eef_history(idx)
+    np.testing.assert_array_equal(
+        pos_s, pos_all[np.array([[8, 8, 8, 8], [8, 8, 8, 9]])])
+    ds.eef_hist_window = 'episode'
+
+    # episode-start padded sample: H repeats of the first pose
+    idx0, b0, _, ss0, _ = _find_row(ds, buffer_start=0, sample_start=1)
+    assert b0 == 0 and ss0 == 1
+    pos0, _, _ = ds._eef_history(idx0)
+    np.testing.assert_array_equal(
+        pos0, pos_all[np.zeros((2, h), dtype=np.int64)])
+
+    # first sample of a later episode: no bleed from the previous episode
+    idx1, b1, _, _, _ = _find_row(ds, buffer_start=5, sample_start=0)
+    pos1, _, _ = ds._eef_history(idx1)
+    np.testing.assert_array_equal(
+        pos1, pos_all[_expected_history([5, 6], 5, h)])
+
+    # episode-end tail sample (n_sample < horizon)
+    idxt, bt, et, sst, set_ = _find_row(ds, tail=True)
+    n_sample = set_ - sst
+    frames_t = bt + np.clip(np.arange(2) - sst, 0, n_sample - 1)
+    ep_t = int(np.searchsorted(ends, bt, side='right'))
+    start_t = 0 if ep_t == 0 else int(ends[ep_t - 1])
+    post, _, _ = ds._eef_history(idxt)
+    np.testing.assert_array_equal(
+        post, pos_all[_expected_history(frames_t, start_t, h)])
+
+    # validation-dataset sample uses the same episode-anchored rule
+    val = ds.get_validation_dataset()
+    assert val.eef_hist_window == 'episode'
+    vb, _, vss, vse = (int(x) for x in val.sampler.indices[0])
+    vn = vse - vss
+    vframes = vb + np.clip(np.arange(2) - vss, 0, vn - 1)
+    vep = int(np.searchsorted(ends, vb, side='right'))
+    vstart = 0 if vep == 0 else int(ends[vep - 1])
+    pv, _, _ = val._eef_history(0)
+    np.testing.assert_array_equal(
+        pv, pos_all[_expected_history(vframes, vstart, h)])
+
+    # H longer than the episode: repeat the episode's first frame
+    ds8 = MultiViewImageDataset(
+        eef_hist_window='episode', **{**common, 'eef_hist_steps': 8})
+    i8, _, _, _, _ = _find_row(ds8, buffer_start=4, sample_start=0)
+    p8, _, _ = ds8._eef_history(i8)
+    np.testing.assert_array_equal(
+        p8, pos_all[_expected_history([4, 4], 0, 8)])
+
+    # To=3: one window per observation frame, not one window per sample
+    ds3 = MultiViewImageDataset(
+        eef_hist_window='episode',
+        **{**common, 'n_obs_steps': 3, 'pad_before': 2})
+    i3, _, _, _, _ = _find_row(ds3, buffer_start=8)
+    p3, _, _ = ds3._eef_history(i3)
+    np.testing.assert_array_equal(
+        p3, pos_all[_expected_history([8, 9, 10], 5, 4)])
+
+    # the default stays the legacy rule
+    dsd = MultiViewImageDataset(**common)
+    assert dsd.eef_hist_window == 'sample'
+    pd, _, _ = dsd._eef_history(idx)
+    np.testing.assert_array_equal(
+        pd, pos_all[np.array([[8, 8, 8, 8], [8, 8, 8, 9]])])
+
+    # emitted history is the camera-frame transform of `_eef_history`,
+    # flattened step-major, and paired with the view that supplied the image
+    dsc = MultiViewImageDataset(
+        eef_hist_window='episode',
+        **{**common, 'view_count_range': [1, 1]})
+    ci, _, _, _, _ = _find_row(dsc, buffer_start=8)
+    batch = dsc[ci]['obs']
+    hist = batch['view_eef_hist'].numpy()[:, 0]       # (To, 44)
+    cam = batch[dsc.cam_keys[0]].numpy()[0]
+    v = next(v for v in range(N_VIEWS)
+             if np.allclose(cam, dsc.cam_table[v], atol=1e-6))
+    p, q, g = dsc._eef_history(ci)
+    want_hist = eef_hist_to_cam(
+        p, q, g, dsc.cam_table[v][:3], dsc.cam_table[v][3:7]).reshape(2, -1)
+    np.testing.assert_allclose(hist, want_hist, atol=1e-6)
+
+    # rollout-deque equivalence at every frame of the first episode. This is
+    # the check the original dataset would fail from frame 1 onward.
+    buf = [0] * h
+    for f in range(h + 1):
+        if f > 0:
+            buf = (buf + [f])[-h:]
+        j, _, _, _, _ = _find_row(ds, buffer_start=f, sample_start=0)
+        pj, _, _ = ds._eef_history(j)
+        np.testing.assert_array_equal(pj[0], pos_all[np.array(buf)])
+
+    print('EE-history windows OK (sample vs episode, start/tail/val, '
+          'H>episode, To>2, camera frame, rollout deque)')
+
+
 def test():
     tmp = tempfile.mkdtemp(prefix='multiview_test_')
     try:
@@ -219,6 +364,7 @@ def test():
         shape_meta, episode_ends = build_synthetic_zarr(path)
         test_camera_math()
         test_dataset(path, shape_meta, episode_ends)
+        test_eef_history(path, shape_meta)
         print('ALL MULTIVIEW DATASET CHECKS PASSED')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

@@ -1,0 +1,133 @@
+name: enc_b_image_abs_multiview_az75
+
+# Encoder ladder, stage B: the original M3 encoder (shared ResNet18 with the
+# 6 Pluecker channels + per-stage FiLM from the camera-frame EE history) with
+# the CORRECTED EE-history protocol, on the clear run's K=11 recipe.
+#
+# One variable that matters for reading every later stage:
+# `eef_hist_window: episode` makes `_eef_history` read the true past H poses
+# inside the same episode and repeat the first pose only at the episode start.
+# The legacy `'sample'` default instead clips at each sample window's start,
+# which under To=2 gives [B,B,B,B] / [B,B,B,B+1] -- the two observation frames
+# only. Both rollout paths (CamKeyImageWrapper, ViewpointImageWrapper) use a
+# deque seeded at the episode start, so `episode` is the mode that matches
+# inference. `m4_base...` and the M3 task configs keep the `'sample'` default
+# so their committed runs stay reproducible from their saved configs.
+#
+# No aux head: this is the M3-family baseline the S/R/RH/RHG ladder compares
+# against. `m4base` (base-frame aux) remains the external reference.
+#
+# Everything else is the clear run's recipe: K=11 slots over ring indices 1..11
+# == az -75..+75 every 15 deg (the full ring minus the two +-90 views; NOTHING
+# is held out), N drawn from [1,11] (mean 6.0), 201 epochs, seed 42.
+
+shape_meta: &shape_meta
+  # acceptable types: rgb, low_dim
+  obs:
+    view_slot_00_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_01_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_02_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_03_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_04_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_05_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_06_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_07_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_08_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_09_image:
+      shape: [3, 84, 84]
+      type: rgb
+    view_slot_10_image:
+      shape: [3, 84, 84]
+      type: rgb
+    robot0_eef_pos:
+      shape: [3]
+      # type default: low_dim
+    robot0_eef_quat:
+      shape: [4]
+    robot0_gripper_qpos:
+      shape: [2]
+  action:
+    shape: [10]
+
+task_name: &task_name square
+dataset_type: &dataset_type ph
+# source hdf5 (used only to build the evaluation env) and the generated zarr
+hdf5_path: &hdf5_path data/robomimic/datasets/${task.task_name}/${task.dataset_type}/image_abs.hdf5
+zarr_path: &zarr_path data/multiview/${task.task_name}_${task.dataset_type}_ring13.zarr
+abs_action: &abs_action True
+# ring indices 1..11 == az -75/-60/-45/-30/-15/0/+15/+30/+45/+60/+75 (every 15deg,
+# the full ring minus the two +-90 views at indices 0 and 12)
+train_view_pool: &train_view_pool [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+# active views per sample, drawn uniformly from [lo, hi]. hi must equal the slot
+# count (slots are filled without replacement).
+view_count_range: &view_count_range [1, 11]
+eef_hist_steps: &eef_hist_steps 4
+# 'episode' = true past H poses ending at each obs frame, clipped only at the
+# episode start. This is what the rollout deque serves; 'sample' is the legacy
+# window-start clip kept for committed runs.
+eef_hist_window: &eef_hist_window episode
+emit_aux_action: &emit_aux_action False
+
+env_runner:
+  # the stock runner cannot serve the slot/cam/mask/history keys
+  _target_: diffusion_policy.env_runner.cam_key_image_runner.CamKeyImageRunner
+  dataset_path: *hdf5_path
+  shape_meta: *shape_meta
+  m3_slots: 11
+  eef_hist_steps: *eef_hist_steps
+  # The live env has ONE camera, so an in-training rollout is an N=1 inference
+  # at az_0 -- the M5 setting. It is a real number, just not a K-view one; the
+  # headline numbers come from eval_novel_view.py --m3-slots 11.
+  n_train: 6
+  n_train_vis: 2
+  train_start_idx: 0
+  n_test: 50
+  n_test_vis: 4
+  test_start_seed: 100000
+  # use python's eval function as resolver, single-quoted string as argument
+  max_steps: ${eval:'500 if "${task.dataset_type}" == "mh" else 400'}
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+  render_obs_key: 'agentview_image'
+  fps: 10
+  crf: 22
+  past_action: ${past_action_visible}
+  abs_action: *abs_action
+  tqdm_interval_sec: 1.0
+  n_envs: 14
+
+dataset:
+  _target_: diffusion_policy.dataset.multiview_image_dataset.MultiViewImageDataset
+  shape_meta: *shape_meta
+  dataset_path: *zarr_path
+  horizon: ${horizon}
+  pad_before: ${eval:'${n_obs_steps}-1+${n_latency_steps}'}
+  pad_after: ${eval:'${n_action_steps}-1'}
+  n_obs_steps: ${dataset_obs_steps}
+  abs_action: *abs_action
+  # M3 mode: K slots filled from view_pool, plus cam/mask/history keys
+  view_pool: *train_view_pool
+  view_count_range: *view_count_range
+  eef_hist_steps: *eef_hist_steps
+  eef_hist_window: *eef_hist_window
+  emit_aux_action: *emit_aux_action
+  seed: 42
+  val_ratio: 0.02

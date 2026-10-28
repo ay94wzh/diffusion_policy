@@ -92,6 +92,19 @@ data/*
 !data/z_run.sh
 !data/z_eval.sh
 !data/z_analysis.sh
+# 2026-10-28: the encoder ladder's B baseline -- the M3 encoder on the clear
+# run's K=11 recipe with the corrected EE-history protocol. B0/B1 differ by one
+# flag (`task.dataset.eef_hist_window`); the run driver's header carries the
+# PRE-REGISTRATION (the banded B1-B0 comparison) and the history-protocol
+# rationale. Same tracking rule as the drivers above.
+!data/enc_b_run.sh
+!data/enc_b_eval.sh
+# 2026-10-28: the encoder ladder's S stage -- pure-RGB ResNet18 layer3 spatial
+# tokens read by one shared query, then the original cross-view fusion. The run
+# driver's header carries the PRE-REGISTRATION (the banded S-B1 comparison,
+# the non-pairing RNG note, the mechanism-live gates). Same tracking rule.
+!data/enc_s_run.sh
+!data/enc_s_eval.sh
 # z-supervision runs (za zalign / zb zcons / zc zboth): logs only, never the
 # 4.6 GB checkpoints (same rule as the blocks below). The run driver's first
 # shell writes data/z_calib_env.sh, the shared (W_ALIGN, W_CONS) -- a local
@@ -111,6 +124,18 @@ data/multiview/*
 !data/multiview/*.png
 !data/outputs/
 data/outputs/*
+# Encoder ladder B0/B1/S: exceptions must come AFTER `data/outputs/*`; an
+# earlier block is re-ignored by that rule. Logs only; the 4.6 GB checkpoints
+# stay out.
+!data/outputs/run_square_enc_b0_s42_200ep/
+data/outputs/run_square_enc_b0_s42_200ep/*
+!data/outputs/run_square_enc_b0_s42_200ep/logs.json.txt
+!data/outputs/run_square_enc_b1_s42_200ep/
+data/outputs/run_square_enc_b1_s42_200ep/*
+!data/outputs/run_square_enc_b1_s42_200ep/logs.json.txt
+!data/outputs/run_square_enc_s_s42_200ep/
+data/outputs/run_square_enc_s_s42_200ep/*
+!data/outputs/run_square_enc_s_s42_200ep/logs.json.txt
 !data/outputs/run_*_abs_single_s42_200ep/
 data/outputs/run_*_abs_single_s42_200ep/*
 !data/outputs/run_*_abs_single_s42_200ep/logs.json.txt

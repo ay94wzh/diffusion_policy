@@ -274,6 +274,7 @@ class MultiViewImageDataset(BaseImageDataset):
             view_pool=None,
             view_count_range=None,
             eef_hist_steps=4,
+            eef_hist_window='sample',
             emit_aux_action=False,
             emit_aux_view_pose=False,
             emit_second_draw=False,
@@ -321,6 +322,21 @@ class MultiViewImageDataset(BaseImageDataset):
         self.view_mask_key = view_mask_key
         self.eef_hist_key = eef_hist_key
         self.eef_hist_steps = int(eef_hist_steps)
+        # Where the 4-step EE-history window is anchored:
+        #   'sample'  -- legacy: clip to the sample window's first real frame,
+        #                i.e. every ordinary sample sees only its first obs
+        #                frame repeated (see `_eef_history`). Kept as the
+        #                default so every committed run stays reproducible from
+        #                its saved config.
+        #   'episode' -- the true past H poses ending at each obs frame, inside
+        #                the same episode; repeat the first pose only at the
+        #                episode start. This is what both rollout paths
+        #                (`CamKeyImageWrapper`, `ViewpointImageWrapper`) serve.
+        self.eef_hist_window = str(eef_hist_window)
+        if self.eef_hist_window not in ('sample', 'episode'):
+            raise ValueError(
+                f'eef_hist_window must be "sample" or "episode", got '
+                f'{eef_hist_window!r}')
         self.view_count_range = None
         self.cam_table = None
         # M4: emit the per-slot auxiliary action chunk alongside 'action'.
@@ -490,6 +506,12 @@ class MultiViewImageDataset(BaseImageDataset):
             key_first_k=key_first_k)
 
         self.replay_buffer = replay_buffer
+        # Cache the episode boundaries once: `metadata['episode_ends']` is a
+        # zarr array and `_eef_history` (episode mode) resolves a sample's
+        # episode on every __getitem__. The validation dataset is a shallow
+        # copy, so it shares this array.
+        self._episode_ends = np.asarray(
+            replay_buffer.episode_ends[:], dtype=np.int64)
         self.sampler = sampler
         self.sampler_keys = sampler_keys
         self.shape_meta = shape_meta
@@ -673,24 +695,44 @@ class MultiViewImageDataset(BaseImageDataset):
     def _eef_history(self, idx: int):
         """(To, H, ...) base-frame EE history ending at each obs step.
 
-        The H most recent steps at each obs step, with the SAME pad rule the obs
-        frames use (`_view_obs_frames`): indices before the sample window repeat
-        the window's first frame rather than reading out of range.
+        Two window rules, selected by `self.eef_hist_window`:
 
-        `eval_novel_view.py` reproduces this rule by seeding its history buffer
-        with H copies of the first observed pose -- if the two ever disagree the
-        history would be wrong only at episode starts, which is nearly invisible
-        in training and wrong at rollout, so they share one transform
-        (`eef_hist_to_cam`) and this documented pad rule.
+        - ``'sample'`` (legacy): the H-step window is clipped to the sample
+          window's real frames (``buffer_start ... buffer_end-1``). With To=2
+          this gives ``[B,B,B,B]`` for obs step 0 and ``[B,B,B,B+1]`` for obs
+          step 1 -- effectively no history beyond the current observation.
+        - ``'episode'``: the true H most recent frames ending at each
+          observation frame, inside the same episode; only at the episode start
+          is the first pose repeated. This is what both rollout paths serve:
+          `CamKeyImageWrapper` and `ViewpointImageWrapper` seed a deque with H
+          copies of the first pose at reset and append once per env step.
+
+        Both modes share the transform (`eef_hist_to_cam`) and the step-major
+        flattening with the rollout paths; ``'episode'`` also shares their
+        temporal window. ``'sample'`` is kept only for reproducing committed
+        runs from their saved configs.
         """
         buffer_start, _, sample_start, sample_end = self.sampler.indices[idx]
         n_obs = self.n_obs_steps if self.n_obs_steps is not None else self.horizon
         n_sample = sample_end - sample_start
         rel = np.clip(np.arange(n_obs) - sample_start, 0, n_sample - 1)   # (To,)
         h = self.eef_hist_steps
-        hist_rel = np.clip(rel[:, None] - (h - 1) + np.arange(h)[None, :],
-                           0, n_sample - 1)                                # (To,H)
-        flat = (buffer_start + hist_rel).reshape(-1)
+        if self.eef_hist_window == 'episode':
+            frames = buffer_start + rel                               # (To,)
+            # `side='right'` is required: at the first frame of a later
+            # episode buffer_start == episode_ends[k-1], and 'left' would
+            # resolve the previous episode's start.
+            ep_idx = int(np.searchsorted(
+                self._episode_ends, buffer_start, side='right'))
+            ep_start = 0 if ep_idx == 0 else int(self._episode_ends[ep_idx - 1])
+            hist_idx = np.clip(
+                frames[:, None] - (h - 1) + np.arange(h)[None, :],
+                ep_start, frames[:, None])                            # (To,H)
+        else:
+            hist_idx = buffer_start + np.clip(
+                rel[:, None] - (h - 1) + np.arange(h)[None, :],
+                0, n_sample - 1)                                      # (To,H)
+        flat = hist_idx.reshape(-1)
         out = []
         for key in ('robot0_eef_pos', 'robot0_eef_quat', 'robot0_gripper_qpos'):
             arr = np.asarray(self.replay_buffer[key].oindex[flat])

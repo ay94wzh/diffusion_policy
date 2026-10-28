@@ -105,8 +105,11 @@ class CamKeyImageWrapper(RobomimicImageWrapper):
                 np.asarray(raw_obs['robot0_eef_quat'], dtype=np.float64),
                 np.asarray(raw_obs['robot0_gripper_qpos'], dtype=np.float64))
         if len(self._eef_hist) == 0:
-            # seed by repeating the first pose: the same pad rule
-            # MultiViewImageDataset._eef_history applies at the window start
+            # Seed by repeating the first pose at the EPISODE start; thereafter
+            # the deque rolls one true pose per env step. This is the window
+            # rule MultiViewImageDataset._eef_history serves when
+            # eef_hist_window='episode'. The legacy 'sample' mode clips at each
+            # sample window's start instead, so it differs mid-episode.
             for _ in range(self.eef_hist_steps):
                 self._eef_hist.append(pose)
         else:

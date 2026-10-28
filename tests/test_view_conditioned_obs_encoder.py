@@ -785,6 +785,37 @@ def test_m3_configs():
           f'7-slot pool without its extremes)')
 
 
+def test_enc_b_config():
+    """The encoder ladder's B baseline: corrected history, no aux head."""
+    import hydra
+    from omegaconf import OmegaConf
+    OmegaConf.register_new_resolver("eval", eval, replace=True)
+    cfg_dir = os.path.join(repo_root, 'diffusion_policy', 'config')
+    with hydra.initialize_config_dir(config_dir=cfg_dir, version_base=None):
+        cfg = hydra.compose(
+            config_name='train_diffusion_unet_image_workspace_enc_b_latent',
+            overrides=['task.task_name=square'])
+        cfg0 = hydra.compose(
+            config_name='train_diffusion_unet_image_workspace_enc_b_latent',
+            overrides=['task.task_name=square',
+                       'task.dataset.eef_hist_window=sample'])
+    assert cfg.task.dataset.eef_hist_window == 'episode'
+    assert cfg0.task.dataset.eef_hist_window == 'sample'
+    assert cfg.task.dataset.emit_aux_action is False
+    assert ('diffusion_unet_image_policy.DiffusionUnetImagePolicy'
+            in cfg.policy._target_)
+    assert cfg.task.env_runner.m3_slots == 11
+    assert tuple(cfg.task.view_count_range) == (1, 11)
+    assert list(cfg.task.train_view_pool) == list(range(1, 12))
+    assert (cfg.task.dataset.eef_hist_steps
+            == cfg.task.env_runner.eef_hist_steps
+            == cfg.policy.obs_encoder.eef_hist_steps
+            == 4)
+    assert cfg.policy.obs_encoder.use_plucker is True
+    assert cfg.policy.obs_encoder.use_eef_hist is True
+    print('B config OK (episode history, no aux head, K=11 pool [1..11])')
+
+
 def test():
     test_camera_math_still_valid()
     test_quat_convention()
@@ -801,6 +832,7 @@ def test():
     test_dataset_plumbing()
     test_view_count_range_is_honoured()
     test_m3_configs()
+    test_enc_b_config()
     print('ALL VIEW-CONDITIONED ENCODER CHECKS PASSED')
 
 
