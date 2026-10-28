@@ -91,7 +91,8 @@ in-distribution **0.653 vs 0.813** (−0.160) and interpolation **0.618 vs 0.784
 just outside the 0.15 band; past-ring is a null (0.355 vs 0.365, both at the ~0.36 floor), and
 elevation is lower (0.293 vs 0.347, descriptive). B1 matches the committed `m4base` reference
 (0.813/0.784 vs 0.796/0.774), so it is a valid internal baseline. S is one seed and its margins
-are 0.010–0.016 over the threshold; **R/RH/RHG are not implemented**.
+are 0.010–0.016 over the threshold; **R is implemented and CPU-gated (2026-10-29) but untrained;
+RH/RHG are not implemented**.
 
 ## Status
 
@@ -119,6 +120,7 @@ are 0.010–0.016 over the threshold; **R/RH/RHG are not implemented**.
 | **z supervision** (`zalign`/`zcons`/`zboth`) | 2026-10-28 — `PLAN_Z.md`: L2-normalised `z_v` shared-semantics alignment (a), cross-view ε-consistency on `z_g` at W=190.46 (b), both (c); same two weights in all three so `c` decomposes as `a + b`; baseline = the committed `m4base`, not retrained | **`a` null, `b` and `c` collapse** — `a` reproduces A to three decimals (0.7964/0.764) because its head collapses to a constant (`cos_across` 1.0000, `L_align` 3.5e-09) and the encoder is untouched (screen 12.2×, all four readouts in-range); `b` 0.155/0.150 and `c` 0.129/0.150 with encoders at **1.6×/1.7×** random init and `z_g` uninformative (3 of 4 readouts MOVED); **`c` = `b` to four decimals off-grid**; the registered `diff_loss` R2 instrument **did not fire** |
 | **encoder B** (`enc_b0`/`enc_b1`) | 2026-10-29 — corrected `eef_hist_window=episode` (B1) against the legacy `sample` (B0), one variable; K=11 pool [1..11], N ∈ [1,11], 201 epochs, seed 42 | **history null** — every registered mean inside the 0.15 band: in-dist −0.062, interp −0.072, past −0.045, elev +0.020 (descriptive); B1 is the encoder ladder's internal baseline |
 | **encoder S** (`enc_s`) | 2026-10-29 — pure-RGB layer3 spatial tokens + one shared 512-d query + 8-head intra-image attention, B's masked cross-view fusion; structural, not RNG-locked to B | **negative on the ring** — in-dist 0.653 vs B1 0.813 (−0.160), interp 0.618 vs 0.784 (−0.166), both just outside the 0.15 band; past-ring null (0.355 vs 0.365); elevation 0.293 vs 0.347; seed 42 only |
+| **encoder R** (`enc_r`) | 2026-10-29 — S + feature-level ray encoding: Plücker `[d, m/L]` at each layer3 cell's receptive-field centre (same crop window), MLP → 512-d added to the attention KEY; 5,284,928 encoder params | **implemented / CPU-gated / untrained** — code, configs and run/eval scripts landed; the CPU suite pins the ray convention, crop alignment, masking and the activation order |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -1246,7 +1248,8 @@ and the episode/seed protocol is unchanged, so the numbers are unaffected.
 **Artifacts.** `data/outputs/run_square_enc_{b0,b1,s}_s42_200ep/logs.json.txt` (probe scalars per
 epoch); `data/eval_{interp,heldout,el}_square_enc_{b0,b1,s}/eval_log.json`; the run dirs under
 `/data/zihan/runs/run_square_enc_*` (~9 GB each) hold `latest.ckpt` and the latent-probe npz and
-stay on `miroc-server`. **R, RH and RHG are not implemented.**
+stay on `miroc-server`. **R is implemented and CPU-gated (2026-10-29) but untrained; RH and RHG
+are not implemented.**
 
 ## Findings
 
@@ -1390,10 +1393,12 @@ threshold; a second seed is the registered confirmation step. R/RH/RHG remain un
   caution again, at a stronger setting.
 - **Does the S regression survive a second seed, and can R/RH/RHG recover the ring?** S is
   −0.160 in-distribution and −0.166 interpolation against B1, both just outside the 0.15 band,
-  on one seed; the plan's next comparison is seed 43/44. The remaining encoder-ladder stages —
-  R (ray encoding on the keys), RH (full EE-trajectory-conditioned shared query), RHG
-  (point-to-ray attention bias) — are specified in `ENCODER_EXPERIMENT_PLAN.md` but not yet
-  implemented, so whether any recovers B1's ring performance is open.
+  on one seed; the plan's next comparison is seed 43/44. **R (ray encoding on the attention
+  keys) is implemented and CPU-gated as of 2026-10-29** — `ray_spatial_readout_obs_encoder.py`,
+  the `enc_r` configs and `data/enc_r_{run,eval}.sh`; it is untrained, so whether the ray
+  address recovers B1's ring performance is open. RH (full EE-trajectory-conditioned shared
+  query) and RHG (point-to-ray attention bias) remain specified but unimplemented in
+  `ENCODER_EXPERIMENT_PLAN.md`.
 
 ## Where the rest is
 
@@ -1434,6 +1439,7 @@ threshold; a second seed is the registered confirmation step. R/RH/RHG remain un
 | joint supervision (`zvzg`) | `config/task/zvzg_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_zvzg_latent.yaml`, `policy/diffusion_unet_image_policy_zvzg.py`, `tests/test_zvzg_supervision.py`, `data/zvzg_{run,eval,analysis}.sh`; both dataset targets reuse the `m4base`/`zgpose` emissions unchanged; seam: `train_diffusion_unet_image_workspace.py` (per-term `aux_action_loss`/`aux_pose_loss` log lines) |
 | probabilistic fusion (`prob_b/c/d`) | `model/vision/per_view_gaussian.py`, `model/vision/prob_view_conditioned_obs_encoder.py`, `policy/diffusion_unet_image_policy_prob.py`, `workspace/train_diffusion_unet_image_workspace_probprobe.py`, `config/task/prob_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_prob_latent.yaml`, `tests/test_prob_gaussian_fusion.py`, `data/prob_{run,eval}.sh`; seam: `train_diffusion_unet_image_workspace_latentprobe.py` (`_probe_extras` extension hook — the base returns nothing, so every existing run's npz/JSONL artifacts stay byte-identical) |
 | encoder ladder (B/S) | `model/vision/spatial_readout_obs_encoder.py`, `config/task/enc_{b,s}_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_enc_{b,s}_latent.yaml`, `data/enc_{b,s}_{run,eval}.sh`, `tests/test_spatial_readout_obs_encoder.py` (plus the 32-line extension of `tests/test_view_conditioned_obs_encoder.py`), `ENCODER_EXPERIMENT_PLAN.md`, `ENCODER_REFERENCES.md`; seam: `multiview_image_dataset.py` `eef_hist_window` |
+| encoder ladder (R) | `model/vision/ray_spatial_readout_obs_encoder.py`, `model/vision/plucker.py` (`plucker_ray_map_at`, `ray_dirs_cam_at`), `config/task/enc_r_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_enc_r_latent.yaml`, `data/enc_r_{run,eval}.sh`, `tests/test_ray_spatial_readout_obs_encoder.py`; same `eef_hist_window` seam as B/S, no new dataset/runner keys |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE history;

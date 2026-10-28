@@ -105,6 +105,13 @@ data/*
 # the non-pairing RNG note, the mechanism-live gates). Same tracking rule.
 !data/enc_s_run.sh
 !data/enc_s_eval.sh
+# 2026-10-29: the encoder ladder's R stage -- S plus feature-level ray
+# encoding on the attention key. The run driver's header carries the
+# PRE-REGISTRATION (R vs S on the ring, the non-pairing RNG note, the
+# mechanism-live gates and the `use_ray_encoding=False` diagnostic). Same
+# tracking rule.
+!data/enc_r_run.sh
+!data/enc_r_eval.sh
 # z-supervision runs (za zalign / zb zcons / zc zboth): logs only, never the
 # 4.6 GB checkpoints (same rule as the blocks below). The run driver's first
 # shell writes data/z_calib_env.sh, the shared (W_ALIGN, W_CONS) -- a local
@@ -136,6 +143,9 @@ data/outputs/run_square_enc_b1_s42_200ep/*
 !data/outputs/run_square_enc_s_s42_200ep/
 data/outputs/run_square_enc_s_s42_200ep/*
 !data/outputs/run_square_enc_s_s42_200ep/logs.json.txt
+!data/outputs/run_square_enc_r_s42_200ep/
+data/outputs/run_square_enc_r_s42_200ep/*
+!data/outputs/run_square_enc_r_s42_200ep/logs.json.txt
 !data/outputs/run_*_abs_single_s42_200ep/
 data/outputs/run_*_abs_single_s42_200ep/*
 !data/outputs/run_*_abs_single_s42_200ep/logs.json.txt

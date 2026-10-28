@@ -106,6 +106,70 @@ def ray_dirs_cam(fovy_deg, h: int, w: int,
     return d / d.norm(dim=-3, keepdim=True).clamp_min(1e-12)
 
 
+def ray_dirs_cam_at(u: Tensor, v: Tensor, fovy_deg, h: int, w: int,
+                    dtype: Optional[torch.dtype] = None,
+                    device=None) -> Tensor:
+    """Unit ray directions at arbitrary pixel-centre coordinates, ``(..., 3, n)``.
+
+    ``u``/``v`` are continuous coordinates in the **original** image frame
+    (``h``, ``w`` set the intrinsics), using ``ray_dirs_cam``'s convention:
+    pixel index ``j`` has centre ``u = j + 0.5``. Unlike ``ray_dirs_cam``, which
+    always samples the full ``h x w`` grid, this evaluates any set of points --
+    the R encoder uses it to put one ray at each layer3 feature cell's
+    receptive-field centre without materialising the full map.
+
+    Shapes: ``u``/``v`` ``(..., n)`` and identical; ``fovy_deg`` a scalar or
+    broadcastable with their leading shape; the result is ``(..., 3, n)``.
+    """
+    if dtype is None:
+        dtype = torch.float32
+    if tuple(u.shape) != tuple(v.shape):
+        raise ValueError(
+            f'u and v must have identical shapes, got {tuple(u.shape)} and '
+            f'{tuple(v.shape)}')
+    if u.dim() == 0:
+        raise ValueError(
+            'u/v need a sample axis; pass (n,) or (..., n), not 0-dim scalars')
+    fovy = torch.as_tensor(fovy_deg, dtype=dtype, device=device)
+    u = torch.as_tensor(u, dtype=dtype, device=device)
+    v = torch.as_tensor(v, dtype=dtype, device=device)
+    f = (h / 2.0) / torch.tan(torch.deg2rad(fovy) / 2.0)        # (...)
+    # +x right, +y up (so v is negated), -z forward -- same as ray_dirs_cam
+    x = (u - w / 2.0) / f[..., None]
+    y = -(v - h / 2.0) / f[..., None]
+    d = torch.stack([x, y, torch.full_like(x, -1.0)], dim=-2)   # (..., 3, n)
+    return d / d.norm(dim=-2, keepdim=True).clamp_min(1e-12)
+
+
+def plucker_ray_map_at(cam_pos: Tensor, cam_quat_wxyz: Tensor, fovy_deg,
+                       h: int, w: int, u: Tensor, v: Tensor) -> Tensor:
+    """Pluecker embedding ``[d(3) | m(3)]`` at arbitrary pixel coordinates.
+
+    Same convention and world-frame moments as ``plucker_ray_map`` (see the
+    module docstring); ``u``/``v`` are continuous coordinates in the original
+    ``h x w`` image (pixel index ``j`` has centre ``j + 0.5``). ``cam_pos`` is
+    ``(..., 3)`` and ``cam_quat_wxyz`` ``(..., 4)``; ``u``/``v`` are
+    ``(..., n)`` with the same leading shape. Returns ``(..., 6, n)``.
+    """
+    if cam_pos.shape[-1] != 3:
+        raise ValueError(f'expected a (..., 3) position, got {tuple(cam_pos.shape)}')
+    if cam_pos.shape[:-1] != cam_quat_wxyz.shape[:-1]:
+        raise ValueError(
+            f'cam_pos leading shape {tuple(cam_pos.shape[:-1])} does not match '
+            f'cam_quat_wxyz {tuple(cam_quat_wxyz.shape[:-1])}')
+    if tuple(u.shape[:-1]) != tuple(cam_pos.shape[:-1]):
+        raise ValueError(
+            f'u/v leading shape {tuple(u.shape[:-1])} does not match the camera '
+            f'{tuple(cam_pos.shape[:-1])}; a per-view camera needs one set of '
+            f'coordinates per view, not a shared grid')
+    R = quat_wxyz_to_mat_torch(cam_quat_wxyz)                   # (..., 3, 3)
+    d_cam = ray_dirs_cam_at(
+        u, v, fovy_deg, h, w, dtype=R.dtype, device=R.device)   # (..., 3, n)
+    d_world = torch.matmul(R, d_cam)
+    m_world = torch.cross(cam_pos.unsqueeze(-1), d_world, dim=-2)
+    return torch.cat([d_world, m_world], dim=-2)                # (..., 6, n)
+
+
 def plucker_ray_map(cam_pos: Tensor, cam_quat_wxyz: Tensor, fovy_deg,
                     h: int, w: int) -> Tensor:
     """Pluecker embedding ``[d(3) | m(3)]`` of the camera's rays.
