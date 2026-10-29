@@ -359,9 +359,12 @@ def check_arrays(entry, meta, first_state_idx):
     """Gate violations for one epoch's arrays (empty list = clean)."""
     bad = []
     S, K, D = int(meta['n_states']), int(meta['K']), int(meta['fused_dim'])
+    # LQ's z_views is 256-wide while z_global is 512-wide; older snapshots
+    # have no zv_dim and are checked against fused_dim exactly as before.
+    Dz = int(meta.get('zv_dim', D))
     zv, zg, zn = entry['zv'], entry['zg'], entry['zg_n1']
-    if zv.shape != (S, K, D):
-        bad.append(f'zv shape {zv.shape} != {(S, K, D)}')
+    if zv.shape != (S, K, Dz):
+        bad.append(f'zv shape {zv.shape} != {(S, K, Dz)}')
     if zg.shape != (S, D):
         bad.append(f'zg shape {zg.shape} != {(S, D)}')
     if zn.shape != (S, D):
@@ -492,13 +495,23 @@ def pair_matrix(zv):
 
 
 def fused_stats(zv, zg, zg_n1, az0_pos):
-    """The four fused-latent relations (each a dict of scalar summaries)."""
-    za = zv[:, int(az0_pos), :]
-    pool_mean = zv.mean(axis=1)
-    rels = {'n1_vs_full': (zg_n1, zg),
+    """The fused-latent relations that are defined at this width.
+
+    ``n1_vs_full`` compares the two z_g arrays and is always defined. The
+    other three compare z_g (width D) with a z_v-derived vector (width Dz);
+    when the encoder's z_views and z_global have different widths (LQ: 256
+    vs 512) those relations have no meaning and are OMITTED. Callers must
+    treat an absent relation as n/a rather than indexing an empty list.
+    """
+    rels = {'n1_vs_full': (zg_n1, zg)}
+    if zv.shape[-1] == zg.shape[-1]:
+        za = zv[:, int(az0_pos), :]
+        pool_mean = zv.mean(axis=1)
+        rels.update({
             'n1_vs_zv_az0': (zg_n1, za),
             'full_vs_zv_az0': (zg, za),
-            'full_vs_mean_pool': (zg, pool_mean)}
+            'full_vs_mean_pool': (zg, pool_mean),
+        })
     out = {}
     for name, (a, b) in rels.items():
         rows = rel_dist_rows(a, b)
@@ -522,8 +535,9 @@ def drift_vs(a, b):
             'cka': linear_cka(a, b), 'proc': procrustes_resid(a, b)}
 
 
-def _targets(zv, zg, zn, S, K, D):
-    return {'zv_flat': zv.reshape(S * K, D), 'zg': zg, 'zg_n1': zn}
+def _targets(zv, zg, zn, S, K, Dz):
+    """Reshape z_v with ITS OWN width Dz (z_g keeps its width unchanged)."""
+    return {'zv_flat': zv.reshape(S * K, Dz), 'zg': zg, 'zg_n1': zn}
 
 
 # ---------------------------------------------------------------------------
@@ -539,6 +553,7 @@ def analyze_npz(snap_dir, meta, epochs, refs, cfg):
     """
     snap_dir = pathlib.Path(snap_dir)
     S, K, D = int(meta['n_states']), int(meta['K']), int(meta['fused_dim'])
+    Dz = int(meta.get('zv_dim', D))
     a0 = int(meta['az0_pos'])
     warnings = []
     gates = {'layout': [], 'state_idx_identical': True,
@@ -557,7 +572,7 @@ def analyze_npz(snap_dir, meta, epochs, refs, cfg):
     for r in refs:
         entry = load_epoch(snap_dir, r)
         ref_arrays[r] = _targets(entry['zv'], entry['zg'], entry['zg_n1'],
-                                 S, K, D)
+                                 S, K, Dz)
 
     series = {'epochs': [], 'scalars': {k: [] for k in SCALAR_KEYS},
               'per_view': {k: [] for k in ('norm_mean', 'rel_spread', 'pr',
@@ -618,7 +633,7 @@ def analyze_npz(snap_dir, meta, epochs, refs, cfg):
             series['pair_matrix']['epochs'].append(e)
             series['pair_matrix']['values'].append(vals)
 
-        cur = _targets(zv, zg, zn, S, K, D)
+        cur = _targets(zv, zg, zn, S, K, Dz)
         for name in TARGETS:
             t = drift['targets'][name]
             if prev is None:
@@ -671,7 +686,8 @@ def analyze_npz(snap_dir, meta, epochs, refs, cfg):
 def epoch_arrays(snap_dir, meta, e):
     entry = load_epoch(snap_dir, e)
     S, K, D = int(meta['n_states']), int(meta['K']), int(meta['fused_dim'])
-    return _targets(entry['zv'], entry['zg'], entry['zg_n1'], S, K, D)
+    Dz = int(meta.get('zv_dim', D))
+    return _targets(entry['zv'], entry['zg'], entry['zg_n1'], S, K, Dz)
 
 
 def matched_null(x, seed=0):
@@ -829,7 +845,8 @@ def summarize(out, cfg):
     if out['mode'] == 'npz':
         L.append(f"{len(epochs)} epochs analyzed "
                  f"({epochs[0]}..{epochs[-1]}), S={meta['n_states']}, "
-                 f"K={meta['K']}, D={meta['fused_dim']}, "
+                 f"K={meta['K']}, D={meta['fused_dim']} "
+                 f"(zv_dim={meta.get('zv_dim', meta['fused_dim'])}), "
                  f"pool_ring={meta['pool_ring']}, az0_pos={meta['az0_pos']}")
     else:
         L.append(f"scalars-only: {len(epochs)} epochs ({epochs[0]}..{epochs[-1]})")
@@ -939,23 +956,33 @@ def summarize(out, cfg):
                  'cka(n1,zv_az0) | cka(full,zv_az0) | cka(full,mean_pool) |')
         L.append('|---|---|---|---|---|---|---|')
         fu = out['fused']
+
+        def _at(name, key, i):
+            # a relation can be ABSENT when z_views and z_global have
+            # different widths (LQ); its lists stay empty -> n/a
+            vals = fu.get(name, {}).get(key, [])
+            if not vals or i >= len(vals) or i < -len(vals):
+                return None
+            return vals[i]
+
         for e in out['drift']['refs']:
             if e not in epochs:
                 continue
             i = epochs.index(e)
-            L.append(f"| {e} | {_fmt(fu['n1_vs_full']['rel'][i])} | "
-                     f"{_fmt(fu['n1_vs_full']['cka'][i])} | "
-                     f"{_fmt(fu['n1_vs_zv_az0']['rel'][i])} | "
-                     f"{_fmt(fu['n1_vs_zv_az0']['cka'][i])} | "
-                     f"{_fmt(fu['full_vs_zv_az0']['cka'][i])} | "
-                     f"{_fmt(fu['full_vs_mean_pool']['cka'][i])} |")
+            L.append(f"| {e} | {_fmt(_at('n1_vs_full', 'rel', i))} | "
+                     f"{_fmt(_at('n1_vs_full', 'cka', i))} | "
+                     f"{_fmt(_at('n1_vs_zv_az0', 'rel', i))} | "
+                     f"{_fmt(_at('n1_vs_zv_az0', 'cka', i))} | "
+                     f"{_fmt(_at('full_vs_zv_az0', 'cka', i))} | "
+                     f"{_fmt(_at('full_vs_mean_pool', 'cka', i))} |")
         L.append('')
         L.append('| fused relation | rel settle | rel e0 | rel e-final | cka e-final |')
         L.append('|---|---|---|---|---|')
         for name in FUSED_RELATIONS:
             L.append(f"| {name} | {_settle_str(st['fused'][name])} | "
-                     f"{_fmt(fu[name]['rel'][0])} | {_fmt(fu[name]['rel'][-1])} | "
-                     f"{_fmt(fu[name]['cka'][-1])} |")
+                     f"{_fmt(_at(name, 'rel', 0))} | "
+                     f"{_fmt(_at(name, 'rel', -1))} | "
+                     f"{_fmt(_at(name, 'cka', -1))} |")
         L.append('')
 
     b = out['behaviour']
@@ -1089,9 +1116,10 @@ def run(argv=None):
             raise SystemExit(f'meta az0_pos={meta.get("az0_pos")} != '
                              f'pool_ring.index(az0_ring={meta["az0_ring"]})')
         first = load_epoch(snap_dir, min(files))
+        zv_dim = int(meta.get('zv_dim', meta['fused_dim']))
         if (first['zv'].shape[1] != int(meta['K']) or
-                first['zv'].shape[2] != int(meta['fused_dim'])):
-            raise SystemExit(f'meta K/D {meta["K"]}/{meta["fused_dim"]} != npz '
+                first['zv'].shape[2] != zv_dim):
+            raise SystemExit(f'meta K/zv_dim {meta["K"]}/{zv_dim} != npz '
                              f'{first["zv"].shape[1:]}')
         epochs, dropped = parse_epoch_spec(args.epochs, sorted(files))
         if dropped:

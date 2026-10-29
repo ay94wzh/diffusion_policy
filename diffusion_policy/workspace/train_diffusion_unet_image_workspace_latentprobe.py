@@ -347,6 +347,11 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
                     json.dump(dict(
                         tool='train_diffusion_unet_image_workspace_latentprobe',
                         n_states=S, K=K, fused_dim=int(zv.shape[-1]),
+                        # z_views and z_global may have different widths (LQ:
+                        # 256 vs 512); zv_dim records the z_views width so the
+                        # analysis tools can check each array against its own
+                        # dimension. Old snapshots lack it -> fused_dim.
+                        zv_dim=int(zv.shape[-1]),
                         seed=cache['seed'], pool_ring=cache['pool_ring'],
                         az0_ring=cache['az0_ring'], az0_pos=int(cache['az0_pos']),
                         conditions=['full', 'n1_az0'],

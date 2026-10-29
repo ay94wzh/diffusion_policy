@@ -378,6 +378,51 @@ def test_end_to_end():
         shutil.rmtree(root, ignore_errors=True)
 
 
+def test_mismatched_zv_dim():
+    """LQ: z_views is 256-wide while z_global is 512-wide.
+
+    The analyzer must check each array against its own width (`zv_dim` from
+    meta) and omit the three cross-width fused relations instead of comparing
+    arrays of different widths or indexing empty lists. Snapshots without
+    `zv_dim` keep the old single-width behaviour (covered by every other
+    fixture here).
+    """
+    root = _tmpdir()
+    try:
+        S, K, Dz, D, n_epochs = 64, 4, 8, 16, 4
+        rng = np.random.RandomState(11)
+        state_idx = np.sort(rng.choice(100000, S, replace=False))
+        os.makedirs(root, exist_ok=True)
+        meta = {'tool': 'test_fixture', 'n_states': S, 'K': K,
+                'fused_dim': D, 'zv_dim': Dz, 'seed': 12345,
+                'pool_ring': [1, 2, 3, 4], 'az0_ring': 3, 'az0_pos': 2,
+                'conditions': ['full', 'n1_az0']}
+        with open(os.path.join(root, 'meta.json'), 'w') as f:
+            json.dump(meta, f, indent=2)
+        for e in range(n_epochs):
+            zv = rng.normal(size=(S, K, Dz))
+            zg = rng.normal(size=(S, D))
+            zn = rng.normal(size=(S, D))
+            np.savez(os.path.join(root, 'epoch_%04d.npz' % e),
+                     zv=zv.astype(np.float16), zg=zg.astype(np.float16),
+                     zg_n1=zn.astype(np.float16), state_idx=state_idx)
+        out, code = _run(root, extra=['--strict'], log=None)
+        assert code == 0, code
+        assert out['gates']['layout'] == []
+        assert not out['gates'].get('halted', False)
+        # n1_vs_full is width-D vs width-D and survives; the three relations
+        # that compare z_g with a z_v-derived vector are omitted
+        assert len(out['fused']['n1_vs_full']['rel']) == n_epochs
+        for name in ('n1_vs_zv_az0', 'full_vs_zv_az0', 'full_vs_mean_pool'):
+            assert out['fused'][name]['rel'] == [], name
+        text = open(os.path.join(root, 'out', 'summary.md')).read()
+        assert 'zv_dim=8' in text and 'D=16' in text
+        print('mismatched zv_dim OK (per-array widths; cross-width fused '
+              'relations omitted, not compared)')
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+
 def test_cka_gate_can_fail():
     root = _tmpdir()
     try:
@@ -593,6 +638,7 @@ def test():
     test_settle_rules()
     test_per_view_and_roll()
     test_end_to_end()
+    test_mismatched_zv_dim()
     test_cka_gate_can_fail()
     test_az0_mapping_mutation()
     test_state_idx_gate()

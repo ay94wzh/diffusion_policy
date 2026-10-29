@@ -124,6 +124,12 @@ data/*
 !data/enc_rhg_run.sh
 !data/enc_rhg_eval.sh
 !data/enc_rhg_calib_square.json
+# 2026-10-29: stage LQ -- LVSM RGB+Pluecker 8x8 patchify + EEF-history query
+# tokens, one bidirectional transformer, only the query positions read out.
+# The run driver's header carries the pre-registration (LQ vs B1/R/RH with
+# the crop 76->72 confound, the two control flags) and the S=895 memory note.
+!data/enc_lq_run.sh
+!data/enc_lq_eval.sh
 # z-supervision runs (za zalign / zb zcons / zc zboth): logs only, never the
 # 4.6 GB checkpoints (same rule as the blocks below). The run driver's first
 # shell writes data/z_calib_env.sh, the shared (W_ALIGN, W_CONS) -- a local
@@ -164,6 +170,9 @@ data/outputs/run_square_enc_rh_s42_200ep/*
 !data/outputs/run_square_enc_rhg_s42_200ep/
 data/outputs/run_square_enc_rhg_s42_200ep/*
 !data/outputs/run_square_enc_rhg_s42_200ep/logs.json.txt
+!data/outputs/run_square_enc_lq_s42_200ep/
+data/outputs/run_square_enc_lq_s42_200ep/*
+!data/outputs/run_square_enc_lq_s42_200ep/logs.json.txt
 !data/outputs/run_*_abs_single_s42_200ep/
 data/outputs/run_*_abs_single_s42_200ep/*
 !data/outputs/run_*_abs_single_s42_200ep/logs.json.txt
