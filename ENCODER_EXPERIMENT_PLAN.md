@@ -1,6 +1,6 @@
 # Encoder 实验计划
 
-版本：v0.8；更新日期：2026-10-29。状态：B、S、R 已训练并有结果（见 `PROGRESS.md`）；RH/RHG 方案阶段。  
+版本：v0.9；更新日期：2026-10-29。状态：B、S、R 已训练并有结果（见 `PROGRESS.md`）；RH/RHG 已实现（CPU 测试通过，未训练）。  
 配套资料：[参考文献与方法概括](ENCODER_REFERENCES.md)。
 
 目标：在不使用场景深度的前提下，逐步检验空间读出、ray 编码、真实 EEF 历史查询和显式几何偏置的作用。动作 diffusion UNet 与现有低维状态接口保持一致。
@@ -137,6 +137,8 @@ q_t=q^{learned}+W_hh_t\in\mathbb R^{512}.
 
 “完整”指输入窗口内全部 4 个有序位姿，不包含未来状态，也不表示汇总向量必然保留所有细节。每个图像时刻生成一个 q_t，所有有效视角复用；S/R 只使用基础 q^{learned}。空间注意力在每个 head 内将同一个 query 投影为 64 维，产生各自的空间注意力图，8 个 head 输出拼接并投影为一个 512 维视觉 token。不将原始 query 或历史向量直接残差加入视觉读出。
 
+**RH/RHG 实现说明（2026-10-29）。** 历史窗口 H=4 个连续观测帧；数据缓冲按 20 Hz 控制步逐帧记录，故窗口覆盖 3×0.05 s = **0.15 s** 的真实 EE 运动（§4.1 “运行前确认实际秒数”的结论；训练 `eef_hist_window='episode'` 与两条 rollout deque 的语义一致）。编码器为 `traj_spatial_readout_obs_encoder.TrajSpatialReadoutObsEncoder`，RH 与 RHG 是同一类的两个 flag 设置（`use_geom_bias=False/True`），不增加任何参数、构造时不消耗 RNG，因此两者**初始参数逐位相同**，RHG−RH 是干净的单变量比较。轨迹输入为数据集新增的 `eef_hist_base`：每样本 `(To, H, 9)`，基座坐标，`[pos(3), rot6d(6)]` 每步，oldest→current，不含夹爪，**视角无关**；数值保持米（normalizer 为恒等）。每步特征为 `[p_i/L, rot6d_i, (p_i-p_t)/L, age]`（13 维，age 由 −1 到 0），加可学习步序嵌入后进 1 层、4 head、宽度 128、FFN 256 的时间 Transformer；4 个输出按时间顺序拼接（512 维）经 `512→512` MLP 得 h_t，再经 `W_h`（权重与偏置均零初始化）加到零初始化的 `q^{learned}`：初始化时 q_t 恒等于 `q^{learned}`，轨迹分支逐位惰性；h_t 非零，所以 W_h 在第一步获得梯度、第二步点亮，时间编码器再晚一步（项目既有的零初始化链）。`q^{learned}` 的个数不变（仍为 1），跨视角融合 query 仍是独立参数。RH 编码器参数 6,207,680（R 为 5,284,928，增加 922,752），因此 RH−R 是结构比较、非等容量比较；RHG 与 RH 参数完全相同。
+
 ### 4.4 几何偏置：仅 RHG
 
 共享 query 由整个历史窗口条件化；几何偏置使用当前 EEF 位置 p_t 作为统一锚点。对第 v 个视角、第 j 个空间 token：
@@ -156,6 +158,8 @@ a^{(r)}_{v,j}=\operatorname{softmax}_j
 第 1—4 个 heads 使用 b^{(r)}=b，第 5—8 个 heads 使用 b^{(r)}=0；全部 heads 都使用完整轨迹条件化的 query。初始固定 alpha=1、b_max=4；sigma 使用米，在训练集上按约 1—2 个特征网格邻域校准后锁定，距离计算使用原始物理坐标。
 
 当前 EEF 点位于相机后方或投影在裁剪外时，关闭该视角的距离偏置，保留内容注意力。图像内投影不保证无遮挡；偏置保持柔性，不做硬遮罩。
+
+**RHG 实现说明（2026-10-29）。** 偏置以加性 mask 送入 `nn.MultiheadAttention`（`attn_mask` 形状 `(N·heads, 1, G)`，仅前 `geom_bias_heads=4` 个 head 非零），softmax 之前加入，与上式逐项一致；CPU 测试用同一组投影权重手工复算 0/1/4/8 个 head 的结果并逐位对齐。ρ 用米：存储的 ray moment 先乘回 `ray_scale`；`ray_scale` 同时用于轨迹位置归一化（L=1 m）。有效性门使用**原图**内参与本次样本的 crop 左上角：`depth>0` 且投影 `(u,v)` 落在 `[off, off+crop)` 内，否则该视角所有 token 的 b=0。`geom_bias_sigma_m` 必须在构造时给出，否则直接报错——它由 `calibrate_geom_bias.py` 在训练 zarr 上一次性标定并锁定：对每个 EE 投影落在 crop 内的 (state, obs step, view)，取投影最近 token 的 4 邻域（1 格）point-to-ray 距离的中位数作为 sigma；报告 1 格/2 格距离分位数与对应隐含偏置，写入 `data/enc_rhg_calib_square.json` 与运行目录日志，`data/enc_rhg_run.sh` 断言解析后的配置携带同一数值。RH 的配置不出现任何 `geom_bias_*` 键；RHG 配置把 sigma 设为 `null`，缺校准覆盖时启动即失败。
 
 ## 5. 统一历史协议
 
@@ -207,18 +211,22 @@ B 需在修正协议后重新训练，作为本轮匹配基线。
 | B | 已训练（B0/B1，见 `PROGRESS.md`） | 原结构的修正历史基线 |
 | S | 已训练（见 `PROGRESS.md`） | B |
 | R | 已训练（见 `PROGRESS.md`） | S |
-| RH | 待实现/训练 | R |
-| RHG | 待实现/训练 | RH |
+| RH | 已实现（2026-10-29），待训练 | R |
+| RHG | 已实现（2026-10-29），待训练 | RH |
 
 每次运行记录文档版本、配置/代码版本、历史窗口秒数、训练种子、checkpoint、逐视角结果及相邻比较。后续讨论统一使用 B、S、R、RH、RHG。
 
-### 7.1 实现文件清单（B、S）
+### 7.1 实现文件清单（B、S、R、RH/RHG）
 
 | 阶段 | 编码器 | task 配置 | workspace 配置 | 运行/评测 | 测试 |
 |---|---|---|---|---|---|
 | B | `diffusion_policy/model/vision/view_conditioned_obs_encoder.py` | `config/task/enc_b_image_abs_multiview_az75.yaml` | `config/train_diffusion_unet_image_workspace_enc_b_latent.yaml` | `data/enc_b_run.sh` / `data/enc_b_eval.sh` | `tests/test_view_conditioned_obs_encoder.py` |
 | S | `diffusion_policy/model/vision/spatial_readout_obs_encoder.py` | `config/task/enc_s_image_abs_multiview_az75.yaml` | `config/train_diffusion_unet_image_workspace_enc_s_latent.yaml` | `data/enc_s_run.sh` / `data/enc_s_eval.sh` | `tests/test_spatial_readout_obs_encoder.py` |
 | R | `diffusion_policy/model/vision/ray_spatial_readout_obs_encoder.py`（+ `model/vision/plucker.py` 新增 `plucker_ray_map_at` / `ray_dirs_cam_at`） | `config/task/enc_r_image_abs_multiview_az75.yaml` | `config/train_diffusion_unet_image_workspace_enc_r_latent.yaml` | `data/enc_r_run.sh` / `data/enc_r_eval.sh` | `tests/test_ray_spatial_readout_obs_encoder.py` |
+| RH | `diffusion_policy/model/vision/traj_spatial_readout_obs_encoder.py`（RH/RHG 同一个类，`use_geom_bias` 区分） | `config/task/enc_rh_image_abs_multiview_az75.yaml`（RH/RHG 共用；`emit_eef_hist_base: true`、`serve_eef_hist_base: true`） | `config/train_diffusion_unet_image_workspace_enc_rh_latent.yaml` | `data/enc_rh_run.sh` / `data/enc_rh_eval.sh`（eval 需 `--serve-eef-hist-base`） | `tests/test_traj_spatial_readout_obs_encoder.py`；`tests/test_multiview_dataset.py` / `tests/test_latent_probe_hook.py` 扩展 |
+| RHG | 同上（`use_geom_bias: true`，σ 由 `calibrate_geom_bias.py` 标定并锁定） | 同上 | `config/train_diffusion_unet_image_workspace_enc_rhg_latent.yaml` | `data/enc_rhg_run.sh`（含 σ 标定阶段）/ `data/enc_rhg_eval.sh` | 同上 |
+
+共享管线新增一个 seam：`diffusion_policy/dataset/multiview_image_dataset.py` 的 `emit_eef_hist_base`（默认 `False`，所有已提交运行不变）与 `eef_hist_base()` 变换；`env_runner/cam_key_image_runner.py` 与 `eval_novel_view.py` 的 `serve_eef_hist_base`（默认 `False`）；`train_diffusion_unet_image_workspace_latentprobe.py` 把数据集发出的额外 per-sample obs 键原样带进两种 probe draw（base 返回空，已提交运行的 probe 产物不变）。
 
 共享管线不变：`diffusion_policy/dataset/multiview_image_dataset.py`（slot/cam/mask/history 与 `eef_hist_window`）和 `diffusion_policy/workspace/train_diffusion_unet_image_workspace_latentprobe.py`（latent probe）。S 的运行目录为 `/data/zihan/runs/run_square_enc_s_s42_200ep`（201 epochs，seed 42，K=11，pool 1..11，probe 128/az0_view 6）；R 为 `/data/zihan/runs/run_square_enc_r_s42_200ep`，数据、slot、pool、N 分布、seed、epoch 数与 probe 完全相同。S 的 dataset/runner 仍按 B 的 schema 发出相机向量与 EE 历史；S 的 encoder 忽略它们，这是为了让 S−B 保持单变量结构比较，且不改动已提交的数据/runner/probe schema。R 与 S 的唯一结构差异是 ray 地址；评测结果见 `PROGRESS.md`：R−S 分布内 −0.051、插值 −0.014，均在 0.15 带内，且未恢复到 B1（−0.211 / −0.180）。
 

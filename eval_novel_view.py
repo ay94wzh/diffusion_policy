@@ -49,7 +49,7 @@ from gym import spaces
 from diffusion_policy.env_runner.robomimic_image_runner import create_env
 from diffusion_policy.env.robomimic.robomimic_image_wrapper import RobomimicImageWrapper
 from diffusion_policy.dataset.multiview_image_dataset import (
-    EEF_HIST_STEP_DIM, eef_hist_to_cam)
+    EEF_HIST_STEP_DIM, EEF_HIST_BASE_STEP_DIM, eef_hist_base, eef_hist_to_cam)
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.video_recording_wrapper import VideoRecordingWrapper, VideoRecorder
@@ -266,13 +266,21 @@ class ViewpointImageWrapper(RobomimicImageWrapper):
     (M3) serves the view-slot / camera / mask / EE-history keys."""
 
     def __init__(self, *args, serve_obs_key=None, m3_slots=0,
-                 eef_hist_steps=4, **kwargs):
+                 eef_hist_steps=4, serve_eef_hist_base=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.viewpoint = None
         self.serve_obs_key = serve_obs_key
         self._base_camera_poses = dict()
         self.m3_slots = int(m3_slots)
         self.eef_hist_steps = int(eef_hist_steps)
+        # RH/RHG's per-sample base-frame trajectory key. Defaults OFF, so the
+        # committed M1/L1/M3/M4/B/S/R checkpoint sweeps are unchanged -- their
+        # normalizers have no entry for the key and serving it would raise.
+        self.serve_eef_hist_base = bool(serve_eef_hist_base)
+        if self.serve_eef_hist_base and self.m3_slots <= 0:
+            raise ValueError(
+                'serve_eef_hist_base requires m3_slots > 0: the trajectory key '
+                'rides the M3 slot schema')
         self._eef_hist = collections.deque(maxlen=max(self.eef_hist_steps, 1))
 
         if self.m3_slots > 0:
@@ -294,6 +302,14 @@ class ViewpointImageWrapper(RobomimicImageWrapper):
                 low=-np.inf, high=np.inf,
                 shape=(self.m3_slots, EEF_HIST_STEP_DIM * self.eef_hist_steps),
                 dtype=np.float32)
+            if self.serve_eef_hist_base:
+                # Per-sample, not per-slot: (H, 9) = [pos(3), rot6d(6)] per
+                # step, oldest first, current last -- the same window rule and
+                # transform as MultiViewImageDataset.eef_hist_base.
+                self.observation_space['eef_hist_base'] = spaces.Box(
+                    low=-np.inf, high=np.inf,
+                    shape=(self.eef_hist_steps, EEF_HIST_BASE_STEP_DIM),
+                    dtype=np.float32)
             # ...and now DROP the render key (`agentview_image`), which the
             # reduced shape_meta carries only so create_env can build
             # robomimic's obs-modality mapping. It must not reach the policy:
@@ -378,6 +394,10 @@ class ViewpointImageWrapper(RobomimicImageWrapper):
         hist_cam = eef_hist_to_cam(pos, quat, grip, cam[:3], cam[3:7])
         # step-major flatten, matching MultiViewImageDataset._m3_slots
         hist_cam = hist_cam.reshape(-1).astype(np.float32)
+        if self.serve_eef_hist_base:
+            # The SAME deque in the base frame: RH/RHG's trajectory condition,
+            # one (H, 9) tensor per sample.
+            raw_obs['eef_hist_base'] = eef_hist_base(pos, quat)
 
         mask = np.zeros(self.m3_slots, dtype=np.float32)
         mask[0] = 1.0
@@ -469,6 +489,7 @@ def run_novel_view_eval(policy,
         serve_obs_key=None,
         m3_slots=0,
         eef_hist_steps=4,
+        serve_eef_hist_base=False,
         past_action=False,
         abs_action=False,
         fps=10,
@@ -514,7 +535,8 @@ def run_novel_view_eval(policy,
                     render_obs_key=render_obs_key,
                     serve_obs_key=serve_obs_key,
                     m3_slots=m3_slots,
-                    eef_hist_steps=eef_hist_steps
+                    eef_hist_steps=eef_hist_steps,
+                    serve_eef_hist_base=serve_eef_hist_base
                 ),
                 video_recoder=VideoRecorder.create_h264(
                     fps=fps,
@@ -550,7 +572,8 @@ def run_novel_view_eval(policy,
                     render_obs_key=render_obs_key,
                     serve_obs_key=serve_obs_key,
                     m3_slots=m3_slots,
-                    eef_hist_steps=eef_hist_steps
+                    eef_hist_steps=eef_hist_steps,
+                    serve_eef_hist_base=serve_eef_hist_base
                 ),
                 video_recoder=VideoRecorder.create_h264(
                     fps=fps,
@@ -755,8 +778,16 @@ def to_json_log(log_data):
          'view-conditioned encoder consumes.')
 @click.option('--eef-hist-steps', type=int, default=4,
     help='M3: number of EE-pose history steps per slot (must match training)')
+@click.option('--serve-eef-hist-base', is_flag=True,
+    help='RH/RHG: also serve the per-sample BASE-frame EE trajectory window '
+         '(eef_hist_base, (H, 9) per sample) that the trajectory-conditioned '
+         'query consumes. Requires --m3-slots > 0.')
 def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs,
-        serve_obs_key, m3_slots, eef_hist_steps):
+        serve_obs_key, m3_slots, eef_hist_steps, serve_eef_hist_base):
+    if serve_eef_hist_base and m3_slots <= 0:
+        raise click.UsageError(
+            '--serve-eef-hist-base needs --m3-slots > 0: the trajectory key '
+            'rides the M3 slot schema')
     if os.path.exists(output_dir):
         click.confirm(f"Output path {output_dir} already exists! Overwrite?", abort=True)
     pathlib.Path(output_dir).mkdir(parents=True, exist_ok=True)
@@ -832,6 +863,7 @@ def main(checkpoint, output_dir, device, preset_name, n_test, n_test_vis, n_envs
         serve_obs_key=serve_obs_key,
         m3_slots=m3_slots,
         eef_hist_steps=eef_hist_steps,
+        serve_eef_hist_base=serve_eef_hist_base,
         past_action=er.past_action,
         abs_action=er.abs_action,
         fps=er.fps,

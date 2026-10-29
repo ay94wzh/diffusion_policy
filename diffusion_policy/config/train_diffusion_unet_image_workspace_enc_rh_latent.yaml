@@ -1,0 +1,199 @@
+defaults:
+  - _self_
+  - task: enc_rh_image_abs_multiview_az75
+
+name: train_diffusion_unet_image_enc_rh_latent
+# Encoder ladder, stage RH: R's ray-encoded spatial readout with the shared
+# query conditioned on the FULL base-frame EE trajectory window (plan section
+# 4.3). The latent-probe workspace is the same one every recent run uses, so
+# RH can be read against the committed B/S/R latent series as well as
+# behaviourally.
+#
+# RH vs R is a STRUCTURAL comparison, not a paired-seed ablation and not
+# capacity-matched: RH adds the trajectory encoder + W_h (~0.92 M parameters,
+# 6,207,680 encoder params vs R's 5,284,928). The one designed change is the
+# trajectory-conditioned query; the ray branch, the readout, the fusion and
+# the 521-wide interface are R's.
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace_latentprobe.TrainDiffusionUnetImageWorkspaceLatentProbe
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+horizon: 16
+n_obs_steps: 2
+n_action_steps: 8
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+
+latent_probe:
+  # 128 fixed dataset states, encoded every epoch at a full 11-view draw and at
+  # the N=1 az_0 inference condition. ring index 6 == az_0 (index 0 is az -90).
+  n_states: 128
+  seed: 12345
+  az0_view: 6
+  save_raw: true
+  out_dir: latent_snapshots
+
+policy:
+  # M3's policy: no per-view aux head, no extra loss. The encoder is RH.
+  _target_: diffusion_policy.policy.diffusion_unet_image_policy.DiffusionUnetImagePolicy
+
+  shape_meta: ${shape_meta}
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
+    clip_sample: True # required when predict_epsilon=False
+    prediction_type: epsilon # or sample
+
+  # RH: R's pure-RGB ResNet18 layer3 spatial tokens + shared query readout with
+  # the ray address on the KEY, plus the base-frame trajectory condition on the
+  # shared query. Same dict-in -> (B*To, D) out contract, so the policy and
+  # training loop are untouched (no new loss).
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.traj_spatial_readout_obs_encoder.TrajSpatialReadoutObsEncoder
+    shape_meta: ${shape_meta}
+    rgb_model:
+      _target_: diffusion_policy.model.vision.model_getter.get_resnet
+      name: resnet18
+      weights: null
+    # fused_dim 512 makes output_shape() == 512 + 9 == 521, identical to
+    # M1/L1/B/S/R, so global_cond_dim (1042) and the UNet are byte-identical.
+    fused_dim: 512
+    n_heads: 8              # head dim 64
+    # R's ray branch (e = E_ray([d, m/L]), zero-init output)
+    ray_hidden_dim: 512
+    ray_scale: 1.0
+    use_ray_encoding: True  # False is the diagnostic "rays severed" ablation
+    # RH's trajectory condition: per-step [p/L, rot6d, (p-p_t)/L, age] ->
+    # a small temporal Transformer -> concat (H*d) -> MLP -> 512 -> W_h.
+    # h_t is 4 * 128 = 512 wide by construction; the summary MLP is 512->512.
+    eef_hist_key: eef_hist_base
+    eef_hist_steps: 4
+    traj_hidden_dim: 128
+    traj_layers: 1
+    traj_heads: 4
+    traj_ff_dim: 256
+    traj_mlp_hidden: 512
+    # RH: no geometric bias. RHG's workspace config flips this and supplies the
+    # pre-launch calibrated sigma; the parameters are identical either way.
+    use_geom_bias: False
+    crop_shape: [76, 76]    # 84 -> 76 -> layer3 5x5 -> 25 tokens; rays at
+                            # crop pixel (off + 16*i, off + 16*j)
+    random_crop: True
+    use_group_norm: True    # EMA-safe, same as B/S/R
+    # exactly one shared backbone; the stock default (False) is rejected
+    share_rgb_model: True
+    imagenet_norm: True
+    # cam_keys is derived from the rgb slot names (view_slot_XX_image ->
+    # view_slot_XX_cam). Deliberately absent (B-only): cond_dim, use_plucker,
+    # use_eef_hist, resize_shape.
+
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 100
+  obs_as_global_cond: ${obs_as_global_cond}
+  # crop_shape: null
+  diffusion_step_embed_dim: 128
+  down_dims: [512, 1024, 2048]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+
+  # scheduler.step params
+  # predict_epsilon: True
+
+ema:
+  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-4
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  resume: True
+  # optimization
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 8000
+  gradient_accumulate_every: 1
+  # EMA destroys performance when used with BatchNorm
+  # replace BatchNorm with GroupNorm.
+  use_ema: True
+  freeze_encoder: False
+  # training loop control
+  # in epochs
+  rollout_every: 50
+  checkpoint_every: 50
+  val_every: 1
+  sample_every: 5
+  # steps per epoch
+  max_train_steps: null
+  max_val_steps: null
+  # misc
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: diffusion_policy_debug
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 5
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

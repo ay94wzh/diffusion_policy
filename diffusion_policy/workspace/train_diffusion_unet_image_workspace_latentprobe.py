@@ -150,7 +150,15 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
 
         rgb_keys = list(dataset.rgb_keys)
         cam_keys = list(dataset.cam_keys)
+        # Any obs key the dataset emits beyond the per-slot schema (e.g. RH/
+        # RHG's view-INDEPENDENT `eef_hist_base`) is carried through unchanged:
+        # it is not slot-indexed, so the canonical slot re-ordering below does
+        # not apply to it, and the full draw and the N=1 draw must see the same
+        # value (it comes from the observation, not from the view set).
+        standard = set(rgb_keys) | set(cam_keys) | {
+            dataset.view_mask_key, dataset.eef_hist_key}
         images, cams, hists, masks = [], [], [], []
+        extra_keys, extras = None, None
         views = np.zeros((n, K), dtype=np.int64)
         az0_slots = np.zeros(n, dtype=np.int64)
         for i in range(n):
@@ -162,6 +170,16 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
             cams.append(torch.stack([obs[k][0] for k in cam_keys]))
             hists.append(obs[dataset.eef_hist_key][0])
             masks.append(obs[dataset.view_mask_key][0])
+            found = [k for k in obs.keys() if k not in standard]
+            if extra_keys is None:
+                extra_keys = found
+                extras = {k: [] for k in extra_keys}
+            elif found != extra_keys:
+                raise RuntimeError(
+                    f'probe state {i}: extra obs keys {found} != {extra_keys} '
+                    '(the dataset schema must be constant across states)')
+            for k in extra_keys:
+                extras[k].append(obs[k][0])
             for slot in range(K):
                 hit = np.nonzero(
                     np.all(dataset.cam_table == cams[-1][slot].numpy(), axis=1))[0]
@@ -189,6 +207,9 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
             cam_keys=cam_keys,
             mask_key=dataset.view_mask_key,
             hist_key=dataset.eef_hist_key,
+            # (S, ...) per extra key; empty dict for every pre-RH dataset, so
+            # existing runs' probe artifacts are byte-identical
+            extras={k: torch.stack(v) for k, v in (extras or {}).items()},
             pool_ring=pool_sorted,
             az0_ring=az0_view,
             az0_pos=az0_pos,
@@ -252,6 +273,8 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
             cam_c[:, j] = cache['cams'][ar, sel]
             hist_c[:, j] = cache['hists'][ar, sel]
 
+        extras = cache.get('extras', {})
+
         def _obs(images, cams, hists, mask):
             d = dict()
             for k, key in enumerate(cache['rgb_keys']):
@@ -260,6 +283,8 @@ class TrainDiffusionUnetImageWorkspaceLatentProbe(TrainDiffusionUnetImageWorkspa
                 d[key] = cams[:, k]
             d[cache['mask_key']] = mask
             d[cache['hist_key']] = hists
+            # view-independent extras are identical in both draws
+            d.update(extras)
             return d
 
         obs_full = _obs(img_c, cam_c, hist_c, torch.ones(S, K))

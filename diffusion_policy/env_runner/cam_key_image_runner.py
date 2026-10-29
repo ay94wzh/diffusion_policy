@@ -40,7 +40,7 @@ from diffusion_policy.env_runner.robomimic_image_runner import (
     RobomimicImageRunner, create_env)
 from diffusion_policy.env.robomimic.robomimic_image_wrapper import RobomimicImageWrapper
 from diffusion_policy.dataset.multiview_image_dataset import (
-    EEF_HIST_STEP_DIM, eef_hist_to_cam)
+    EEF_HIST_STEP_DIM, EEF_HIST_BASE_STEP_DIM, eef_hist_base, eef_hist_to_cam)
 from diffusion_policy.gym_util.async_vector_env import AsyncVectorEnv
 from diffusion_policy.gym_util.multistep_wrapper import MultiStepWrapper
 from diffusion_policy.gym_util.video_recording_wrapper import (
@@ -52,10 +52,19 @@ import robomimic.utils.file_utils as FileUtils
 class CamKeyImageWrapper(RobomimicImageWrapper):
     """Serves M3's slot / camera / mask / EE-history keys from one live camera."""
 
-    def __init__(self, *args, m3_slots=0, eef_hist_steps=4, **kwargs):
+    def __init__(self, *args, m3_slots=0, eef_hist_steps=4,
+                 serve_eef_hist_base=False, **kwargs):
         super().__init__(*args, **kwargs)
         self.m3_slots = int(m3_slots)
         self.eef_hist_steps = int(eef_hist_steps)
+        # RH/RHG's per-sample base-frame trajectory key. Defaults OFF, so every
+        # pre-RH checkpoint's env is unchanged (its normalizer has no entry for
+        # the key, and serving it would raise on the first predict_action).
+        self.serve_eef_hist_base = bool(serve_eef_hist_base)
+        if self.serve_eef_hist_base and self.m3_slots <= 0:
+            raise ValueError(
+                'serve_eef_hist_base requires m3_slots > 0: the trajectory key '
+                'rides the M3 slot schema')
         self._eef_hist = collections.deque(maxlen=max(self.eef_hist_steps, 1))
         if self.m3_slots > 0:
             # Registering on the observation space is required (not merely
@@ -74,6 +83,14 @@ class CamKeyImageWrapper(RobomimicImageWrapper):
                 low=-np.inf, high=np.inf,
                 shape=(self.m3_slots, EEF_HIST_STEP_DIM * self.eef_hist_steps),
                 dtype=np.float32)
+            if self.serve_eef_hist_base:
+                # Per-sample, not per-slot: (H, 9) = [pos(3), rot6d(6)] per
+                # step, oldest first, current last -- the SAME window rule and
+                # transform as MultiViewImageDataset.eef_hist_base.
+                self.observation_space['eef_hist_base'] = spaces.Box(
+                    low=-np.inf, high=np.inf,
+                    shape=(self.eef_hist_steps, EEF_HIST_BASE_STEP_DIM),
+                    dtype=np.float32)
             # ...and now DROP the render key, which exists only so create_env
             # can build robomimic's obs-modality mapping. It must not reach the
             # policy: predict_action normalizes every key of the obs dict and
@@ -118,6 +135,11 @@ class CamKeyImageWrapper(RobomimicImageWrapper):
         quat = np.stack([q for _, q, _ in self._eef_hist])
         grip = np.stack([g for _, _, g in self._eef_hist])
         hist = eef_hist_to_cam(pos, quat, grip, cam[:3], cam[3:7]).reshape(-1)
+        if self.serve_eef_hist_base:
+            # The SAME deque in the base frame: RH/RHG's trajectory condition.
+            # One tensor per sample (no slot axis), matching the dataset's
+            # (H, 9) emission.
+            raw_obs['eef_hist_base'] = eef_hist_base(pos, quat)
 
         mask = np.zeros(self.m3_slots, dtype=np.float32)
         mask[0] = 1.0
@@ -155,6 +177,7 @@ class CamKeyImageRunner(RobomimicImageRunner):
             shape_meta: dict,
             m3_slots: int = 7,
             eef_hist_steps: int = 4,
+            serve_eef_hist_base: bool = False,
             n_train=10,
             n_train_vis=3,
             train_start_idx=0,
@@ -226,7 +249,8 @@ class CamKeyImageRunner(RobomimicImageRunner):
                         init_state=None,
                         render_obs_key=render_obs_key,
                         m3_slots=m3_slots,
-                        eef_hist_steps=eef_hist_steps
+                        eef_hist_steps=eef_hist_steps,
+                        serve_eef_hist_base=serve_eef_hist_base
                     ),
                     video_recoder=VideoRecorder.create_h264(
                         fps=fps,
@@ -258,7 +282,8 @@ class CamKeyImageRunner(RobomimicImageRunner):
                         init_state=None,
                         render_obs_key=render_obs_key,
                         m3_slots=m3_slots,
-                        eef_hist_steps=eef_hist_steps
+                        eef_hist_steps=eef_hist_steps,
+                        serve_eef_hist_base=serve_eef_hist_base
                     ),
                     video_recoder=VideoRecorder.create_h264(
                         fps=fps,

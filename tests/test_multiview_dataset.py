@@ -30,8 +30,8 @@ import zarr
 from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs, Jpeg2k
 from diffusion_policy.common.replay_buffer import ReplayBuffer
 from diffusion_policy.dataset.multiview_image_dataset import (
-    MultiViewImageDataset, quat_wxyz_to_mat, fovy_to_intrinsics,
-    project_world_to_pixel, eef_hist_to_cam,
+    MultiViewImageDataset, quat_wxyz_to_mat, quat_wxyz_to_mat_batch,
+    fovy_to_intrinsics, project_world_to_pixel, eef_hist_to_cam,
 )
 register_codecs()
 
@@ -42,8 +42,13 @@ EPISODE_LENGTHS = (5, 7, 4)
 AZIMUTHS = [-30.0, 0.0, 30.0]
 
 
-def build_synthetic_zarr(path, codec='jpeg2k', val_ratio=0.34):
-    """Write the exact schema the generator produces, from random data."""
+def build_synthetic_zarr(path, codec='jpeg2k', val_ratio=0.34, h=H, w=W):
+    """Write the exact schema the generator produces, from random data.
+
+    ``h``/``w`` are overridable so a test that needs a feature grid larger
+    than 1x1 (the default 8x8 gives stride-16 1x1) can ask for one; every
+    existing caller keeps the 8x8 fixture.
+    """
     rng = np.random.default_rng(0)
     n_steps = int(sum(EPISODE_LENGTHS))
     episode_ends = np.cumsum(EPISODE_LENGTHS).astype(np.int64)
@@ -69,7 +74,7 @@ def build_synthetic_zarr(path, codec='jpeg2k', val_ratio=0.34):
         dtype=np.float64, compressor=None, overwrite=True)
     meta_group.array('base_cam_quat_wxyz', np.array([1.0, 0.0, 0.0, 0.0]),
         dtype=np.float64, compressor=None, overwrite=True)
-    meta_group.array('render_hw', np.array([H, W], dtype=np.int64),
+    meta_group.array('render_hw', np.array([h, w], dtype=np.int64),
         dtype=np.int64, compressor=None, overwrite=True)
 
     # low-dim obs + action (abs, 10-dim = pos3 + rot6d + gripper)
@@ -88,14 +93,14 @@ def build_synthetic_zarr(path, codec='jpeg2k', val_ratio=0.34):
     compressor = Jpeg2k(level=50) if codec == 'jpeg2k' else None
     for v in range(N_VIEWS):
         arr = data_group.require_dataset(
-            name=f'view_{v:02d}_image', shape=(n_steps, H, W, C),
-            chunks=(1, H, W, C), compressor=compressor, dtype=np.uint8)
+            name=f'view_{v:02d}_image', shape=(n_steps, h, w, C),
+            chunks=(1, h, w, C), compressor=compressor, dtype=np.uint8)
         # deterministic, view-dependent content so view mixups are detectable
-        base = np.arange(n_steps * H * W * C).reshape(n_steps, H, W, C)
+        base = np.arange(n_steps * h * w * C).reshape(n_steps, h, w, C)
         arr[:] = ((base + v * 17) % 256).astype(np.uint8)
 
     shape_meta = {
-        'obs': {f'view_{v:02d}_image': {'shape': [C, H, W], 'type': 'rgb'}
+        'obs': {f'view_{v:02d}_image': {'shape': [C, h, w], 'type': 'rgb'}
                 for v in range(N_VIEWS)},
         'action': {'shape': [10]},
     }
@@ -357,6 +362,103 @@ def test_eef_history(path, shape_meta):
           'H>episode, To>2, camera frame, rollout deque)')
 
 
+def test_eef_hist_base(path, shape_meta):
+    """RH/RHG's base-frame trajectory key: frame, content, ordering, flags.
+
+    The per-slot camera-frame history and this per-sample base-frame window
+    must be the SAME window (only the frame differs), the key must be
+    view-independent, its last step must be the observation frame's own EE
+    pose (RHG's bias anchor and RH's relative-position reference), and the
+    flag must default off so every committed run's obs dict is unchanged.
+    """
+    from diffusion_policy.dataset.multiview_image_dataset import eef_hist_base
+
+    common = dict(
+        shape_meta=shape_meta, dataset_path=path, horizon=4,
+        pad_before=1, pad_after=7, n_obs_steps=2, abs_action=True,
+        view_pool=[0, 1, 2], view_count_range=[1, 3],
+        eef_hist_steps=4, eef_hist_window='episode', seed=0, val_ratio=0.34)
+
+    # default off: the key is absent and nothing else changes
+    dso = MultiViewImageDataset(**common)
+    assert dso.emit_eef_hist_base is False
+    assert 'eef_hist_base' not in dso[0]['obs']
+
+    ds = MultiViewImageDataset(emit_eef_hist_base=True, **common)
+    assert ds.emit_eef_hist_base is True
+    assert ds.eef_hist_base_key == 'eef_hist_base'
+    idx, b, _, _, _ = _find_row(ds, buffer_start=8)
+    obs = ds[idx]['obs']
+    base = obs['eef_hist_base']
+    assert tuple(base.shape) == (2, 4, 9), base.shape
+
+    # same window as _eef_history, base frame, no gripper
+    pos, quat, grip = ds._eef_history(idx)
+    want = eef_hist_base(pos, quat)
+    np.testing.assert_allclose(base.numpy(), want, atol=1e-6)
+
+    # the rot6d is rows 0,1 of R_eef (the shared convention), not columns
+    R = quat_wxyz_to_mat_batch(quat)
+    np.testing.assert_allclose(
+        base.numpy()[..., 3:], np.concatenate([R[..., 0, :], R[..., 1, :]],
+                                              axis=-1), atol=1e-6)
+    # a non-identity rotation is what makes rows-vs-columns visible
+    assert not np.allclose(R[..., 0, :], R[..., :, 0], atol=1e-3)
+
+    # ordering: oldest first, current last, and the last step IS the obs
+    # frame's own EE position (the window `_eef_history` returns)
+    np.testing.assert_allclose(
+        base.numpy()[:, -1, :3], obs['robot0_eef_pos'].numpy(), atol=1e-6)
+    pos_all = np.asarray(ReplayBuffer.create_from_path(path, mode='r')
+                         ['robot0_eef_pos'][:])
+    np.testing.assert_allclose(base.numpy()[0, -1, :3], pos_all[b], atol=1e-6)
+
+    # view-independent: redrawing the view subset must not change it
+    np.random.seed(0)
+    a = ds[idx]['obs']['eef_hist_base']
+    np.random.seed(999)
+    c = ds[idx]['obs']['eef_hist_base']
+    assert torch.equal(a, c)
+
+    # identity normalizer (raw metres / raw rot6d reach the encoder)
+    params = ds.get_normalizer()['eef_hist_base'].params_dict
+    assert bool((params['scale'] == 1).all())
+    assert bool((params['offset'] == 0).all())
+    assert tuple(params['scale'].shape) == (9,)
+
+    # the validation dataset inherits the flag and the key
+    val = ds.get_validation_dataset()
+    assert val.emit_eef_hist_base is True
+    assert 'eef_hist_base' in val[0]['obs']
+
+    # guards
+    try:
+        MultiViewImageDataset(
+            emit_eef_hist_base=True,
+            **{**common, 'eef_hist_base_key': 'view_eef_hist'})
+        raise AssertionError('sharing the camera-frame key should raise')
+    except ValueError:
+        pass
+    sm = {**shape_meta, 'obs': {**shape_meta['obs'],
+                                'eef_hist_base': {'shape': [36]}}}
+    try:
+        MultiViewImageDataset(emit_eef_hist_base=True, **{**common,
+                                                          'shape_meta': sm})
+        raise AssertionError('a shape_meta base key should raise')
+    except ValueError:
+        pass
+    try:
+        MultiViewImageDataset(
+            emit_eef_hist_base=True,
+            **{k: v for k, v in common.items() if k != 'view_pool'})
+        raise AssertionError('emit without view_pool should raise')
+    except ValueError:
+        pass
+
+    print('EE-history base window OK (frame, rot6d rows, ordering, '
+          'view independence, identity normalizer, val, guards)')
+
+
 def test():
     tmp = tempfile.mkdtemp(prefix='multiview_test_')
     try:
@@ -365,6 +467,7 @@ def test():
         test_camera_math()
         test_dataset(path, shape_meta, episode_ends)
         test_eef_history(path, shape_meta)
+        test_eef_hist_base(path, shape_meta)
         print('ALL MULTIVIEW DATASET CHECKS PASSED')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

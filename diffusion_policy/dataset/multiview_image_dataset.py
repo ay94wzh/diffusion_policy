@@ -90,6 +90,13 @@ def quat_wxyz_to_mat_batch(q):
 
 
 EEF_HIST_STEP_DIM = 11   # [pos(3), rot6d(6), gripper(2)] per step, camera frame
+# Stage RH/RHG's trajectory condition (ENCODER_EXPERIMENT_PLAN.md sections 4.3
+# and 5): the SAME window in the robot base frame, WITHOUT the gripper -- the
+# trajectory encoder reads position, orientation and temporal order only. One
+# row per window step, oldest first, current last. This is view-INDEPENDENT by
+# construction, so unlike `view_eef_hist` it is a per-sample (To, H, 9) key
+# rather than a (To, K, 11*H) per-slot one.
+EEF_HIST_BASE_STEP_DIM = 9   # [pos(3), rot6d(6)] per step, base frame
 
 ACTION_DIM = 10          # [pos(3), rot6d(6), gripper(1)] absolute, base frame
 # M4's camera-frame action target. Deliberately NOT a shape_meta key: it is
@@ -159,6 +166,32 @@ def eef_hist_to_cam(eef_pos, eef_quat_wxyz, gripper_qpos, cam_pos, cam_quat_wxyz
     out = np.concatenate([pos_cam, rot6,
                           np.asarray(gripper_qpos, dtype=np.float64)], axis=-1)
     return out.astype(np.float32)
+
+
+def eef_hist_base(eef_pos, eef_quat_wxyz):
+    """Express an EE history window in the ROBOT BASE frame, without gripper.
+
+    Per step::
+
+        [ p (3) , R_eef as rot6d (6) ]
+
+    ``eef_pos`` ``(..., 3)``, ``eef_quat_wxyz`` ``(..., 4)`` -> ``(..., 9)``
+    float32. The rot6d is the first two **rows** of R_eef, matching
+    `mat_to_rot6d` / pytorch3d's ``matrix_to_rotation_6d`` -- the same
+    convention `eef_hist_to_cam` uses for the relative rotation.
+
+    This is RH/RHG's trajectory condition (ENCODER_EXPERIMENT_PLAN.md section
+    4.3): the SAME window `_eef_history` returns, in base coordinates, so the
+    shared query's history is view-independent. The gripper is deliberately
+    absent (section 4.1: "历史夹爪状态暂不加入"). Lives here, next to the other
+    numpy pose helpers, so the dataset (training), `CamKeyImageWrapper` and
+    `ViewpointImageWrapper` (rollout) share ONE implementation -- a mismatch
+    would be invisible during training and wrong at eval.
+    """
+    p = np.asarray(eef_pos, dtype=np.float64)
+    R = quat_wxyz_to_mat_batch(eef_quat_wxyz)
+    rot6 = mat_to_rot6d(R)
+    return np.concatenate([p, rot6], axis=-1).astype(np.float32)
 
 
 def rot6d_to_mat(d6):
@@ -278,10 +311,12 @@ class MultiViewImageDataset(BaseImageDataset):
             emit_aux_action=False,
             emit_aux_view_pose=False,
             emit_second_draw=False,
+            emit_eef_hist_base=False,
             aux_n_steps=8,
             aux_action_frame='camera',
             view_mask_key='view_mask',
             eef_hist_key='view_eef_hist',
+            eef_hist_base_key='eef_hist_base',
             seed=42,
             val_ratio=0.0):
         replay_buffer = ReplayBuffer.create_from_path(
@@ -368,6 +403,15 @@ class MultiViewImageDataset(BaseImageDataset):
             raise ValueError(
                 'emit_second_draw needs view_pool: the second draw fills the '
                 'same K slots from the pool (it is meaningless in subset mode)')
+        # RH/RHG: emit the base-frame EE trajectory window as a per-sample
+        # (To, H, 9) key next to the per-slot camera-frame history. Defaults
+        # off, so every pre-RH config and dataset test is unchanged.
+        self.emit_eef_hist_base = bool(emit_eef_hist_base)
+        self.eef_hist_base_key = str(eef_hist_base_key)
+        if self.emit_eef_hist_base and view_pool is None:
+            raise ValueError(
+                'emit_eef_hist_base needs view_pool: the key rides the M3 emit '
+                'path (subset/random-view mode has no per-sample slot batch)')
         self.seed = int(seed)
         self.pool_pose = None     # (V, VIEW_POSE_DIM) float32, built below
         self._pool_pos = None     # {ring index -> position in view_pool}
@@ -419,6 +463,15 @@ class MultiViewImageDataset(BaseImageDataset):
                         f'{k!r} must NOT be in shape_meta: the env builds its '
                         f'robomimic modality mapping from shape_meta and '
                         f'RobomimicImageWrapper raises on the key suffix')
+            if self.emit_eef_hist_base:
+                if self.eef_hist_base_key in obs_shape_meta:
+                    raise ValueError(
+                        f'{self.eef_hist_base_key!r} must NOT be in shape_meta')
+                if self.eef_hist_base_key == eef_hist_key:
+                    raise ValueError(
+                        'eef_hist_base_key must differ from eef_hist_key: one '
+                        'is per-sample base-frame (To, H, 9), the other '
+                        'per-slot camera-frame (To, K, 11*H)')
             # camera_params reads self.replay_buffer; bind it now (the same
             # object is assigned again below) rather than duplicating the
             # meta-parsing here
@@ -647,6 +700,14 @@ class MultiViewImageDataset(BaseImageDataset):
             normalizer[self.view_mask_key] = _identity_normalizer(self.n_slots)
             normalizer[self.eef_hist_key] = _identity_normalizer(
                 self.n_slots * EEF_HIST_STEP_DIM * self.eef_hist_steps)
+            if self.emit_eef_hist_base:
+                # Identity, like the camera-frame history: the trajectory
+                # encoder's geometry is in raw metres (the plan's L = 1 m is
+                # applied inside the encoder), and rot6d axes are already O(1).
+                # The normalizer reshapes over the last dim, so the (H, 9)
+                # per-step width is the right scale width.
+                normalizer[self.eef_hist_base_key] = _identity_normalizer(
+                    EEF_HIST_BASE_STEP_DIM)
             if self.emit_aux_view_pose:
                 # Identity, unlike AUX_ACTION_KEY's FITTED normalizer: the
                 # pose target's axes are already O(1) (meters and rot6d
@@ -825,6 +886,13 @@ class MultiViewImageDataset(BaseImageDataset):
         pos, quat, grip = self._eef_history(idx)   # (To,H,3),(To,H,4),(To,H,2)
 
         obs_dict = dict()
+        if self.emit_eef_hist_base:
+            # RH/RHG's trajectory condition: the SAME window as the per-slot
+            # camera-frame history, but in base coordinates and without the
+            # gripper -- view-independent, so one (To, H, 9) tensor per
+            # sample, not one per slot. Oldest step first, current last, so
+            # obs_dict[key][:, -1, :3] is the frame's own EE position.
+            obs_dict[self.eef_hist_base_key] = eef_hist_base(pos, quat)
         mask = np.zeros((n_obs, n_slots), dtype=np.float32)
         hist = np.zeros(
             (n_obs, n_slots, EEF_HIST_STEP_DIM * self.eef_hist_steps),

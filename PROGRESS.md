@@ -96,7 +96,7 @@ key, is the **fifth behavioural null**: in-distribution **0.602 vs S's 0.653** (
 interpolation **0.604 vs 0.618** (−0.014), both inside the band; it still sits −0.211/−0.180
 below B1, so the ray address does not recover the ring. The ray path is live in `z_v`
 (`zv_norm_mean` 0.184 vs S 0.105) but `z_g`'s coarse structure is unchanged (`zg_pr` 2.06 vs
-2.08). **RH/RHG are not implemented**.
+2.08). **RH/RHG are implemented (2026-10-29) and not yet trained** (`ENCODER_EXPERIMENT_PLAN.md` sections 4.3-4.4).
 
 ## Status
 
@@ -1274,8 +1274,8 @@ the same offline-wandb launch path.
 **Artifacts.** `data/outputs/run_square_enc_{b0,b1,s,r}_s42_200ep/logs.json.txt` (probe scalars
 per epoch); `data/eval_{interp,heldout,el}_square_enc_{b0,b1,s,r}/eval_log.json`; the run dirs
 under `/data/zihan/runs/run_square_enc_*` (~9 GB each) hold `latest.ckpt` and the latent-probe
-npz and stay on `miroc-server`. **R is trained and evaluated (2026-10-29); RH and RHG are not
-implemented.**
+npz and stay on `miroc-server`. **R is trained and evaluated (2026-10-29); RH and RHG are implemented
+(2026-10-29) and not yet trained.**
 
 ## Findings
 
@@ -1429,8 +1429,9 @@ confirmation step. RH/RHG remain untested.
   interpolation (inside the band), and it sits −0.211 / −0.180 below B1, so the ray address
   does not recover the ring. The ray path is live in `z_v` (`zv_norm_mean` 0.184 vs S 0.105)
   while `z_g`'s coarse structure is unchanged (`zg_pr` 2.06 vs 2.08). RH (full
-  EE-trajectory-conditioned shared query) and RHG (point-to-ray attention bias) remain
-  specified but unimplemented in `ENCODER_EXPERIMENT_PLAN.md`.
+  EE-trajectory-conditioned shared query) and RHG (point-to-ray attention bias) are
+  implemented (2026-10-29) and untrained; their run/eval drivers and the sigma
+  calibrator are in `data/enc_rh*` and `calibrate_geom_bias.py`.
 
 ## Where the rest is
 
@@ -1451,7 +1452,7 @@ confirmation step. RH/RHG remain untested.
 - **`NOTES.md`** — runbooks (launch and sweep commands), timings, disk, and the recurring traps.
 - **`PLAN.md`** — the milestone plan and what remains: the three runs, and the deferred work.
 - **`ENCODER_EXPERIMENT_PLAN.md`** — the encoder ladder's stages, structures and pre-registered
-  evaluation protocol; B0/B1/S/R are measured here, RH/RHG remain to implement.
+  evaluation protocol; B0/B1/S/R are measured here; RH/RHG are implemented and untrained.
 - **`PROPOSAL.md`** — the direction and the original predictions.
 
 **Code map** — every milestone lands as new files; these are them.
@@ -1472,13 +1473,15 @@ confirmation step. RH/RHG remain untested.
 | probabilistic fusion (`prob_b/c/d`) | `model/vision/per_view_gaussian.py`, `model/vision/prob_view_conditioned_obs_encoder.py`, `policy/diffusion_unet_image_policy_prob.py`, `workspace/train_diffusion_unet_image_workspace_probprobe.py`, `config/task/prob_base_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_prob_latent.yaml`, `tests/test_prob_gaussian_fusion.py`, `data/prob_{run,eval}.sh`; seam: `train_diffusion_unet_image_workspace_latentprobe.py` (`_probe_extras` extension hook — the base returns nothing, so every existing run's npz/JSONL artifacts stay byte-identical) |
 | encoder ladder (B/S) | `model/vision/spatial_readout_obs_encoder.py`, `config/task/enc_{b,s}_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_enc_{b,s}_latent.yaml`, `data/enc_{b,s}_{run,eval}.sh`, `tests/test_spatial_readout_obs_encoder.py` (plus the 32-line extension of `tests/test_view_conditioned_obs_encoder.py`), `ENCODER_EXPERIMENT_PLAN.md`, `ENCODER_REFERENCES.md`; seam: `multiview_image_dataset.py` `eef_hist_window` |
 | encoder ladder (R) | `model/vision/ray_spatial_readout_obs_encoder.py`, `model/vision/plucker.py` (`plucker_ray_map_at`, `ray_dirs_cam_at`), `config/task/enc_r_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_enc_r_latent.yaml`, `data/enc_r_{run,eval}.sh`, `tests/test_ray_spatial_readout_obs_encoder.py`; same `eef_hist_window` seam as B/S, no new dataset/runner keys |
+| encoder ladder (RH/RHG) | `model/vision/traj_spatial_readout_obs_encoder.py` (one class; `use_geom_bias` split), `calibrate_geom_bias.py`, `config/task/enc_rh_image_abs_multiview_az75.yaml` (shared), `config/train_diffusion_unet_image_workspace_enc_rh{,g}_latent.yaml`, `data/enc_rh{,g}_{run,eval}.sh`, `tests/test_traj_spatial_readout_obs_encoder.py`; seams: `multiview_image_dataset.py` `emit_eef_hist_base`, `cam_key_image_runner.py` / `eval_novel_view.py` `serve_eef_hist_base`, the latent-probe workspace's extra per-sample obs pass-through |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE history;
 the `eef_hist_window` selector added 2026-10-28 — `sample` default for committed runs, `episode`
-for the corrected protocol; and the `view_count_range` guard removed 2026-09-24 so the ladder
-can run `[1, 2]`),
-`eval_novel_view.py` (`--m3-slots`, `--eef-hist-steps`, the elevation orbit),
+for the corrected protocol; the `view_count_range` guard removed 2026-09-24 so the ladder
+can run `[1, 2]`; and the `emit_eef_hist_base` / `eef_hist_base` base-frame trajectory window
+added 2026-10-29, default off),
+`eval_novel_view.py` (`--m3-slots`, `--eef-hist-steps`, `--serve-eef-hist-base`, the elevation orbit),
 `summarize_novel_view.py` (sort key for `el_*` names), and the `getattr`-guarded aux log lines
 in the upstream `train_diffusion_unet_image_workspace.py` (`step_log['aux_loss']`, plus the
 `zvzg` seam's per-term `aux_action_loss`/`aux_pose_loss`). No other upstream package file is

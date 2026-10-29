@@ -41,6 +41,8 @@ from diffusion_policy.codecs.imagecodecs_numcodecs import register_codecs
 from diffusion_policy.model.vision.model_getter import get_resnet
 from diffusion_policy.model.vision.view_conditioned_obs_encoder import (
     ViewConditionedObsEncoder)
+from diffusion_policy.model.vision.traj_spatial_readout_obs_encoder import (
+    TrajSpatialReadoutObsEncoder)
 from diffusion_policy.workspace.train_diffusion_unet_image_workspace_latentprobe import (
     TrainDiffusionUnetImageWorkspaceLatentProbe)
 register_codecs()
@@ -49,9 +51,9 @@ register_codecs()
 AZ0_VIEW = 1
 
 
-def _dataset_cfg(zarr_path):
+def _dataset_cfg(zarr_path, h=H, w=W):
     shape_meta = {
-        'obs': {f'view_slot_{k:02d}_image': {'shape': [C, H, W], 'type': 'rgb'}
+        'obs': {f'view_slot_{k:02d}_image': {'shape': [C, h, w], 'type': 'rgb'}
                 for k in range(N_VIEWS)},
         'action': {'shape': [10]},
     }
@@ -199,6 +201,73 @@ def test_hook(tmp):
     print('mutation check OK (zeroing conv1 image channels moves the stats)')
 
 
+def test_hook_carries_base_hist(tmp):
+    """RH/RHG: the probe must carry the view-independent `eef_hist_base`.
+
+    The probe builds its obs dicts by hand, so a per-sample key the encoder
+    needs would be dropped unless `_build_probe_cache` carries it through.
+    The check that can fail: with the trajectory branch made live, mutating
+    the cached base history must move the snapshot -- and at init it must NOT
+    (W_h == 0, the documented inertness).
+    """
+    # 32x32, so layer3 is a 2x2 grid: with a 1x1 grid the intra-image
+    # softmax is over one key and could not depend on the query at all.
+    hh = ww = 32
+    zarr_path = os.path.join(tmp, 'rh_synthetic.zarr')
+    build_synthetic_zarr(zarr_path, h=hh, w=ww)
+    root = zarr.open(zarr_path, mode='a')
+    root['meta/view_cam_pos'][:] = np.array(
+        [[1.0, 0.0, 1.0], [0.5, 0.0, 1.35], [1.2, 0.1, 0.9]])
+    ds_cfg = _dataset_cfg(zarr_path, h=hh, w=ww)
+    ds_cfg.emit_eef_hist_base = True
+    dataset = hydra.utils.instantiate(ds_cfg)
+    normalizer = dataset.get_normalizer()
+    encoder = TrajSpatialReadoutObsEncoder(
+        shape_meta=OmegaConf.to_container(ds_cfg.shape_meta, resolve=True),
+        rgb_model=get_resnet(name='resnet18', weights=None),
+        eef_hist_steps=2, fused_dim=512, n_heads=8,
+        crop_shape=None, random_crop=False, use_group_norm=True,
+        imagenet_norm=True, share_rgb_model=True)
+    encoder.eval()
+    policy = _FakePolicy(encoder, normalizer)
+
+    out_dir = os.path.join(tmp, 'rh_run')
+    os.makedirs(out_dir, exist_ok=True)
+    ws = _make_shim(ds_cfg, out_dir)
+    ws.epoch = 0
+    stats0 = ws._latent_probe_hook(policy)
+    assert 'eef_hist_base' in ws._probe_cache['extras'], (
+        sorted(ws._probe_cache['extras']))
+    extra = ws._probe_cache['extras']['eef_hist_base']
+    assert tuple(extra.shape) == (4, 2, 9), extra.shape
+    for k, v in stats0.items():
+        assert np.isfinite(v), (k, v)
+
+    # fixed draws still hold with the extra key in the cache
+    ws.epoch = 1
+    stats1 = ws._latent_probe_hook(policy)
+    a = np.load(os.path.join(out_dir, 'latent_snapshots', 'epoch_0000.npz'))
+    b = np.load(os.path.join(out_dir, 'latent_snapshots', 'epoch_0001.npz'))
+    for key in ('zv', 'zg', 'zg_n1'):
+        assert np.array_equal(a[key], b[key]), key
+
+    # inert at init: the same walk with a mutated base history must not move
+    ws.epoch = 2
+    ws._probe_cache['extras']['eef_hist_base'] = extra + 0.05
+    stats2 = ws._latent_probe_hook(policy)
+    assert stats2['latent_probe/zv_norm_mean'] == stats0['latent_probe/zv_norm_mean']
+
+    # live after W_h moves: now the trajectory window changes the snapshot
+    with torch.no_grad():
+        encoder.query_proj.weight.normal_(0.0, 0.02)
+    ws.epoch = 3
+    stats3 = ws._latent_probe_hook(policy)
+    assert stats3['latent_probe/zv_norm_mean'] != stats0['latent_probe/zv_norm_mean'], (
+        'the probe did not carry eef_hist_base into the encoder')
+    print('probe base-history pass-through OK (carried in both draws, inert at '
+          'init, live after W_h moves)')
+
+
 def test_config_composes():
     from hydra import compose, initialize_config_dir
     cfg_dir = os.path.join(repo_root, 'diffusion_policy', 'config')
@@ -234,6 +303,7 @@ def test():
     try:
         test_config_composes()
         test_hook(tmp)
+        test_hook_carries_base_hist(tmp)
         print('ALL LATENT-PROBE HOOK CHECKS PASSED')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
