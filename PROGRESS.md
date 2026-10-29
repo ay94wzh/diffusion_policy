@@ -80,7 +80,7 @@ sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a sec
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
 geometric conditioning and §2.4's aux heads are both inert.** **What the encoder ladder adds
-(2026-10-29).** `ENCODER_EXPERIMENT_PLAN.md`'s first two stages, B and S, were trained and
+(2026-10-29).** `ENCODER_EXPERIMENT_PLAN.md`'s first three stages, B, S and R, were trained and
 swept. **B**, the corrected EE-history protocol, is a clean one-variable pair — B0 `sample` vs
 B1 `episode` — and is a **null on every registered mean**: in-distribution **0.751 vs 0.813**
 (−0.062), interpolation 0.712 vs 0.784
@@ -1267,7 +1267,9 @@ to the current server, and 0.17.9 fails identically). Both run scripts now pass
 `logging.mode="${LOG_MODE:-offline}"`, the same fix and reasoning as `data/z_run.sh`; the failed
 first attempts are preserved as `*_ABORTED_wandb_20261028`. The campaign shared the machine with
 another user's CPU-heavy RoboTwin evaluation, which stretched B0 and the B1 sweep; no run failed,
-and the episode/seed protocol is unchanged, so the numbers are unaffected.
+and the episode/seed protocol is unchanged, so the numbers are unaffected. R ran clean on an idle
+machine: training 00:51→04:02 (3 h 11 m) and evaluation 04:03→05:58 (1 h 55 m) on cuda:1, with
+the same offline-wandb launch path.
 
 **Artifacts.** `data/outputs/run_square_enc_{b0,b1,s,r}_s42_200ep/logs.json.txt` (probe scalars
 per epoch); `data/eval_{interp,heldout,el}_square_enc_{b0,b1,s,r}/eval_log.json`; the run dirs
