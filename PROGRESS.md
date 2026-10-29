@@ -10,7 +10,7 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-10-29.
+Last updated 2026-10-29 (RH/RHG measured).
 
 ## Summary
 
@@ -96,7 +96,19 @@ key, is the **fifth behavioural null**: in-distribution **0.602 vs S's 0.653** (
 interpolation **0.604 vs 0.618** (−0.014), both inside the band; it still sits −0.211/−0.180
 below B1, so the ray address does not recover the ring. The ray path is live in `z_v`
 (`zv_norm_mean` 0.184 vs S 0.105) but `z_g`'s coarse structure is unchanged (`zg_pr` 2.06 vs
-2.08). **RH/RHG are implemented (2026-10-29) and not yet trained** (`ENCODER_EXPERIMENT_PLAN.md` sections 4.3-4.4).
+2.08). **RH/RHG were trained and swept (2026-10-29).** **RH**, R plus the full base-frame
+EE-trajectory-conditioned shared query, is the ladder's **first upward move**: in-distribution
+**0.758 vs R's 0.602 (+0.156)** and interpolation **0.748 vs 0.604 (+0.144)**, with the sign
+consistent at **11/11 trained and 9/10 interpolated viewpoints**; it recovers ~74% / ~80% of the
+R→B1 gap but stays 0.055 / 0.036 below B1. The in-distribution mean is **0.006 outside** the
+pre-registered 0.15 band and the interpolation mean **0.006 inside**, so this is a **borderline,
+capacity-confounded recovery**, not a clean departure. **RHG**, RH plus the point-to-ray bias on
+4/8 heads (σ = 0.1028297208249569 m), is the **sixth behavioural null**: **+0.009** in-distribution
+and **−0.012** interpolation against RH, far inside the band, while the bias is live in the latent
+(`zv_pair_ratio` 0.252→0.434, `zv_norm_mean` 0.443→0.750, `zg_pr` 4.52→6.33). The
+trajectory-conditioned query is the first encoder-ladder change to move both the representation
+and the ring; the explicit geometric bias moves only the representation. Elevation remains broken
+(`el_m15` 0.04 / 0.00, `el_p15` 0.14 / 0.00).
 
 ## Status
 
@@ -125,6 +137,8 @@ below B1, so the ray address does not recover the ring. The ray path is live in 
 | **encoder B** (`enc_b0`/`enc_b1`) | 2026-10-29 — corrected `eef_hist_window=episode` (B1) against the legacy `sample` (B0), one variable; K=11 pool [1..11], N ∈ [1,11], 201 epochs, seed 42 | **history null** — every registered mean inside the 0.15 band: in-dist −0.062, interp −0.072, past −0.045, elev +0.020 (descriptive); B1 is the encoder ladder's internal baseline |
 | **encoder S** (`enc_s`) | 2026-10-29 — pure-RGB layer3 spatial tokens + one shared 512-d query + 8-head intra-image attention, B's masked cross-view fusion; structural, not RNG-locked to B | **negative on the ring** — in-dist 0.653 vs B1 0.813 (−0.160), interp 0.618 vs 0.784 (−0.166), both just outside the 0.15 band; past-ring null (0.355 vs 0.365); elevation 0.293 vs 0.347; seed 42 only |
 | **encoder R** (`enc_r`) | 2026-10-29 — S + feature-level ray encoding: Plücker `[d, m/L]` at each layer3 cell's receptive-field centre (same crop window), MLP → 512-d added to the attention KEY; 5,284,928 encoder params | **fifth behavioural null** — inside the 0.15 band of S on both registered means: in-dist 0.602 vs 0.653 (−0.051), interp 0.604 vs 0.618 (−0.014); past-ring 0.370 vs 0.355; elevation 0.327 vs 0.293 (descriptive). It does not recover toward B1 (0.813 / 0.784). The ray path is live in the latent (`zv_norm_mean` 0.184 vs S 0.105, `zv_rel_spread_mean` 0.362 vs 0.242), but `zg_pr` is unchanged (2.06 vs 2.08) and behaviour did not follow |
+| **encoder RH** (`enc_rh`) | 2026-10-29 — R + the full base-frame EE-trajectory-conditioned shared query: 4-step temporal Transformer (width 128, 4 heads) → h_t (512-d) → q_t = q_learned + W_h h_t, one q_t per image time shared by all views; new `eef_hist_base` key `(To, H=4, 9)`; 6,207,680 encoder params (R: 5,284,928) | **borderline recovery, not a null** — in-dist **0.758 vs R 0.602 (+0.156)**, interp **0.748 vs 0.604 (+0.144)**; 11/11 trained and 9/10 interpolated viewpoints positive (one tie); recovers ~74% / ~80% of the R→B1 gap, stays 0.055 / 0.036 below B1; in-dist mean **0.006 outside** the 0.15 band, interp 0.006 inside; capacity-confounded (not RNG-lockstep with R) |
+| **encoder RHG** (`enc_rhg`) | 2026-10-29 — RH + R07's point-to-ray bias on 4/8 heads: `b = −α min(ρ²/(2σ²), b_max)`, α=1, b_max=4, σ calibrated on the training zarr and **locked at 0.1028297208249569 m**; adds no parameter and consumes no RNG, so RH/RHG start bit-identical | **sixth behavioural null** — in-dist **+0.009**, interp **−0.012** vs RH, far inside the band; past +0.075 (inside the band; near the floor); but the bias is live in the latent (`zv_pair_ratio` 0.252→0.434, `zv_norm_mean` 0.443→0.750, `zg_pr` 4.52→6.33) and changes neither train nor val loss; elevation remains broken |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -1176,9 +1190,9 @@ e200 for all three cells despite the collapse; a future registration of this fai
 anchor on the collapse screen and the three moved readouts, which did fire, rather than on
 `diff_loss`.
 
-## The encoder ladder: B0/B1/S/R (2026-10-29)
+## The encoder ladder: B0/B1/S/R/RH/RHG (2026-10-29)
 
-**What it is.** The first three stages of `ENCODER_EXPERIMENT_PLAN.md`. **B** keeps the M3 policy
+**What it is.** Stages B, S, R, RH and RHG of `ENCODER_EXPERIMENT_PLAN.md`. **B** keeps the M3 policy
 (no aux head) and changes only the EE-history protocol: B0 is the legacy
 `eef_hist_window=sample` — the window-start clip that every committed M3/M4 run used, which with
 To=2 gives `[B,B,B,B]` / `[B,B,B,B+1]` and therefore almost no history — and B1 is `episode`, the
@@ -1195,14 +1209,25 @@ S−B is not capacity-matched either. **R** is S plus one structural addition: e
 Plücker ray `[d, m/L]`, evaluated at the cell's receptive-field centre with the same crop
 window, is MLP-encoded to 512-d and added to the attention KEY (`k = W_K LN(f + e)`,
 `v = W_V LN(f)`). It adds 268,288 parameters (5,284,928 vs S's 5,016,640) and is not RNG-lockstep
-with S.
+with S. **RH** adds the trajectory condition: for each image time, the 4-step base-frame EE
+window (oldest→current) goes through a 1-layer, 4-head temporal Transformer (width 128, FFN 256);
+the 4 outputs are concatenated and MLP'd to a 512-d `h_t`, and the single shared spatial query
+becomes `q_t = q_learned + W_h h_t` (W_h zero-init), reused by every valid view. The only new obs
+key is `eef_hist_base`, a per-sample `(To, H=4, 9)` = `[pos, rot6d]` window, view-independent by
+construction. **RHG** is RH with one flag: R07's point-to-ray bias
+`b_{v,j} = −α min(ρ_{v,j}²/(2σ²), b_max)` on the attention logits of the first 4 of 8 heads, where
+`ρ` is the distance from the current EE point to each token's Plücker ray in metres; α=1, b_max=4,
+and σ is calibrated once on the training zarr and locked. `use_geom_bias` adds no parameter and
+consumes no RNG at construction, so RH and RHG start from bit-identical parameters and see the
+identical data stream.
 
 **Protocol.** Square PH, `_abs` actions; pool [1..11] = az −75…+75 every 15°, **all trained**
 (unlike M2/M3's even/odd split — see *Setup and protocol*); N uniform in [1,11]; 201 epochs;
 EMA epoch 200; 50 paired episodes per viewpoint; strict `success_rate`. Registered means:
 in-distribution ring (11 vp, trained), interpolation ±7.5…±67.5 (10 vp, held out),
 past-ring ±82.5/±90 (4 vp, outside the training range), elevation el_0/±15 (3 vp, descriptive).
-Band **0.15** mean-over-viewpoints, pre-registered; direction not predicted.
+Band **0.15** mean-over-viewpoints, pre-registered; direction not predicted. RH/RHG use the same
+protocol and comparators: RH is compared with R, RHG with RH.
 
 **Results — behaviour.** Strict `success_rate`, 50 paired episodes per viewpoint:
 
@@ -1212,6 +1237,15 @@ Band **0.15** mean-over-viewpoints, pre-registered; direction not predicted.
 | interpolation ±7.5…±67.5 (10 vp) | 0.712 | **0.784** | 0.618 | 0.604 | 0.774 |
 | past the ring ±82.5/±90 (4 vp) | 0.320 | **0.365** | 0.355 | 0.370 | 0.310 |
 | elevation el_0 / m15 / p15 | 0.80 / 0.10 / 0.20 | 0.90 / 0.02 / 0.12 | 0.60 / 0.04 / 0.24 | 0.68 / 0.06 / 0.24 | 0.84 / 0.00 / 0.00 |
+
+**RH/RHG against R and B1.** Strict `success_rate`, 50 paired episodes per viewpoint:
+
+| registered mean | R | **RH** | **RHG** | B1 | RH−R | RHG−RH |
+|---|---|---|---|---|---|---|
+| in-dist ring (11 vp, trained) | 0.602 | **0.758** | **0.767** | 0.813 | **+0.156** | **+0.009** |
+| interpolation ±7.5…±67.5 (10 vp) | 0.604 | **0.748** | **0.736** | 0.784 | **+0.144** | **−0.012** |
+| past the ring ±82.5/±90 (4 vp) | 0.370 | 0.350 | 0.425 | 0.365 | −0.020 | +0.075 |
+| elevation el_0 / m15 / p15 | 0.68 / 0.06 / 0.24 | 0.86 / 0.04 / 0.14 | 0.84 / 0.00 / 0.00 | 0.90 / 0.02 / 0.12 | — | — |
 
 **B0 vs B1 is a null.** Every registered mean is inside the 0.15 band: in-distribution −0.062,
 interpolation −0.072, past-ring −0.045, elevation +0.020 (descriptive). B1 is if anything
@@ -1243,23 +1277,69 @@ probe shows it reshaped `z_v` — but the change did not reach the fused represe
 behaviour. Scale caveat: these probe scalars are norm-sensitive across architectures, so the
 sizes are read as a within-S/R comparison only, not against B1's much larger `z_v` (0.606).
 
+**RH vs R — a borderline recovery, not a null.** RH−R is **+0.156** in-distribution and
+**+0.144** interpolation. The pre-registered 0.15 band is crossed by 0.006 on the in-distribution
+mean and missed by 0.006 on interpolation, so the "within 0.15 on both → sixth null" branch is
+**not** satisfied; the "recovers the ring toward B1" branch is partially satisfied — RH recovers
+~74% of the in-distribution gap and ~80% of the interpolation gap from R to B1, while remaining
+0.055 / 0.036 below B1 (inside the band). The sign is consistent, not one cell: **11/11 trained
+viewpoints and 9/10 interpolated viewpoints are positive (one tie, zero negative)**; the largest
+gains are `az_0` and `az_p15` (+0.30 each). The comparison is structural and capacity-confounded:
+RH adds 922,752 encoder parameters (6,207,680 vs R's 5,284,928) and is not RNG-lockstep with R.
+
+**RHG vs RH — the sixth behavioural null.** RHG−RH is **+0.009** in-distribution and **−0.012**
+interpolation, both far inside the 0.15 band; past-ring +0.075 is inside the band and near the
+floor (0.350–0.425 across R/RH/RHG); per-viewpoint signs are mixed (8/11 positive
+in-distribution, 4/10 interpolation).
+This is the clean one-variable comparison: `use_geom_bias` adds no parameter and consumes no RNG
+at construction, so RH and RHG start bit-identical and see the identical data stream. The bias is
+nonetheless **live in the latent**: `zv_pair_ratio` 0.252→0.434, `zv_norm_mean` 0.443→0.750,
+`zv_pr` 5.54→9.74, `zg_pr` 4.52→6.33, while the loss curves are unchanged (train 0.00443→0.00317
+for RH vs 0.00451→0.00326 for RHG at e150/e200; val 0.0479→0.0466 vs 0.0484→0.0487). So the
+explicit point-to-ray relation reshapes the representation without moving behaviour — the
+project's signature pattern, now on the last untested conditioning path.
+
+**The trajectory path is live in the latent.** RH's `z_v` becomes strongly state-dominated:
+`zv_pair_ratio` 0.734 (R) → 0.252 (RH), `zv_norm_mean` 0.184→0.443, `zv_pr` 3.01→5.54; the fused
+latent's participation ratio roughly doubles (`zg_pr` 2.06→4.52). This is the designed effect —
+the trajectory-conditioned query focuses the readout on state-relevant content — and it is the
+first encoder-ladder change whose representation and behaviour move together. The bias then
+raises `zv_pair_ratio` back to 0.434 and the norms further (`zv_norm_mean` 0.750, `zg_pr` 6.33)
+without a behavioural effect. The usual scale caveat applies: these probe scalars are
+norm-sensitive across architectures, so they are read within the R→RH→RHG family, not against B1.
+
+**Calibration.** σ = **0.1028297208249569 m**, locked before the RHG launch; 4,349 of 5,632
+(state, obs-step, view) frames are valid (77.2%); the remaining 22.8% are views whose current EE
+point is behind the camera or projects outside the sampled crop, where the encoder gates the bias
+off by design. The implied bias is −0.5 at a 1-cell neighbour and −1.93 at 2 cells (cap −4), so
+the bias is a soft local focus, not a hard mask.
+
+**RH/RHG elevation.** `el_0` 0.86 (RH) / 0.84 (RHG) — the same-pose check against `az_0` 0.84 /
+0.88 — then `el_m15` 0.04 / 0.00 and `el_p15` 0.14 / 0.00. The downward-elevation failure
+persists; the elevation cells are descriptive and single cells are not read individually.
+
 **B1 vs m4base validates the baseline.** +0.017 in-distribution and +0.010 interpolation, inside
 the band; past-ring +0.055 and elevation +0.067 (descriptive). `m4base` carries the base-frame
 aux head, so this is a reference check rather than a clean comparator; B1 is the encoder ladder's
 internal baseline.
 
 **Elevation is not fixed.** The downward-elevation failure persists in every cell: `el_m15` 0.02
-(B1) / 0.10 (B0) / 0.04 (S), against `el_0` 0.90 / 0.80 / 0.60; `el_p15` is 0.12 / 0.20 / 0.24.
-The elevation cells are descriptive, not registered, but no encoder change so far touches them.
+(B1) / 0.10 (B0) / 0.04 (S) / 0.04 (RH) / 0.00 (RHG), against `el_0` 0.90 / 0.80 / 0.60 / 0.86 /
+0.84; `el_p15` is 0.12 / 0.20 / 0.24 / 0.14 / 0.00. The elevation cells are descriptive, not
+registered, but no encoder change so far touches them.
 
 **Caveats.** One seed (42) and 50 episodes per viewpoint. The S margins are only 0.010–0.016
 over the threshold, so S is not yet a confirmed regression; the plan's next comparison is seed
 43/44. R−S is comfortably inside the band, but R is also one seed. The S/B/R runs are not
 RNG-lockstep (unlike B0/B1), so S−B and R−S are structural, capacity-confounded comparisons, not
 paired ablations. Each cell evaluates epoch 200 (`latest.ckpt`) per protocol; S's topk is epoch
-150. The per-epoch latent probe ran in all four cells and the npz series are on `miroc-server`;
+150. The per-epoch latent probe ran in every cell and the npz series are on `miroc-server`;
 the B/S FiLM and probe series were not analysed, but R's epoch-200 probe scalars are read against
-S's above.
+S's above. RH and RHG are one seed each. RH−R is structural and capacity-confounded (RH adds
+0.92 M parameters and is not RNG-lockstep with R); RHG−RH is the clean one-variable comparison
+(identical parameters and RNG), so the bias verdict is the stronger of the two. The RH
+in-distribution margin is 0.006 over the band and the interpolation margin 0.006 under it; the
+registered quantities are the means, and single viewpoints are never read individually.
 
 **Operational note.** The first launch died at `wandb.init()` with the known client/server
 incompatibility (`CommError: 'NoneType' object has no attribute 'get'`; wandb 0.15.12 cannot talk
@@ -1269,13 +1349,21 @@ first attempts are preserved as `*_ABORTED_wandb_20261028`. The campaign shared 
 another user's CPU-heavy RoboTwin evaluation, which stretched B0 and the B1 sweep; no run failed,
 and the episode/seed protocol is unchanged, so the numbers are unaffected. R ran clean on an idle
 machine: training 00:51→04:02 (3 h 11 m) and evaluation 04:03→05:58 (1 h 55 m) on cuda:1, with
-the same offline-wandb launch path.
+the same offline-wandb launch path. The first RHG launch stopped at `CALIB_GATE_FAILED` before
+training: `data/enc_rhg_run.sh` writes σ to `data/enc_rhg_calib.env` with `%.6f` (`0.102830`) but
+the gate compares the JSON's `sigma_m` to it at `1e-9` (`0.1028297208249569`), a 2.8e-8 mismatch.
+The env file was rewritten at full precision and the driver relaunched; the gate then passed. The
+driver still carries the bug — a fresh calibration will fail it again. Proposed fix, not applied:
+`print(repr(float(d['sigma_m'])))` instead of `'%.6f'`, or a `1e-6` tolerance in the gate.
 
 **Artifacts.** `data/outputs/run_square_enc_{b0,b1,s,r}_s42_200ep/logs.json.txt` (probe scalars
 per epoch); `data/eval_{interp,heldout,el}_square_enc_{b0,b1,s,r}/eval_log.json`; the run dirs
 under `/data/zihan/runs/run_square_enc_*` (~9 GB each) hold `latest.ckpt` and the latent-probe
-npz and stay on `miroc-server`. **R is trained and evaluated (2026-10-29); RH and RHG are implemented
-(2026-10-29) and not yet trained.**
+npz and stay on `miroc-server`. **RH/RHG were trained and evaluated (2026-10-29)**: their logs
+are `data/outputs/run_square_enc_{rh,rhg}_s42_200ep/logs.json.txt`, their sweeps
+`data/eval_{interp,heldout,el}_square_enc_{rh,rhg}/eval_log.json`, and their run dirs
+`/data/zihan/runs/run_square_enc_{rh,rhg}_s42_200ep` (8.9 GB each; checkpoint 4.54 GB). The RHG
+calibration is `data/enc_rhg_calib_square.json` + `data/enc_rhg_calib.env` (the env is gitignored).
 
 ## Findings
 
@@ -1379,7 +1467,31 @@ is not a free replacement for the view-conditioned encoder; adding the ray addre
 per-view latent (`zv_norm_mean` +76%, `zv_rel_spread_mean` +50% vs S) but not the fused latent or
 behaviour, so it is the fifth behavioural null and does not recover the ring. S and R are one
 seed each; S's margins are just over the threshold, so a second seed remains the registered
-confirmation step. RH/RHG remain untested.
+confirmation step. RH/RHG are measured below (2026-10-29).
+
+### The encoder ladder — RH and RHG (2026-10-29)
+
+**Method.** RH adds the full base-frame EE-trajectory condition to R's shared query: per image
+time, a 1-layer/4-head temporal Transformer over the 4-step window → `h_t` (512-d) →
+`q_t = q_learned + W_h h_t`, one query shared by all views; the only new obs key is `eef_hist_base`
+(`(To, 4, 9)` = `[pos, rot6d]`, view-independent). RHG adds R07's point-to-ray bias on 4/8 heads
+(`b = −α min(ρ²/(2σ²), b_max)`, α=1, b_max=4), with σ calibrated on the training zarr and locked
+at 0.1028297208249569 m; it adds no parameter and no RNG, so RH/RHG start bit-identical. The
+protocol is the ladder's: square PH, pool 1..11, N∈[1,11], seed 42, 201 epochs, band 0.15.
+
+**Result.** RH is the ladder's first upward move: in-dist **0.758 vs R 0.602 (+0.156)** and
+interp **0.748 vs 0.604 (+0.144)**. The in-distribution mean is 0.006 outside the band and the
+interpolation mean 0.006 inside; 11/11 trained and 9/10 interpolated viewpoints are positive (one
+tie); RH recovers ~74% / ~80% of the R→B1 gap but stays 0.055 / 0.036 below B1. RHG is the sixth
+behavioural null: in-dist **+0.009**, interp **−0.012** vs RH, far inside the band, with mixed
+per-viewpoint signs. The bias is live in the latent (`zv_pair_ratio` 0.252→0.434, `zv_norm_mean`
+0.443→0.750, `zg_pr` 4.52→6.33) and changes neither train nor val loss.
+
+**Conclusion.** The full-trajectory-conditioned query is the first encoder-ladder change to move
+both the representation and the ring; the explicit point-to-ray bias moves only the
+representation. RH's move is borderline (one mean 0.006 over the band) and capacity-confounded
+(+0.92 M parameters, not RNG-lockstep with R), so its registered confirmation is a second seed;
+RHG−RH is the clean one-variable comparison and is null. Elevation is still broken in both cells.
 
 ## Open questions
 
@@ -1422,16 +1534,20 @@ confirmation step. RH/RHG remain untested.
   `zgpose`'s, the N=1 fused latent 2.17° / 3.93 cm pose-decodable — so a student would have
   still more to learn, while the held-out behaviour is the weakest of the four cells: the same
   caution again, at a stronger setting.
-- **Does the S regression survive a second seed, and can RH/RHG recover the ring?** S is
-  −0.160 in-distribution and −0.166 interpolation against B1, both just outside the 0.15 band,
-  on one seed; the plan's next comparison is seed 43/44. **R was trained and evaluated
-  2026-10-29: it is the fifth behavioural null** — R−S is −0.051 in-distribution and −0.014
-  interpolation (inside the band), and it sits −0.211 / −0.180 below B1, so the ray address
-  does not recover the ring. The ray path is live in `z_v` (`zv_norm_mean` 0.184 vs S 0.105)
-  while `z_g`'s coarse structure is unchanged (`zg_pr` 2.06 vs 2.08). RH (full
-  EE-trajectory-conditioned shared query) and RHG (point-to-ray attention bias) are
-  implemented (2026-10-29) and untrained; their run/eval drivers and the sigma
-  calibrator are in `data/enc_rh*` and `calibrate_geom_bias.py`.
+- **Does the S regression survive a second seed, and is RH's recovery the trajectory condition
+  or capacity?** S is −0.160 in-distribution and −0.166 interpolation against B1, both just
+  outside the 0.15 band, on one seed; a second seed remains the registered confirmation.
+  **R is the fifth behavioural null** — R−S is −0.051 / −0.014 (inside the band), and it sits
+  −0.211 / −0.180 below B1. **RH was trained and swept 2026-10-29 and is the ladder's first
+  upward move**: in-dist **0.758 vs R 0.602 (+0.156)**, interp **0.748 vs R 0.604 (+0.144)**,
+  11/11 trained and 9/10 interpolated viewpoints positive (one tie), recovering ~74% / ~80% of
+  the R→B1 gap while staying 0.055 / 0.036 below B1. The in-distribution mean is 0.006 outside
+  the 0.15 band and the interpolation mean 0.006 inside, so the move is borderline; RH adds
+  0.92 M parameters and is not RNG-lockstep with R, so the gain is capacity-confounded. Seed 43
+  is the registered confirmation, and a capacity-matched control is the clean attribution test.
+  **RHG is the sixth behavioural null**: +0.009 / −0.012 vs RH, far inside the band, while the
+  bias is live in the latent (`zv_pair_ratio` 0.252→0.434, `zv_norm_mean` 0.443→0.750). Elevation
+  remains broken at `el_m15` / `el_p15` (0.04 / 0.14 RH, 0.00 / 0.00 RHG).
 
 ## Where the rest is
 
@@ -1452,7 +1568,8 @@ confirmation step. RH/RHG remain untested.
 - **`NOTES.md`** — runbooks (launch and sweep commands), timings, disk, and the recurring traps.
 - **`PLAN.md`** — the milestone plan and what remains: the three runs, and the deferred work.
 - **`ENCODER_EXPERIMENT_PLAN.md`** — the encoder ladder's stages, structures and pre-registered
-  evaluation protocol; B0/B1/S/R are measured here; RH/RHG are implemented and untrained.
+  evaluation protocol; B0/B1/S/R/RH/RHG are measured here (RH/RHG results in *The encoder ladder*
+  above); seed 43 is the registered confirmation.
 - **`PROPOSAL.md`** — the direction and the original predictions.
 
 **Code map** — every milestone lands as new files; these are them.

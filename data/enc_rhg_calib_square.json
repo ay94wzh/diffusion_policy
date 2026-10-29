@@ -1,0 +1,53 @@
+{
+  "alpha": 1.0,
+  "b_max": 4.0,
+  "config_name": "train_diffusion_unet_image_workspace_enc_rhg_latent",
+  "crop_shape": [
+    76,
+    76
+  ],
+  "dataset_path": "data/multiview/square_ph_ring13.zarr",
+  "feature_stride": 16,
+  "implied_bias_1cell": -0.5,
+  "implied_bias_2cell": -1.9250863272565353,
+  "n_skipped_view_frames": 1283,
+  "n_states": 256,
+  "n_valid_view_frames": 4349,
+  "n_view_frames": 5632,
+  "note": "sigma = median point-to-ray distance at a 1-cell feature-grid neighbour of the EE projection, metres; calibrated once on the training zarr (centre crop) and LOCKED. The bias acts only on heads 1..geom_bias_heads and only for views whose EE projection is inside the crop (this script skips the others in the same way the encoder gates them).",
+  "rho_1cell": {
+    "max": 0.23079998791217804,
+    "mean": 0.10650024438889515,
+    "median": 0.1028297208249569,
+    "min": 0.028350304812192917,
+    "n": 15044,
+    "p10": 0.061661844700574876,
+    "p90": 0.15615831762552262
+  },
+  "rho_2cell": {
+    "max": 0.3613237142562866,
+    "mean": 0.20482064452293477,
+    "median": 0.20177100598812103,
+    "min": 0.0945608988404274,
+    "n": 11018,
+    "p10": 0.14168840497732163,
+    "p90": 0.2722617685794831
+  },
+  "rho_nearest": {
+    "max": 0.10624699294567108,
+    "mean": 0.041403532464829314,
+    "median": 0.04150921851396561,
+    "min": 0.00045951904030516744,
+    "n": 4349,
+    "p10": 0.018511682376265527,
+    "p90": 0.06319230496883392
+  },
+  "seed": 42,
+  "sigma_m": 0.1028297208249569,
+  "task": "square",
+  "token_grid": [
+    5,
+    5
+  ],
+  "valid_fraction": 0.7721946022727273
+}
