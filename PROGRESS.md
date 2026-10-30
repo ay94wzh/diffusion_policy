@@ -10,7 +10,7 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-10-29 (RH/RHG measured).
+Last updated 2026-10-30 (LQ measured).
 
 ## Summary
 
@@ -75,7 +75,7 @@ comes out clean with `A ≈ 0`. The round's new instrument — the semantic read
 head — is what turns `a`'s null from "alignment doesn't help" into "**this loss cannot help**".
 The pre-registered R2 instrument (`diff_loss` rising above the family band) read **clear** at e200
 for all three cells while the encoder and behaviour were collapsing, so that instrument does not
-detect this failure mode; the collapse screen and the readouts do. **What is not explained.** Two distinct failure modes
+detect this failure mode; the collapse screen and the readouts do. **What is not explained.** Two distinct unexplained failure modes
 sit at the floor — an encoder *collapse* (`[1,2]`, L1 on square/can) and a second one with no
 candidate mechanism left: `[1,3]` fails while its representation beats the working cell on every
 instrument built so far. Honest summary against the proposal: **§2.2's fusion works; §2.1's
@@ -108,7 +108,20 @@ and **−0.012** interpolation against RH, far inside the band, while the bias i
 (`zv_pair_ratio` 0.252→0.434, `zv_norm_mean` 0.443→0.750, `zg_pr` 4.52→6.33). The
 trajectory-conditioned query is the first encoder-ladder change to move both the representation
 and the ring; the explicit geometric bias moves only the representation. Elevation remains broken
-(`el_m15` 0.04 / 0.00, `el_p15` 0.14 / 0.00).
+(`el_m15` 0.04 / 0.00, `el_p15` 0.14 / 0.00). **What the LQ cell adds (2026-10-30).** The
+LVSM-style candidate — RGB+Plücker 8×8 patchify (crop 72, 81 tokens/view), four EEF-history
+query tokens, one bidirectional transformer, **only the query positions read out** — is a
+**failure, not a null**: in-distribution **0.044**, interpolation **0.052**, past-ring 0.060,
+elevation 0.04/0.04/0.04, at the floor even at `az_0` (0.04) and in the in-training rollout
+(0.00/0.04/0.02/0.02/0.12 at e0/50/100/150/200), while its diffusion loss is healthy
+(train 0.00279, val 0.0614, offline `train_action_mse` 0.00119). The trained policy is
+**effectively image-blind**: zeroing all images moves its predicted actions by **0.05%**, while
+zeroing the EEF history moves them by **98.9%**; inside the encoder, zeroing images moves the
+pre-transformer per-view token means by **145.6%** but the query-output condition by only
+**1.07%**, and the probe's `qt_n1_vs_qt_rel` fell from 0.136 at e0 to **0.0062** at e200. The
+query-only readout learned the history/state shortcut the design doc §8 warned about — a new
+floor-level failure mode: not an encoder collapse (`z_views` are image-bearing) and not
+view-tiedness (it fails at the trained pose).
 
 ## Status
 
@@ -139,6 +152,7 @@ and the ring; the explicit geometric bias moves only the representation. Elevati
 | **encoder R** (`enc_r`) | 2026-10-29 — S + feature-level ray encoding: Plücker `[d, m/L]` at each layer3 cell's receptive-field centre (same crop window), MLP → 512-d added to the attention KEY; 5,284,928 encoder params | **fifth behavioural null** — inside the 0.15 band of S on both registered means: in-dist 0.602 vs 0.653 (−0.051), interp 0.604 vs 0.618 (−0.014); past-ring 0.370 vs 0.355; elevation 0.327 vs 0.293 (descriptive). It does not recover toward B1 (0.813 / 0.784). The ray path is live in the latent (`zv_norm_mean` 0.184 vs S 0.105, `zv_rel_spread_mean` 0.362 vs 0.242), but `zg_pr` is unchanged (2.06 vs 2.08) and behaviour did not follow |
 | **encoder RH** (`enc_rh`) | 2026-10-29 — R + the full base-frame EE-trajectory-conditioned shared query: 4-step temporal Transformer (width 128, 4 heads) → h_t (512-d) → q_t = q_learned + W_h h_t, one q_t per image time shared by all views; new `eef_hist_base` key `(To, H=4, 9)`; 6,207,680 encoder params (R: 5,284,928) | **borderline recovery, not a null** — in-dist **0.758 vs R 0.602 (+0.156)**, interp **0.748 vs 0.604 (+0.144)**; 11/11 trained and 9/10 interpolated viewpoints positive (one tie); recovers ~74% / ~80% of the R→B1 gap, stays 0.055 / 0.036 below B1; in-dist mean **0.006 outside** the 0.15 band, interp 0.006 inside; capacity-confounded (not RNG-lockstep with R) |
 | **encoder RHG** (`enc_rhg`) | 2026-10-29 — RH + R07's point-to-ray bias on 4/8 heads: `b = −α min(ρ²/(2σ²), b_max)`, α=1, b_max=4, σ calibrated on the training zarr and **locked at 0.1028297208249569 m**; adds no parameter and consumes no RNG, so RH/RHG start bit-identical | **sixth behavioural null** — in-dist **+0.009**, interp **−0.012** vs RH, far inside the band; past +0.075 (inside the band; near the floor); but the bias is live in the latent (`zv_pair_ratio` 0.252→0.434, `zv_norm_mean` 0.443→0.750, `zg_pr` 4.52→6.33) and changes neither train nor val loss; elevation remains broken |
+| **encoder LQ** (`enc_lq`) | 2026-10-30 — LVSM-style RGB+Plücker 8×8 patchify (crop 72, 81 tokens/view, 9→256), four EEF-history query tokens, one 4-layer/8-head bidirectional transformer, **only the four query positions read out** (512 + 9 state = 521; two frames 1042); 3,412,096 encoder params; K=11 pool [1..11], N ∈ [1,11], 201 epochs, seed 42; crop 76→72 is part of the comparison | **failure, not a null** — in-dist **0.044**, interp **0.052**, past **0.060**, elev **0.04 / 0.04 / 0.04**, at the floor even at `az_0` (0.04) and in-training (0.00–0.12 across 201 epochs); the trained policy's actions change **0.05%** under zero images and **98.9%** under zero EEF history; the visual tokens are live (`z_views` 146% under zero images) but the query readout discards them (`condition_512` 1.07%, `qt_n1_vs_qt_rel` 0.0062 at e200) — the design doc §8 history/state shortcut |
 
 Internal labels, used in the code and configs: **L1** names this fork's second rung
 (M1's architecture, randomized view) — L0 is M1 itself, and L2–L4 are M3, M4 and M5.
@@ -170,7 +184,8 @@ which makes it the internal consistency check.
 (±15/±45/±75) are **never sampled during training**, so every "held out" column below is held
 out by construction. **The encoder ladder (2026-10-29) uses a different pool** — indices 1..11
 (az −75…+75 every 15°), all trained — so its in-distribution cell is the trained ring and its
-`azimuth_offgrid` grid is the held-out azimuth set; see *The encoder ladder* below.
+`azimuth_offgrid` grid is the held-out azimuth set; see *The encoder ladder* below. LQ
+(2026-10-30) uses the same pool and N distribution; only its tokenizer and crop differ.
 
 **Noise and resolution.** Treat differences below **~0.1 on a single viewpoint as unmeasured**:
 two 50-episode sweeps of one checkpoint through two presets that place the camera at the *same*
@@ -1467,7 +1482,7 @@ is not a free replacement for the view-conditioned encoder; adding the ray addre
 per-view latent (`zv_norm_mean` +76%, `zv_rel_spread_mean` +50% vs S) but not the fused latent or
 behaviour, so it is the fifth behavioural null and does not recover the ring. S and R are one
 seed each; S's margins are just over the threshold, so a second seed remains the registered
-confirmation step. RH/RHG are measured below (2026-10-29).
+confirmation step. RH/RHG and LQ are measured below (2026-10-29/30).
 
 ### The encoder ladder — RH and RHG (2026-10-29)
 
@@ -1492,6 +1507,78 @@ both the representation and the ring; the explicit point-to-ray bias moves only 
 representation. RH's move is borderline (one mean 0.006 over the band) and capacity-confounded
 (+0.92 M parameters, not RNG-lockstep with R), so its registered confirmation is a second seed;
 RHG−RH is the clean one-variable comparison and is null. Elevation is still broken in both cells.
+
+### The encoder ladder — LQ (2026-10-30)
+
+**Method.** LQ is a separate structural candidate (`ENCODER_LVSM_EEF_QUERY_V1.md` v0.2), not
+another rung of B/S/R/RH/RHG. Every valid view's 84×84 RGB is cropped to **72×72** (76 is not
+divisible by 8); a per-pixel base-frame Plücker map `[d, m/L]` is computed for the same crop with
+the **original** intrinsics; `[RGB | d | m/L]` (9 channels) is patchified by a shared
+`Conv2d(9, 256, 8, 8)` into **81 tokens/view**; four EEF-history query tokens
+(`[p/L, rot6d, (p−p_t)/L, age]`, one per step, from `eef_hist_base` `(To, 4, 9)`) join all view
+tokens in one **4-layer, 8-head, FFN-1024, Pre-LN, dropout-0 bidirectional transformer**; only
+the four query-position outputs are kept, projected 256→128, flattened oldest→current (512) and
+concatenated with the 9-d state = **521/frame, 1042 for two frames**. 3,412,096 encoder
+parameters. Protocol: square PH, pool 1..11, N∈[1,11], seed 42, 201 epochs, 50 paired episodes,
+band 0.15. The crop change 76→72 is part of the comparison; a same-crop control was not run.
+A 40-step smoke measured **21.8 GB** (21,756 MiB) peak GPU (32.6 GB card), ~4.4 it/s and **2.6 ms**
+for an N=1 encoder call; the full run took **6 h 28 m** and completed with `TRAIN_EXIT=0`.
+
+**Result.** The diffusion loss is healthy — train **0.00279**, val **0.0614**,
+`train_action_mse_error` **0.00119** at e200 — but behaviour is at the floor everywhere:
+in-distribution **0.044**, interpolation **0.052**, past-ring **0.060**, elevation
+**0.04 / 0.04 / 0.04**. For comparison: B1 0.813 / 0.784, RH 0.758 / 0.748, RHG 0.767 / 0.736,
+S 0.653 / 0.618, R 0.602 / 0.604. `az_0` — the trained pose — is **0.04**, and the in-training
+test rollout (50 episodes, N=1) never exceeds **0.12** in 201 epochs (0.00 / 0.04 / 0.02 / 0.02 / 0.12
+at e0/50/100/150/200). This is not view-tiedness: it fails at the pose it trained on and in the
+training-time runner, so the failure is in the policy, not the novel-view harness. The protocol
+is intact: 50 episodes per viewpoint in every cell, preset and smoke gates passed.
+
+**Failure diagnosis.** Same 16-sample training batch, same diffusion seed, interventions on the
+trained EMA checkpoint:
+
+| intervention | relative change in predicted actions |
+|---|---:|
+| zero all images | **0.0005** |
+| shuffle images across the batch | **0.0003** |
+| zero EEF history | **0.9887** |
+| zero robot state | 0.4018 |
+
+Inside the encoder, zeroing images moves the pre-transformer per-view token means (`z_views`) by
+**145.6 %** — the RGB+Plücker patch embed sees the image — but the query-position condition
+(`condition_512`) by only **1.07 %** (shuffled images: **0.22 %**). The per-epoch probe agrees:
+`qt_n1_vs_qt_rel` fell from 0.136 at e0 to **0.0062** at e200, and `zg_n1_norm_mean` 23.728 vs
+`zg_norm_mean` 23.741 — the N=1 query outputs differ from the full-view ones by only 0.62 %.
+Data are valid (a sampled active slot's images: mean 0.764, std 0.278; camera vectors valid;
+masks draw 1–11 views), and the encoder is not collapsed (probe `zv_pair_ratio` 1.34, `zg_pr`
+5.96; `z_views` move 146 %).
+
+**Reading.** The four query tokens start from EEF-history features and keep them through standard
+residual connections. With only the diffusion loss, a history/state condition predicts the
+demonstrated absolute-EE actions well enough that ignoring the visual tokens is a valid minimum:
+the visual path is alive but receives no pressure to be used. This is the design doc §8's warned
+shortcut ("历史保留标准残差，会形成低维状态捷径"), realized. It is a floor-level mode distinct
+from encoder collapse — `z_views` are image-bearing — and, unlike the unexplained `[1,3]` cell, it
+has a diagnosed mechanism: the readout discards vision. It is also not view-tiedness (it fails at
+`az_0`). Offline action MSE therefore does not measure control here — the model fits the
+demonstrations from history/state alone.
+
+**Caveats.** One seed; structural comparison (different tokenizer and crop 76→72, not
+RNG-lockstep with any cell). The run script pre-registered B1/S/R as comparators because
+RH/RHG were untrained when it was written; the table also includes RH/RHG. The 0.15 band is
+irrelevant at these deltas.
+
+**Next.** The pre-registered `history_query=False` control (constant 13-d query features; same
+parameters and RNG) is the designed test: it removes the history shortcut and forces the readout
+to come from visual attention. `visual_reads_history=False` tests the feedback path but does not
+remove the query's history residual. Both are constructor flags; no code change is needed.
+
+**Artifacts.** Logs `data/outputs/run_square_enc_lq_s42_200ep/logs.json.txt`; sweeps
+`data/eval_{interp,heldout,el}_square_enc_lq/eval_log.json`; summaries
+`data/eval_square_enc_lq_*_summary.txt`; run dir `/data/zihan/runs/run_square_enc_lq_s42_200ep`
+(9.0 GB, `latest.ckpt` at e200); smoke scratch `/data/zihan/runs/run_square_enc_lq_smoke`
+(8.4 GB). The run dir and scratch stay on `miroc-server`; the logs and sweeps are uncommitted in
+the checkout.
 
 ## Open questions
 
@@ -1548,6 +1635,16 @@ RHG−RH is the clean one-variable comparison and is null. Elevation is still br
   **RHG is the sixth behavioural null**: +0.009 / −0.012 vs RH, far inside the band, while the
   bias is live in the latent (`zv_pair_ratio` 0.252→0.434, `zv_norm_mean` 0.443→0.750). Elevation
   remains broken at `el_m15` / `el_p15` (0.04 / 0.14 RH, 0.00 / 0.00 RHG).
+- **Why does LQ's readout ignore vision, and can removing the history residual fix it?** The
+  trained LQ policy is effectively image-blind (zero images → 0.05 % action change) although its
+  visual tokens are live (`z_views` 146 % under zero images) and its diffusion loss is healthy
+  (0.00279), and its N=1 query outputs differ from the full-view ones by only 0.62 %
+  (`qt_n1_vs_qt_rel` 0.0062 at e200). The pre-registered `history_query=False` control is the
+  direct test: constant query features remove the history shortcut, so if the readout still
+  ignores vision the problem is the joint-transformer/readout optimization rather than the
+  residual. `visual_reads_history=False` is the second registered control but does not remove
+  the shortcut. LQ is a floor cell, not a view-generalization result; its offline MSE is not
+  evidence of control.
 
 ## Where the rest is
 
@@ -1569,7 +1666,8 @@ RHG−RH is the clean one-variable comparison and is null. Elevation is still br
 - **`PLAN.md`** — the milestone plan and what remains: the three runs, and the deferred work.
 - **`ENCODER_EXPERIMENT_PLAN.md`** — the encoder ladder's stages, structures and pre-registered
   evaluation protocol; B0/B1/S/R/RH/RHG are measured here (RH/RHG results in *The encoder ladder*
-  above); seed 43 is the registered confirmation.
+  above); seed 43 is the registered confirmation. **LQ** is a separate candidate
+  (`ENCODER_LVSM_EEF_QUERY_V1.md` v0.2), measured in *The encoder ladder — LQ* above.
 - **`PROPOSAL.md`** — the direction and the original predictions.
 
 **Code map** — every milestone lands as new files; these are them.
@@ -1591,6 +1689,7 @@ RHG−RH is the clean one-variable comparison and is null. Elevation is still br
 | encoder ladder (B/S) | `model/vision/spatial_readout_obs_encoder.py`, `config/task/enc_{b,s}_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_enc_{b,s}_latent.yaml`, `data/enc_{b,s}_{run,eval}.sh`, `tests/test_spatial_readout_obs_encoder.py` (plus the 32-line extension of `tests/test_view_conditioned_obs_encoder.py`), `ENCODER_EXPERIMENT_PLAN.md`, `ENCODER_REFERENCES.md`; seam: `multiview_image_dataset.py` `eef_hist_window` |
 | encoder ladder (R) | `model/vision/ray_spatial_readout_obs_encoder.py`, `model/vision/plucker.py` (`plucker_ray_map_at`, `ray_dirs_cam_at`), `config/task/enc_r_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_enc_r_latent.yaml`, `data/enc_r_{run,eval}.sh`, `tests/test_ray_spatial_readout_obs_encoder.py`; same `eef_hist_window` seam as B/S, no new dataset/runner keys |
 | encoder ladder (RH/RHG) | `model/vision/traj_spatial_readout_obs_encoder.py` (one class; `use_geom_bias` split), `calibrate_geom_bias.py`, `config/task/enc_rh_image_abs_multiview_az75.yaml` (shared), `config/train_diffusion_unet_image_workspace_enc_rh{,g}_latent.yaml`, `data/enc_rh{,g}_{run,eval}.sh`, `tests/test_traj_spatial_readout_obs_encoder.py`; seams: `multiview_image_dataset.py` `emit_eef_hist_base`, `cam_key_image_runner.py` / `eval_novel_view.py` `serve_eef_hist_base`, the latent-probe workspace's extra per-sample obs pass-through |
+| encoder LQ (`enc_lq`) | `model/vision/lvsm_eef_query_obs_encoder.py`, `config/task/enc_lq_image_abs_multiview_az75.yaml`, `config/train_diffusion_unet_image_workspace_enc_lq_latent.yaml`, `workspace/train_diffusion_unet_image_workspace_lqprobe.py`, `data/enc_lq_{run,eval}.sh`, `tests/test_lvsm_eef_query_obs_encoder.py`, `ENCODER_LVSM_EEF_QUERY_V1.md`, width-aware `analyze_latent_series.py` (plus `tests/test_analyze_latent_series.py`); no new dataset/runner keys — reuses `emit_eef_hist_base` / `serve_eef_hist_base` |
 
 **Edited seams** — the only changes to files this fork did not itself add:
 `multiview_image_dataset.py` (cam table, per-sample view draw, mask, camera-frame EE history;
