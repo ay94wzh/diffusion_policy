@@ -10,7 +10,8 @@ the findings that shaped the story, and the open questions. The long-form record
 distilled from — the full protocol, the verbatim investigation log, every per-viewpoint table
 and the corrections register — is at git tag **`docs-full-20260930`** (see *Where the rest is*).
 
-Last updated 2026-10-30 (LQ measured).
+Last updated 2026-10-30 (LQ measured; encoder ladder concluded — **B1 is the best measured
+method**).
 
 ## Summary
 
@@ -121,7 +122,13 @@ pre-transformer per-view token means by **145.6%** but the query-output conditio
 **1.07%**, and the probe's `qt_n1_vs_qt_rel` fell from 0.136 at e0 to **0.0062** at e200. The
 query-only readout learned the history/state shortcut the design doc §8 warned about — a new
 floor-level failure mode: not an encoder collapse (`z_views` are image-bearing) and not
-view-tiedness (it fails at the trained pose).
+view-tiedness (it fails at the trained pose). **The ladder's conclusion (2026-10-30): B1 is the
+best measured method** — in-distribution **0.813** and interpolation **0.784**, the highest of
+every encoder-ladder cell (RH 0.758/0.748, RHG 0.767/0.736, S 0.653/0.618, R 0.602/0.604, LQ
+0.044/0.052) and the highest interpolation mean of every cell measured under the same
+K=11/off-grid protocol; it is +0.017/+0.010 above the `m4base` reference and tied within the
+0.15 band in-distribution with `prob_b` (0.829). No structural addition in the ladder beat the
+baseline; see *The encoder ladder — conclusion* for the full statement and its caveats.
 
 ## Status
 
@@ -147,7 +154,7 @@ view-tiedness (it fails at the trained pose).
 | **joint supervision** (`zvzg`) | 2026-10-14 — both aux lines at once: `m4base`'s base-frame action head on `z_v` (w 1.0) + `zgpose`'s pose-set on `z_g` (w 1.33) | **the strongest view-aware `z_g` of the four cells, with the encoder healthy** (N-dependence 2.2–2.3× `zgpose`; screen 12.3× its random init) — in-dist a fourth null (0.751); **off-grid 0.606: −0.168 vs `m4base`, the first banded mean outside its band** (−0.108 vs `zgpose`, inside); past-ring 0.100, no recovery of `zgpose`'s cost |
 | **probabilistic fusion** (`prob_b/c/d`) | 2026-10-16 — `PLAN_G.md` stage 1: per-view Gaussians, three fusions — MHA-over-means (B, the deterministic control), PoE (C), plain mean (D); cell A = the committed `m4base`, not retrained | **behaviourally flat** — in-dist all inside band (0.829 / 0.804 / 0.793 vs A's 0.796); off-grid C−B **−0.074** and D−C **+0.060**, both unresolved, B the best held-out (0.738); past the ring **B 0.370** (above A) with C/D 0.210 / 0.195 (partial, no third floor); the variance learns (C: view spread 0.447, clamp 0.011/0.071) and buys nothing; **battery completed 2026-10-16**: all four registered representation readouts **in-envelope** for B/C/D, and the variance **spread but no signal** (R2 weak; R3/R4 null-to-against; double-count 2.23) |
 | **z supervision** (`zalign`/`zcons`/`zboth`) | 2026-10-28 — `PLAN_Z.md`: L2-normalised `z_v` shared-semantics alignment (a), cross-view ε-consistency on `z_g` at W=190.46 (b), both (c); same two weights in all three so `c` decomposes as `a + b`; baseline = the committed `m4base`, not retrained | **`a` null, `b` and `c` collapse** — `a` reproduces A to three decimals (0.7964/0.764) because its head collapses to a constant (`cos_across` 1.0000, `L_align` 3.5e-09) and the encoder is untouched (screen 12.2×, all four readouts in-range); `b` 0.155/0.150 and `c` 0.129/0.150 with encoders at **1.6×/1.7×** random init and `z_g` uninformative (3 of 4 readouts MOVED); **`c` = `b` to four decimals off-grid**; the registered `diff_loss` R2 instrument **did not fire** |
-| **encoder B** (`enc_b0`/`enc_b1`) | 2026-10-29 — corrected `eef_hist_window=episode` (B1) against the legacy `sample` (B0), one variable; K=11 pool [1..11], N ∈ [1,11], 201 epochs, seed 42 | **history null** — every registered mean inside the 0.15 band: in-dist −0.062, interp −0.072, past −0.045, elev +0.020 (descriptive); B1 is the encoder ladder's internal baseline |
+| **encoder B** (`enc_b0`/`enc_b1`) | 2026-10-29 — corrected `eef_hist_window=episode` (B1) against the legacy `sample` (B0), one variable; K=11 pool [1..11], N ∈ [1,11], 201 epochs, seed 42 | **history null** — every registered mean inside the 0.15 band: in-dist −0.062, interp −0.072, past −0.045, elev +0.020 (descriptive); B1 is the encoder ladder's internal baseline — and, on the 2026-10-30 tally, its **best cell** and the project's best measured method |
 | **encoder S** (`enc_s`) | 2026-10-29 — pure-RGB layer3 spatial tokens + one shared 512-d query + 8-head intra-image attention, B's masked cross-view fusion; structural, not RNG-locked to B | **negative on the ring** — in-dist 0.653 vs B1 0.813 (−0.160), interp 0.618 vs 0.784 (−0.166), both just outside the 0.15 band; past-ring null (0.355 vs 0.365); elevation 0.293 vs 0.347; seed 42 only |
 | **encoder R** (`enc_r`) | 2026-10-29 — S + feature-level ray encoding: Plücker `[d, m/L]` at each layer3 cell's receptive-field centre (same crop window), MLP → 512-d added to the attention KEY; 5,284,928 encoder params | **fifth behavioural null** — inside the 0.15 band of S on both registered means: in-dist 0.602 vs 0.653 (−0.051), interp 0.604 vs 0.618 (−0.014); past-ring 0.370 vs 0.355; elevation 0.327 vs 0.293 (descriptive). It does not recover toward B1 (0.813 / 0.784). The ray path is live in the latent (`zv_norm_mean` 0.184 vs S 0.105, `zv_rel_spread_mean` 0.362 vs 0.242), but `zg_pr` is unchanged (2.06 vs 2.08) and behaviour did not follow |
 | **encoder RH** (`enc_rh`) | 2026-10-29 — R + the full base-frame EE-trajectory-conditioned shared query: 4-step temporal Transformer (width 128, 4 heads) → h_t (512-d) → q_t = q_learned + W_h h_t, one q_t per image time shared by all views; new `eef_hist_base` key `(To, H=4, 9)`; 6,207,680 encoder params (R: 5,284,928) | **borderline recovery, not a null** — in-dist **0.758 vs R 0.602 (+0.156)**, interp **0.748 vs 0.604 (+0.144)**; 11/11 trained and 9/10 interpolated viewpoints positive (one tie); recovers ~74% / ~80% of the R→B1 gap, stays 0.055 / 0.036 below B1; in-dist mean **0.006 outside** the 0.15 band, interp 0.006 inside; capacity-confounded (not RNG-lockstep with R) |
@@ -1579,6 +1586,34 @@ remove the query's history residual. Both are constructor flags; no code change 
 (9.0 GB, `latest.ckpt` at e200); smoke scratch `/data/zihan/runs/run_square_enc_lq_smoke`
 (8.4 GB). The run dir and scratch stay on `miroc-server`; the logs and sweeps are uncommitted in
 the checkout.
+
+### The encoder ladder — conclusion: B1 is the best measured method (2026-10-30)
+
+**Conclusion.** B1 — the M3 recipe with the corrected episode-level EE-history window — is the
+best measured method. It is the highest cell on both registered means of the ladder:
+in-distribution **0.813**, interpolation **0.784**, against B0 0.751/0.712, S 0.653/0.618,
+R 0.602/0.604, RH 0.758/0.748, RHG 0.767/0.736 and LQ 0.044/0.052. Against the cells measured
+under the same K=11/off-grid protocol, **0.784 is the highest interpolation mean** (`m4base`
+0.774, `prob_b` 0.738, RH 0.748, RHG 0.736), and 0.813 is tied for the highest in-distribution
+within the 0.15 band (`prob_b` 0.829, i.e. +0.016 above B1; `m4base` 0.796, −0.017 below B1).
+Past-ring 0.365 sits at the ~0.36 floor, and elevation 0.90 / 0.02 / 0.12 remains broken exactly
+as in every other cell.
+
+**What the ladder therefore says.** No structural addition beat the baseline: S is −0.160/−0.166
+against B1, R is −0.051/−0.014 against S and −0.211/−0.180 against B1, RH recovers ~74% / ~80%
+of the R→B1 gap but stays −0.055/−0.036 below B1 (borderline and capacity-confounded), RHG is
+±0.01 against RH, and LQ is at the floor. The ladder's only reliable gains are the ones already
+in the baseline — the M3 per-view fusion and N>1 sampling — not the new tokenizers, ray
+encodings, history queries or geometric biases. **B1 is the reference for anything that
+follows.**
+
+**Caveats.** One seed (42), 50 paired episodes per viewpoint, band 0.15. B1's margins over B0
+(+0.062/+0.072) and over `m4base` (+0.017/+0.010) are inside the band, and `prob_b` is +0.016
+above B1 in-distribution (also inside it), so "best" is a point-estimate ranking, not a
+significant separation: B0, B1, `m4base` and `prob_b` are one tier. The claim that is safe is
+the ladder-internal one — B1 has the highest point estimate of B0/S/R/RH/RHG/LQ on both
+registered means, by 0.055/0.036 (RH) to 0.211/0.180 (R). Elevation remains broken in every
+cell; past-ring is the ~0.36 floor.
 
 ## Open questions
 

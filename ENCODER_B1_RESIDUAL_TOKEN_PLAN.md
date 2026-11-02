@@ -1,6 +1,6 @@
 # 在 B1 基础上改进空间信息交互：方案与对照实验
 
-日期：2026-10-30。状态：讨论方案，未实现、未训练。本文只新增设计文档，不修改模型、配置、评估程序或既有实验定义。
+日期：2026-10-30（2026-11-02 实现）。状态：编码器、CPU 测试、warm-start 工作区与配置已实现；未训练、未评估。本文仍不修改既有 B/S/R/RH/RHG 实验的定义。
 
 ## 1. 目标与已知证据
 
@@ -14,20 +14,16 @@
 | S | 0.6527 | 0.6180 | 0.3550 | 0.04 | 0.24 |
 | R | 0.6018 | 0.6040 | 0.3700 | 0.06 | 0.24 |
 
-B1 在这三组中的已见/插值方位角上最好，范围外及俯仰仍弱。结果来自训练 seed 42、每视角 50 个环境 episode，不能据此声称某个组件已被多种子证明有效或无效。
-
-S/R 不只是更换读出：它们删除 layer4、改变条件化与几何输入方式，并降低编码器参数量。B 约 12.53M 参数，S 约 5.02M，R 约 5.28M。因此 S/R 的下降不能单独归因于 attention、空间 token 或 ray 编码。
-
-历史修正 B0→B1 的现有差异落在旧实验的 0.15 实用阈值内，不能把 B1 的优势解释成真实历史已带来明确收益。保留其 FiLM 与历史协议，是保留基线配置，并不代表机制已被证实。
+B1 在这三组中的已见/插值方位角上最好，范围外及俯仰仍弱。结果来自训练 seed 42、每视角 50 个环境 episode。
 
 证据文件：
 
 - [实验记录](PROGRESS.md#the-encoder-ladder-b0b1sr-2026-10-29)。
-- `data/eval_interp_square_enc_b1/eval_log.json`：虽然目录名含 interp，内容对应已见 15° 方位角环。
-- `data/eval_heldout_square_enc_b1/eval_log.json`：包含插值角与范围外角，汇总时必须分开。
-- `data/eval_el_square_enc_b1/eval_log.json`：俯仰角，el=0 单列为一致性参考。
+- `data/eval_interp_square_enc_b1/eval_log.json`
+- `data/eval_heldout_square_enc_b1/eval_log.json`
+- `data/eval_el_square_enc_b1/eval_log.json`
 
-## 2. B1 保留什么，为什么这样改
+## 2. B1 
 
 B1 路径：
 
@@ -48,15 +44,13 @@ RGB + 逐像素 Plücker map（共 9 通道）
 
 新方案保留上述全部主路径，包括真实 `episode` 历史、crop/ray 对齐、共享主干、FiLM、平均池化、原融合以及动作接口。只在 layer4 的 FiLM 输出与平均池化之间增加一个残差分支。
 
-LVSM 提供的可检验启发，是在压缩前允许 token 交互；它没有证明机器人需要移除现有 CNN 或三维信息。这里不复制其完整架构，也不宣称新组合具有新颖性。
-
-另一个关键约束：原跨视角 MHA 在 N=1 时只有一个有效 key，softmax 权重恒为 1（当前模块默认 attention dropout 为 0）。因此，仅改变其 query 不能改变该时刻的视角选择；至多通过训练期的多视图路径产生间接影响。新分支应在 N=1 时也保留多个空间 token。
+LVSM 提供的可检验启发，是在压缩前允许 token 交互。
 
 ## 3. 首轮候选：B1 加残差 token 交互
 
 ### 3.1 张量与信息流
 
-当前输入 76×76 crop 经过完整 ResNet18 后，layer4 特征预期为每视角 `3×3×512`；实现时应实测并断言，而不是假设所有主干都具有相同网格。
+当前输入 76×76 crop 经过完整 ResNet18 后，layer4 特征预期为每视角 `3×3×512`；实现时应实测并断言。
 
 记第 v 个有效视角的特征为 `F_v ∈ R^(G×512)`，当前 G=9。保留原读出：
 
@@ -74,11 +68,9 @@ z_v_new = z_v_base + W_out(delta_v)
 
 之后仍使用原跨视角融合与 UNet。`W_out` 是无 bias 的 512→512 线性层，权重初始化为零；Transformer 采用常规非零初始化。
 
-这使新增分支在初始时输出零。若复制同一 B1 权重，并使用相同输入、crop 和采样噪声，新模型初始行为可与 B1 一致。**这只保留初始函数，不保证继续训练后不会退化。**
+不要同时将 Transformer 和输出门控全部置零。验证实际激活情况，而不是要求所有新参数第一步就有非零梯度。
 
-不要同时将 Transformer 和输出门控全部置零。零初始化的输出投影第一步可获得梯度，上游分支通常在输出投影更新后才收到梯度；应验证实际激活情况，而不是要求所有新参数第一步就有非零梯度。
-
-### 3.2 建议首版规格
+### 3.2 首版规格
 
 | 项目 | 建议 |
 |---|---|
@@ -86,16 +78,15 @@ z_v_new = z_v_base + W_out(delta_v)
 | 宽度 | 512，直接对接原特征 |
 | 交互层 | 1 层 Pre-LN Transformer，8 heads，FFN=1024，GELU，dropout=0 |
 | 残差读出 | 每视角对 `U-F` 平均，零初始化 `W_out` 后加回原向量 |
-| 几何 | 继续使用 B1 输入层的完整 Plücker map；本轮不加另一条 ray MLP |
-| 条件 | 继续使用 B1 FiLM；本轮不额外添加历史 query |
-| 位置标记 | 首版不加相机 slot ID 或新增位置编码，测试的是 B1 已有特征上的交互 |
+| 几何 | 使用 B1 输入层的完整 Plücker map；不加另一条 ray MLP |
+| 条件 | 使用 B1 FiLM|
+| 位置标记 | 不加相机 slot ID 或新增位置编码|
 | 无效视角 | 不参与 attention、均值或读出；每样本至少一个有效视角 |
 | 输出 | 每视角仍 512，整体接口仍 521/1042 |
-| 新增参数 | 按上述结构约 2.36M，精确值实现后报告；并非零成本改进 |
+| 新增参数 | 按上述结构约 2.36M，精确值实现后报告 |
 
-N=11 时联合序列最多约 `11×9=99` 个 token；N=1 仍有 9 个空间 token。真实显存、吞吐和单相机端到端延迟应测量，不能从 token 数直接推定。
-
-layer4 单元已有较大感受野，不能把其 token 解释成一个精确三维点。本轮也不假设 3×3 网格足以解决接触细节；它是优先保持 B1 的最小结构试验。
+N=11 时联合序列最多约 `11×9=99` 个 token；N=1 仍有 9 个空间 token。
+layer4 单元已有较大感受野，不能把其 token 解释成一个精确三维点。
 
 ## 4. 对照实验：先区分处理能力、空间交互和跨视角交互
 
@@ -108,9 +99,9 @@ layer4 单元已有较大感受野，不能把其 token 解释成一个精确三
 | C：视角内空间交互 | 完整保留 | 输入完整空间 tokens；attention 只在各视角内部开放 | 相对 B，保留空间信息并在视角内部交互是否有收益？ |
 | D：跨视角空间交互 | 完整保留 | 相同空间 tokens、相同参数，attention 在全部有效视角开放 | 相对 C，训练期跨视角局部信息交换是否有增益？ |
 
-B/C/D 使用相同模块配置、输出投影和对应初始权重，参数个数相同；但序列长度、运算量和实际参与计算的自由度不同，不能称为严格的有效容量匹配。
+B/C/D 使用相同模块配置、输出投影和对应初始权重，参数个数相同。
 
-C/D 除 attention mask 外保持一致。N=1 时两者的连接结构相同；如果 D 在单相机部署时更好，支持的是训练期跨视角交互带来了迁移收益，不能解释为部署时获得了额外相机信息。
+C/D 除 attention mask 外保持一致。N=1 时两者的连接结构相同；如果 D 在单相机部署时更好，支持的是训练期跨视角交互带来了迁移收益。
 
 解释顺序：
 
@@ -120,19 +111,19 @@ C/D 除 attention mask 外保持一致。N=1 时两者的连接结构相同；�
 - C/D 只在 N>1 推理改善：可能适合多相机部署，但没有达成本项目 N=1 主目标。
 - 新分支学到非零输出而闭环无收益：记为机制生效、行为无收益；不因 attention 图更好看而继续扩大模型。
 
-## 5. 训练分两步，避免把多训练的预算当作结构收益
+## 5. 训练
 
 ### 5.1 短程筛选：从同一 B1 checkpoint 出发
 
-先在独立实验目录复制 B1 的 model、EMA、normalizer；不覆盖原 checkpoint。B/C/D 新模块按对应方式初始化，A 同样继续训练。
+先在独立实验目录复制 B1 的 model、EMA、normalizer；不覆盖原 checkpoint。 B/C/D 新模块按对应方式初始化，A 同样继续训练。
 
-建议预先固定：额外 30 epochs、batch=64、AdamW 原 beta/weight decay、峰值学习率 1e-5、新 30-epoch cosine schedule、前 500 step warmup；所有组重新创建优化器与 scheduler，保持训练数据与其余动作配置。这个数值是启动建议，不是已验证最优值；应在运行前锁定。
+建议预先固定：额外 30 epochs、batch=64、AdamW 原 beta/weight decay、峰值学习率 1e-5、新 30-epoch cosine schedule、前 500 step warmup；所有组重新创建优化器与 scheduler，保持训练数据与其余动作配置。应在运行前锁定。
 
 model 与 EMA 都要正确初始化新增分支，并保留各自的基线权重。比较同一个固定终点的 EMA，不用测试视角挑 checkpoint。
 
-同时保留不继续训练的原 B1 结果作为参考，但结构收益必须与 **A 的同预算继续训练** 比较。共同起点的 seed 42 筛选不能代表独立训练种子的重复结果。
+同时保留不继续训练的原 B1 结果作为参考，但结构收益必须与 **A 的同预算继续训练** 比较。
 
-建议候选晋级条件：相对 A，插值成功率增加至少 0.05，已见方位角均值下降不超过 0.03，且相较 B 有额外收益、推理成本可接受。它们是本轮拟采用的工程筛选条件，必须在运行前固定，不是统计显著性阈值。若所有组都无明确收益，停止扩大该分支并检查失败类型。
+建议候选晋级条件：相对 A，插值成功率增加至少 0.05，已见方位角均值下降不超过 0.03，且相较 B 有额外收益、推理成本可接受。运行前固定，不是统计显著性阈值。若所有组都无明确收益，停止扩大该分支并检查失败类型。
 
 ### 5.2 正式确认：完整预算和独立训练种子
 
@@ -183,4 +174,12 @@ model 与 EMA 都要正确初始化新增分支，并保留各自的基线权重
 
 本轮建议优先级：**先核对评价随机性 → A/B/C/D 短程筛选 → A 与候选的独立种子确认 → 有证据后再考虑更细网格或训练相机分布。**
 
-当前已完成的是证据核对与方案整理。未修改 Python/YAML，未启动训练、评估或下载模型权重。
+## 9. 实现状态（2026-11-02）
+
+- 编码器：`diffusion_policy/model/vision/residual_token_view_conditioned_obs_encoder.py` 的 `ResidualTokenViewConditionedObsEncoder`，模式 `none|single|intra|cross`；A/B/C/D 参数与初始化控制见 `token_mixer_init_seed`。
+- B1 接缝：`view_conditioned_obs_encoder.py` 新增 `_backbone_map` 与 `_encode_active_views`，默认路径与 B1 位级一致。
+- 工作区：`diffusion_policy/workspace/train_diffusion_unet_image_workspace_enc_rt.py`；从 B1 checkpoint 复制 model/EMA，恢复 EMA 的 `optimization_step`，并在 loop 前重置 RNG。
+- 配置：`train_diffusion_unet_image_workspace_enc_rt_latent.yaml`；30 epochs、batch 64、lr 1e-5、warmup 500、`skip_rollout: true`、`topk.k: 0`。
+- CPU 测试：`tests/test_residual_token_view_conditioned_obs_encoder.py`、`tests/test_enc_rt_warmstart.py`；服务器端真实 checkpoint 门：`check_enc_rt_warmstart.py`。
+- 驱动：`data/enc_rt_run.sh`（A/B/C/D）、`data/enc_rt_eval.sh`；汇总：`summarize_enc_rt.py`；只读评价噪声审计：`audit_eval_noise.py`。
+- 尚未启动任何训练或评估；`AZ_0`/`el_0` 与 diffusion-noise 配对问题仍以只读审计为准。

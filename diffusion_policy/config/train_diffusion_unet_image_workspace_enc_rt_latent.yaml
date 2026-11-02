@@ -1,0 +1,191 @@
+defaults:
+  - _self_
+  - task: enc_b_image_abs_multiview_az75
+
+name: train_diffusion_unet_image_enc_rt_latent
+# Encoder ladder follow-up: the B1 residual token-interaction screen
+# (ENCODER_B1_RESIDUAL_TOKEN_PLAN.md section 5.1).
+#
+# A/B/C/D all start from the same B1 checkpoint and continue for 30 epochs with
+# a fresh optimizer/scheduler (peak LR 1e-5, 500-step warmup, cosine). The only
+# between-cell difference is `policy.obs_encoder.token_mixer_mode`:
+#   A = none    (B1 exactly, no new parameters)
+#   B = single  (one token per view, sequence length 1)
+#   C = intra   (9 spatial tokens per view, attention within a view)
+#   D = cross   (9 spatial tokens per view, attention across active views)
+# Launch A with `policy.obs_encoder.token_mixer_mode=none`, etc.
+#
+# `skip_rollout: true` is deliberate: epoch 0 always satisfies `epoch % N == 0`,
+# and an in-training rollout consumes CUDA RNG in a model-dependent amount.
+# With `topk.k: 0` there is no `test_mean_score` dependency, so no rollout and
+# no topk checkpoint are needed. The fixed endpoint is the EMA at epoch 30,
+# saved as `latest.ckpt` by the workspace after the loop.
+_target_: diffusion_policy.workspace.train_diffusion_unet_image_workspace_enc_rt.TrainDiffusionUnetImageWorkspaceEncRT
+
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+exp_name: "default"
+
+horizon: 16
+n_obs_steps: 2
+n_action_steps: 8
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+past_action_visible: False
+keypoint_visible_rate: 1.0
+obs_as_global_cond: True
+
+# B1 model/EMA (and the normalizer keys) are copied from here. Both the model
+# and the EMA are loaded; the workspace restores the EMA continuation step from
+# the checkpoint's global_step.
+warmstart:
+  checkpoint: /data/zihan/runs/run_square_enc_b1_s42_200ep/checkpoints/latest.ckpt
+
+latent_probe:
+  # Same fixed probe as the B0/B1/S/R/RH/RHG runs, plus the residual-strength
+  # scalars the new encoder's `z_views_base` makes available.
+  n_states: 128
+  seed: 12345
+  az0_view: 6
+  save_raw: true
+  out_dir: latent_snapshots
+
+policy:
+  # M3's policy: no per-view aux head, no extra loss; only the encoder changes.
+  _target_: diffusion_policy.policy.diffusion_unet_image_policy.DiffusionUnetImagePolicy
+
+  shape_meta: ${shape_meta}
+
+  noise_scheduler:
+    _target_: diffusers.schedulers.scheduling_ddpm.DDPMScheduler
+    num_train_timesteps: 100
+    beta_start: 0.0001
+    beta_end: 0.02
+    beta_schedule: squaredcos_cap_v2
+    variance_type: fixed_small
+    clip_sample: True
+    prediction_type: epsilon
+
+  # B1 + a residual token-interaction branch between layer4 FiLM and avgpool.
+  # The parent main path, the 512-d fusion and the 521/1042 interface are
+  # unchanged.
+  obs_encoder:
+    _target_: diffusion_policy.model.vision.residual_token_view_conditioned_obs_encoder.ResidualTokenViewConditionedObsEncoder
+    shape_meta: ${shape_meta}
+    rgb_model:
+      _target_: diffusion_policy.model.vision.model_getter.get_resnet
+      name: resnet18
+      weights: null
+    fused_dim: 512
+    n_heads: 8
+    cond_dim: 128
+    use_plucker: True
+    use_eef_hist: True
+    eef_hist_steps: 4
+    crop_shape: [76, 76]
+    random_crop: True
+    use_group_norm: True
+    share_rgb_model: True
+    imagenet_norm: True
+    # none | single | intra | cross; the run script overrides this per cell.
+    token_mixer_mode: cross
+    token_mixer_heads: 8
+    token_mixer_ffn_dim: 1024
+    token_mixer_dropout: 0.0
+    # Private-stream seed for the branch initialization; B/C/D share it.
+    token_mixer_init_seed: 42
+
+  horizon: ${horizon}
+  n_action_steps: ${eval:'${n_action_steps}+${n_latency_steps}'}
+  n_obs_steps: ${n_obs_steps}
+  num_inference_steps: 100
+  obs_as_global_cond: ${obs_as_global_cond}
+  diffusion_step_embed_dim: 128
+  down_dims: [512, 1024, 2048]
+  kernel_size: 5
+  n_groups: 8
+  cond_predict_scale: True
+
+ema:
+  _target_: diffusion_policy.model.diffusion.ema_model.EMAModel
+  update_after_step: 0
+  inv_gamma: 1.0
+  power: 0.75
+  min_value: 0.0
+  max_value: 0.9999
+
+dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: True
+  pin_memory: True
+  persistent_workers: False
+
+val_dataloader:
+  batch_size: 64
+  num_workers: 4
+  shuffle: False
+  pin_memory: True
+  persistent_workers: False
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 1.0e-5
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-6
+
+training:
+  device: "cuda:0"
+  seed: 42
+  debug: False
+  # Warm start is explicit; never auto-resume a same-directory checkpoint.
+  resume: False
+  lr_scheduler: cosine
+  lr_warmup_steps: 500
+  num_epochs: 30
+  gradient_accumulate_every: 1
+  use_ema: True
+  freeze_encoder: False
+  # No in-training rollout: it would break cross-cell RNG pairing. topk.k=0
+  # below makes the missing test_mean_score harmless.
+  rollout_every: 50
+  skip_rollout: True
+  checkpoint_every: 10
+  val_every: 1
+  sample_every: 5
+  max_train_steps: null
+  max_val_steps: null
+  tqdm_interval_sec: 1.0
+
+logging:
+  project: diffusion_policy_view
+  resume: True
+  mode: online
+  name: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  tags: ["${name}", "${task_name}", "${exp_name}"]
+  id: null
+  group: null
+
+checkpoint:
+  topk:
+    monitor_key: test_mean_score
+    mode: max
+    k: 0
+    format_str: 'epoch={epoch:04d}-test_mean_score={test_mean_score:.3f}.ckpt'
+  # Mid-loop latest at epochs 0/10/20; the workspace overwrites it at epoch 30.
+  save_last_ckpt: True
+  save_last_snapshot: False
+
+multi_run:
+  run_dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  sweep:
+    dir: data/outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+    subdir: ${hydra.job.num}

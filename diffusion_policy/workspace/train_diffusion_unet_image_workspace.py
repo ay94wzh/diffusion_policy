@@ -147,6 +147,15 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
             cfg.training.val_every = 1
             cfg.training.sample_every = 1
 
+        # ========= pre-loop hook (warm-start RNG/EMA continuity) =========
+        # Guarded via getattr; base-class runs never set the attribute and are
+        # bit-identical. The hook runs after env_runner/wandb init and before
+        # the first DataLoader iterator, so it can put every RNG stream at a
+        # known state and restore the EMA's continuation step.
+        pre_loop_hook = getattr(self, '_pre_train_loop_hook', None)
+        if pre_loop_hook is not None:
+            pre_loop_hook(ema=ema)
+
         # training loop
         log_path = os.path.join(self.output_dir, 'logs.json.txt')
         with JsonLogger(log_path) as json_logger:
@@ -158,7 +167,7 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     self.model.obs_encoder.requires_grad_(False)
 
                 train_losses = list()
-                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}", 
+                with tqdm.tqdm(train_dataloader, desc=f"Training epoch {self.epoch}",
                         leave=False, mininterval=cfg.training.tqdm_interval_sec) as tepoch:
                     for batch_idx, batch in enumerate(tepoch):
                         # device transfer
@@ -263,7 +272,12 @@ class TrainDiffusionUnetImageWorkspace(BaseWorkspace):
                     step_log.update(latent_hook(policy))
 
                 # run rollout
-                if (self.epoch % cfg.training.rollout_every) == 0:
+                # `skip_rollout` is a guarded warm-start/screen knob: epoch 0
+                # always satisfies `epoch % N == 0`, and an env rollout consumes
+                # CUDA RNG in a model-dependent amount. Default False leaves
+                # every existing config bit-identical.
+                if (not cfg.training.get('skip_rollout', False)) \
+                        and ((self.epoch % cfg.training.rollout_every) == 0):
                     runner_log = env_runner.run(policy)
                     # log all
                     step_log.update(runner_log)

@@ -259,12 +259,13 @@ class ViewConditionedObsEncoder(ModuleAttrMixin):
             img = (img - mean) / std
         return torch.cat([img, plk], dim=1)          # (N, 9, ch, cw)
 
-    def _backbone_features(self, x, cond):
+    def _backbone_map(self, x, cond):
         """Walk the resnet explicitly so FiLM can modulate each stage.
 
         Torchvision's forward has no conditioning input, and hooks or
         module-level state would be action-at-a-distance; walking the submodules
         is explicit and keeps the backbone a plain parameter container.
+        Returns the post-layer4-FiLM feature map ``(M, C, Gh, Gw)``.
         """
         b = self.backbone
         h = b.relu(b.bn1(b.conv1(x)))
@@ -273,7 +274,24 @@ class ViewConditionedObsEncoder(ModuleAttrMixin):
         for i, layer in enumerate([b.layer1, b.layer2, b.layer3, b.layer4], start=1):
             h = layer(h)
             h = self._film(h, i, cond)
-        return torch.flatten(b.avgpool(h), 1)
+        return h
+
+    def _backbone_features(self, x, cond):
+        """B1's readout: global-average-pool the post-layer4 map."""
+        return torch.flatten(
+            self.backbone.avgpool(self._backbone_map(x, cond)), 1)
+
+    def _encode_active_views(self, x, cond, rows, cols, active):
+        """Readout seam: ``(per-active-view z, extra outputs)``.
+
+        The default is B1's exact pooled readout and no extra outputs.
+        Subclasses may add token interaction before the pool; ``rows``/``cols``
+        are the active ``(sample, slot)`` pairs packed into ``x``, and
+        ``active`` is the ``(N, K)`` mask. The returned extras are merged into
+        ``forward_full``'s dict, so adding a key is opt-in and leaves B1's
+        output unchanged.
+        """
+        return self._backbone_features(x, cond), {}
 
     def _film(self, h, i, cond):
         if cond is None:
@@ -292,10 +310,11 @@ class ViewConditionedObsEncoder(ModuleAttrMixin):
         """`forward`'s computation, plus the per-view latents M4 needs.
 
         Returns ``{'z_global': (N, D), 'z_views': (N, K, D),
-        'view_active': (N, K) bool}``. `z_views` is the very tensor the fusion
-        already builds (`tokens`), so this adds no compute and no allocation --
-        `forward` is this function plus the final concatenation, and the two are
-        asserted bit-identical (torch.equal) in
+        'view_active': (N, K) bool}`` plus any extras from the
+        ``_encode_active_views`` seam (B1 adds none). `z_views` is the very
+        tensor the fusion already builds (`tokens`), so this adds no compute and
+        no allocation -- `forward` is this function plus the final
+        concatenation, and the two are asserted bit-identical (torch.equal) in
         tests/test_aux_action_heads.py. Rows of inactive slots are exactly zero,
         which is the invariant M4's loss mask relies on.
         """
@@ -348,7 +367,7 @@ class ViewConditionedObsEncoder(ModuleAttrMixin):
         if self.use_eef_hist:
             hist_a = hist.to(dtype=x.dtype, device=x.device)[rows, cols]
             cond = self.cond_mlp(hist_a)
-        z = self._backbone_features(x, cond)          # (M, fused_dim)
+        z, aux = self._encode_active_views(x, cond, rows, cols, active)
 
         tokens = z.new_zeros((n, self.n_slots, self.fused_dim))
         tokens[rows, cols] = z
@@ -358,7 +377,9 @@ class ViewConditionedObsEncoder(ModuleAttrMixin):
                              key_padding_mask=pad_mask, need_weights=False)
         z_g = z_g.reshape(n, self.fused_dim)
 
-        return {'z_global': z_g, 'z_views': tokens, 'view_active': active}
+        out = {'z_global': z_g, 'z_views': tokens, 'view_active': active}
+        out.update(aux)
+        return out
 
     @torch.no_grad()
     def output_shape(self):
